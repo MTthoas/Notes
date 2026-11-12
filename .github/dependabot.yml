@@ -1,0 +1,13 @@
+# Mises à jour automatiques, groupées pour éviter le bruit : une PR par semaine et par écosystème.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      outils: { patterns: ['*'] }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ['*'] }

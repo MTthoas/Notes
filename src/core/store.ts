@@ -4,7 +4,7 @@ import * as db from './db.ts';
 import * as cr from './crypto.ts';
 import { fold } from '../lib/fuzzy.ts';
 import { analyze, LINK_RE } from '../lib/markdown.ts';
-import type { Note, NoteMeta, Version } from '../types.ts';
+import type { Note, NoteMeta, TaskStatus, Version } from '../types.ts';
 
 export type Listener = (kind: string, id: string | null, remote: boolean) => void;
 export interface Index { live: Note[]; byTitle: Map<string, string>; back: Map<string, Set<string>>; tags: Map<string, number> }
@@ -176,12 +176,27 @@ export function openTasks(exceptId?: string): TaskGroup[] {
     .sort((a, b) => b.note.updated - a.note.updated);
 }
 
+/** Change l'état d'une tâche (Kanban) : à faire, en cours ou terminée. */
+export async function setTaskStatus(n: Note, line: number, status: TaskStatus): Promise<void> {
+  const body = getBody(n); if (body == null) return;
+  const lines = body.split('\n'), cur = lines[line] ?? '';
+  if (!/^\s*(?:[-*+]|\d+[.)])\s+\[[ xX/]\]/.test(cur)) return;
+  const next = cur.replace(/\[([ xX/])\]/, status === 'done' ? '[x]' : status === 'doing' ? '[/]' : '[ ]');
+  if (next === cur) return;
+  touch(n);
+  lines[line] = next;
+  setBody(n, lines.join('\n'));
+  n.updated = Date.now();
+  await saveNote(n);
+}
+
 export async function toggleTask(n: Note, line: number): Promise<void> {
   const body = getBody(n); if (body == null) return;
   const lines = body.split('\n');
-  if (!/\[[ xX]\]/.test(lines[line] || '')) return;
+  if (!/\[[ xX/]\]/.test(lines[line] || '')) return;
   touch(n);
-  lines[line] = (lines[line] ?? '').replace(/\[([ xX])\]/, (_: string, c: string) => c === ' ' ? '[x]' : '[ ]');
+  // Cocher termine la tâche (même « en cours ») ; décocher la rouvre.
+  lines[line] = (lines[line] ?? '').replace(/\[([ xX/])\]/, (_: string, c: string) => c === 'x' || c === 'X' ? '[ ]' : '[x]');
   setBody(n, lines.join('\n'));
   n.updated = Date.now();
   await saveNote(n);

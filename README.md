@@ -62,6 +62,8 @@ Réglages → Appareils → « Lier un appareil ». Un secret de 128 bits passe 
 
 La page **Tâches** (⇧⌘T) réunit une liste dédiée — « Appeler Paul demain » crée une tâche avec échéance — et les cases à cocher de toutes les notes. Les tâches sont stockées dans une note Markdown « Tâches » : chiffrées, synchronisées et versionnées comme le reste.
 
+Elle s'affiche en **liste** ou en **Kanban** (À faire, En cours, Terminées : glisser-déposer, ou boutons ‹ › au clavier et au doigt). Une tâche en cours s'écrit `- [/]` en Markdown. Avec Linear connecté, la même page montre **tes tickets** et chacune de tes **vues Linear enregistrées**, en liste ou en Kanban ; déplacer une carte change l'état du ticket dans Linear.
+
 Les agents planifiés tournent tant que l'application est ouverte (rattrapage unique au retour).
 
 ## Organisation

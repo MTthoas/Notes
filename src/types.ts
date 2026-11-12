@@ -25,7 +25,9 @@ export interface Note {
 
 export interface Version { id: string; noteId: string; ts: number; title: string; body?: string; enc?: Box }
 
-export interface TaskLine { line: number; text: string; done: boolean }
+/** État d'une tâche : `- [ ]` à faire, `- [/]` en cours, `- [x]` terminée. */
+export type TaskStatus = 'todo' | 'doing' | 'done';
+export interface TaskLine { line: number; text: string; done: boolean; status: TaskStatus }
 export interface NoteMeta { body: string | null; tags: string[]; links: string[]; tasks: TaskLine[]; snippet: string }
 
 /** Vue courante de l'application. */

@@ -3,7 +3,7 @@
 import * as linear from './api.ts';
 import * as vault from '../../core/vault.ts';
 import { esc } from '../../lib/markdown.ts';
-import { $, icon, toast, rel, need, target, errMsg } from '../../ui/kit.ts';
+import { $, icon, toast, rel, need, target, errMsg, avatar } from '../../ui/kit.ts';
 import type { AppShell } from '../../types.ts';
 
 const EVERY = 60e3, SEEN = 'carnet.linear.seen', PREF = 'carnet.linear.notify';
@@ -94,7 +94,7 @@ async function read(ids: string[]): Promise<void> {
 }
 
 const row = (n: linear.Notification) => `<div class="nf-row${n.readAt ? ' read' : ''}" data-id="${esc(n.id)}" data-url="${esc(safe(link(n)))}" data-issue="${esc(n.issue?.identifier || '')}" role="link" tabindex="0">
-  <i class="nf-dot"></i>
+  <i class="nf-dot"></i>${avatar(who(n))}
   <div class="nf-body"><div class="nf-line"><span class="nf-who">${esc(/:$/.test(verb(n.type)) ? '' : who(n))}</span> ${esc(verb(n.type))} <strong>${esc(n.issue ? n.issue.identifier : subject(n))}</strong> ${esc(n.issue?.title || '')}</div>
   ${excerpt(n) ? `<div class="nf-quote">${esc(excerpt(n))}</div>` : ''}</div>
   <span class="nf-time">${esc(rel(Date.parse(n.createdAt)))}</span>

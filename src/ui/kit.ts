@@ -47,6 +47,8 @@ const I: Record<string, string> = {
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   github: '<path d="M9.5 20.5v-3c-3.5 1-4.5-1.5-5.5-2M14.5 20.5v-3.2c0-1 .1-1.6-.5-2.3 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 00-1.3-3.2 4.2 4.2 0 00-.1-3.2s-1-.3-3.4 1.3a11.8 11.8 0 00-6 0C6.3 2.3 5.3 2.6 5.3 2.6a4.2 4.2 0 00-.1 3.2A4.6 4.6 0 004 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2.3"/>',
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0013 0M12 18v3"/>',
+  list: '<path d="M8.5 7h11M8.5 12h11M8.5 17h11"/><circle cx="4.5" cy="7" r="1" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4.5" cy="17" r="1" fill="currentColor" stroke="none"/>',
+  board: '<rect x="3.5" y="4.5" width="5" height="15" rx="1.5"/><rect x="9.5" y="4.5" width="5" height="10" rx="1.5"/><rect x="15.5" y="4.5" width="5" height="12.5" rx="1.5"/>',
   bell: '<path d="M6 16.5V11a6 6 0 0112 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 004 0"/>',
   moon: '<path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/>',
   link: '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',
@@ -203,3 +205,18 @@ export function download(name: string, blob: Blob | string): void {
 export const errMsg = (e: unknown): string => e instanceof Error ? e.message : String(e);
 /** Attribut data-* numérique (numéro de ligne, index) : NaN s'il manque. */
 export const num = (el: HTMLElement | null | undefined, key: string): number => Number(el?.dataset[key] ?? NaN);
+
+// ---------- Petites touches de couleur ----------
+/** Palette discrète (les teintes sont définies en CSS, pour les thèmes clair et sombre). */
+export const HUES = ['blue', 'green', 'amber', 'violet', 'pink', 'teal', 'orange', 'indigo'] as const;
+/** Teinte stable pour un nom (tag, personne, dépôt) : toujours la même couleur pour le même nom. */
+export function hue(name: string): string {
+  let h = 0;
+  for (const ch of name.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return HUES[h % HUES.length] ?? 'blue';
+}
+/** Pastille avec l'initiale d'une personne, colorée selon son nom. */
+export const avatar = (name: string): string => {
+  const n = name.trim();
+  return n ? `<span class="av" style="--c:var(--c-${hue(n)})" title="${esc(n)}" aria-hidden="true">${esc(n.charAt(0).toUpperCase())}</span>` : '';
+};

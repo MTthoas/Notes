@@ -12,8 +12,10 @@ export interface Team { id: string; key: string; name: string }
 export interface Issue {
   id: string; identifier: string; title: string; url: string;
   priority: number; priorityLabel: string; dueDate: string | null; updatedAt: string;
-  state: State | null; assignee: { name: string } | null; team: { key: string } | null; project: { id: string; name: string } | null;
+  state: State | null; assignee: { name: string } | null; team: { id?: string; key: string } | null; project: { id: string; name: string } | null;
 }
+/** Vue enregistrée dans Linear (« custom view ») : un filtre de tickets nommé. */
+export interface View { id: string; name: string; color: string | null; filterData: Record<string, unknown> | null }
 /** Forme minimale commune aux tickets et sous-tickets. */
 export type IssueLike = Pick<Issue, 'identifier' | 'title' | 'state'> & Partial<Issue>;
 export interface Comment { id: string; body: string; createdAt: string; user: { name: string } | null }
@@ -58,7 +60,7 @@ export const viewer = (key?: string): Promise<{ viewer: { id: string; name: stri
 export const teams = async (): Promise<Team[]> => (await gql<{ teams: Nodes<Team> }>('query { teams(first: 50) { nodes { id key name } } }')).teams.nodes;
 
 const STATES: Record<string, string> = { 'à faire': 'unstarted', todo: 'unstarted', 'en cours': 'started', started: 'started', backlog: 'backlog', 'terminé': 'completed', termine: 'completed', done: 'completed', 'annulé': 'canceled', triage: 'triage' };
-const FIELDS = 'id identifier title url priority priorityLabel dueDate updatedAt state { name type color } assignee { name } team { key } project { id name }';
+const FIELDS = 'id identifier title url priority priorityLabel dueDate updatedAt state { name type color } assignee { name } team { id key } project { id name }';
 
 // Options d'un bloc ```linear (clé: valeur par ligne) -> filtre GraphQL.
 export function parseBlock(src: string): Query {
@@ -110,6 +112,32 @@ export async function createIssue({ teamId, title, description }: { teamId: stri
 export async function teamByKey(key?: string): Promise<Team | undefined> {
   const all = await teams();
   return key ? all.find(t => t.key.toLowerCase() === key.toLowerCase()) : all[0];
+}
+
+// ---------- Vues enregistrées ----------
+export async function views(): Promise<View[]> {
+  const d = await gql<{ customViews: Nodes<View> }>('query { customViews(first: 50) { nodes { id name color filterData } } }');
+  return d.customViews.nodes.filter(v => v.filterData && typeof v.filterData === 'object');
+}
+/** Tickets d'une vue : on rejoue son filtre (le même que dans Linear). */
+export async function viewIssues(view: View, { fresh = false } = {}): Promise<Issue[]> {
+  const k = 'view:' + view.id, hit = cache.get(k);
+  if (!fresh && hit && Date.now() - hit.at < 60e3) return hit.data;
+  const d = await gql<{ issues: Nodes<Issue> }>(`query($f: IssueFilter) { issues(filter: $f, first: 150, orderBy: updatedAt) { nodes { ${FIELDS} } } }`, { f: view.filterData ?? {} });
+  cache.set(k, { at: Date.now(), data: d.issues.nodes });
+  return d.issues.nodes;
+}
+/** Place un ticket dans le premier état de son équipe qui a le type voulu (pour le Kanban). */
+const teamStates = new Map<string, State[]>();
+export async function moveToType(issue: Issue, type: string): Promise<State> {
+  const teamId = issue.team?.id;
+  if (!teamId) throw new Error('Équipe du ticket inconnue.');
+  let list = teamStates.get(teamId);
+  if (!list) { list = await states(teamId); teamStates.set(teamId, list); }
+  const target = list.find(s => s.type === type);
+  if (!target?.id) throw new Error(`Aucun état « ${type} » dans l’équipe ${issue.team?.key ?? ''}.`);
+  await setState(issue.id, target.id);
+  return target;
 }
 
 // ---------- Notifications (boîte de réception Linear) ----------

@@ -3,6 +3,7 @@
 import * as linear from './api.ts';
 import * as notifs from './notifications.ts';
 import * as todo from '../../features/tasks.ts';
+import { color, day, grouped, issueRow } from './render.ts';
 import { esc, renderMarkdown } from '../../lib/markdown.ts';
 import { $, icon, toast, rel, modal, menu, need, target, errMsg, num } from '../../ui/kit.ts';
 import type { AppShell, ViewState } from '../../types.ts';
@@ -11,23 +12,12 @@ let app!: AppShell;
 export const init = (shell: AppShell): void => { app = shell; };
 
 const data: { issues: linear.Issue[] | null; projects: linear.Project[] | null; byProject: Map<string, linear.Issue[]>; error: string } = { issues: null, projects: null, byProject: new Map(), error: '' };
-const GROUPS: [string, string][] = [['started', 'En cours'], ['unstarted', 'À faire'], ['triage', 'À trier'], ['backlog', 'Backlog'], ['completed', 'Terminé'], ['canceled', 'Annulé']];
 const PSTATE: Record<string, string> = { backlog: 'Backlog', planned: 'Planifié', started: 'En cours', paused: 'En pause', completed: 'Terminé', canceled: 'Annulé' };
-const color = (c?: string | null): string => c && /^#[0-9a-f]{3,8}$/i.test(c) ? c : 'var(--text-3)';
-const day = (iso?: string | null): string => iso ? new Date(iso.length > 10 ? iso : iso + 'T00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) : '';
 const safe = (u?: string | null): string => u && /^https:\/\/linear\.app\//.test(u) ? u : '';
 const view = () => app.viewState();
 const go = (patch: Partial<ViewState>) => app.setView({ type: 'linear', tab: view().tab || 'issues', ...patch });
 
-// ---------- Listes ----------
-const issueRow = (i: linear.IssueLike): string => `<button class="lv-row" data-issue="${esc(i.identifier)}">
-  <i class="st" style="background:${color(i.state?.color)}" title="${esc(i.state?.name || '')}"></i><span class="lv-id">${esc(i.identifier)}</span><span class="lv-title">${esc(i.title)}</span>
-  <em>${[i.project?.name, i.priority ? i.priorityLabel : '', i.assignee?.name, day(i.dueDate)].filter(Boolean).map(esc).join(' · ')}</em></button>`;
-
-function grouped(list: linear.Issue[]): string {
-  if (!list.length) return '<p class="nf-empty">Aucun ticket.</p>';
-  return GROUPS.map(([type, label]) => { const l = list.filter(i => i.state?.type === type); return l.length ? `<section class="td-sec"><h2>${label}<span>${l.length}</span></h2>${l.map(issueRow).join('')}</section>` : ''; }).join('');
-}
+// ---------- Listes (rendu partagé dans render.ts) ----------
 
 function projectCard(p: linear.Project): string {
   const pct = Math.round((p.progress || 0) * 100);

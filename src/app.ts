@@ -19,7 +19,7 @@ import * as biometric from './core/biometric.ts';
 import * as linear from './integrations/linear/api.ts';
 import * as vault from './core/vault.ts';
 import * as link from './integrations/link.ts';
-import { $, $$, el, icon, logo, kbd, keys, matches, isMac, rel, until, full, menu, modal, confirmBox, toast, download, closeTop, topLayer, need, target, errMsg, num } from './ui/kit.ts';
+import { $, $$, el, icon, logo, kbd, keys, matches, isMac, rel, until, full, menu, modal, confirmBox, toast, download, closeTop, topLayer, need, target, errMsg, num, hue } from './ui/kit.ts';
 import type { MenuItem } from './ui/kit.ts';
 import type { Note, Version, ViewState } from './types.ts';
 import type { Graph, GraphInput } from './lib/graph.ts';
@@ -66,6 +66,8 @@ const VIEWS: Record<string, { label: string; icon: string }> = {
   inbox: { label: 'Boîte de réception', icon: 'inbox' }, ephemeral: { label: 'Éphémères', icon: 'hourglass' },
   graph: { label: 'Graphe', icon: 'graph' }, trash: { label: 'Corbeille', icon: 'trash' },
 };
+/** Teinte de l'icône de chaque section dans la barre latérale. */
+const SIDE_HUE: Record<string, string> = { home: 'gray', inbox: 'blue', today: 'amber', all: 'gray', ephemeral: 'orange', tasks: 'green', agents: 'violet', linear: 'indigo', github: 'gray', graph: 'teal', trash: 'gray' };
 const titleOf = (n: Note) => n.title.trim() || 'Sans titre';
 const WIDE = new Set(['graph', 'home', 'settings', 'tasks', 'linear', 'github']); // vues sans colonne de liste
 
@@ -160,7 +162,7 @@ async function openByTitle(title: string) {
 function renderSidebar() {
   const idx = store.index(), v = ui.view;
   const count: Record<string, number> = { inbox: idx.live.filter(n => n.inbox).length, tasks: todo.openCount(), linear: notifs.unreadCount(), github: github.unseenCount(), ephemeral: idx.live.filter(n => n.expiresAt).length };
-  const item = (type: string) => `<button class="side-item${v.type === type ? ' sel' : ''}" data-view="${type}">${icon(VIEWS[type]?.icon ?? 'notes')}<span>${VIEWS[type]?.label ?? type}</span>${count[type] ? `<span class="side-count">${count[type]}</span>` : ''}</button>`;
+  const item = (type: string) => `<button class="side-item${v.type === type ? ' sel' : ''}" data-view="${type}" style="--ic:var(--c-${SIDE_HUE[type] ?? 'gray'})">${icon(VIEWS[type]?.icon ?? 'notes')}<span>${VIEWS[type]?.label ?? type}</span>${count[type] ? `<span class="side-count">${count[type]}</span>` : ''}</button>`;
   const tags = [...idx.tags].sort((a, b) => a[0].localeCompare(b[0], 'fr'));
   const devs = vault.isOpen() ? link.devices().length : 0;
   need('#sidebar').innerHTML = `
@@ -178,7 +180,7 @@ function renderSidebar() {
       <div class="side-group">${item('tasks')}${item('agents')}</div>
       <div class="side-label">Connexions</div>
       <div class="side-group">${item('linear')}${item('github')}</div>
-      ${tags.length ? `<button class="side-label" data-act="tags" aria-expanded="${ui.tagsOpen}">${icon('chevron')}Tags</button>${ui.tagsOpen ? `<div class="side-group">${tags.map(([t, c]) => `<button class="side-item${v.type === 'tag' && v.tag === t ? ' sel' : ''}" data-tag="${esc(t)}"><i class="tag-dot"></i><span>${esc(t)}</span><span class="side-count">${c}</span></button>`).join('')}</div>` : ''}` : ''}
+      ${tags.length ? `<button class="side-label" data-act="tags" aria-expanded="${ui.tagsOpen}">${icon('chevron')}Tags</button>${ui.tagsOpen ? `<div class="side-group">${tags.map(([t, c]) => `<button class="side-item${v.type === 'tag' && v.tag === t ? ' sel' : ''}" data-tag="${esc(t)}"><i class="tag-dot" style="--c:var(--c-${hue(t)})"></i><span>${esc(t)}</span><span class="side-count">${c}</span></button>`).join('')}</div>` : ''}` : ''}
       <div class="side-label">Explorer</div>
       <div class="side-group">${item('graph')}${item('trash')}</div>
     </div>
@@ -233,7 +235,7 @@ function renderList() {
     body = list.length ? list.map(noteItem).join('') : `<div class="list-empty">${empty}</div>`;
     if (v.type === 'trash' && list.length) body = `<div class="list-note">Suppression définitive après 30 jours.</div>` + body;
   }
-  box.innerHTML = `<div class="list-head"><div class="lh-text"><h2>${v.type !== 'tag' ? icon(VIEWS[v.type]?.icon ?? 'notes') : '<i class="tag-dot"></i>'}${esc(title)}</h2><span>${esc(sub)}</span></div>${v.type !== 'trash' ? `<button class="icon-btn" data-act="new" title="Nouvelle note (${keys(SC.newNote)})" aria-label="Nouvelle note">${icon('plus')}</button>` : ''}</div><div class="list-scroll">${body}</div>`;
+  box.innerHTML = `<div class="list-head"><div class="lh-text"><h2>${v.type !== 'tag' ? icon(VIEWS[v.type]?.icon ?? 'notes') : `<i class="tag-dot" style="--c:var(--c-${hue(v.tag ?? '')})"></i>`}${esc(title)}</h2><span>${esc(sub)}</span></div>${v.type !== 'trash' ? `<button class="icon-btn" data-act="new" title="Nouvelle note (${keys(SC.newNote)})" aria-label="Nouvelle note">${icon('plus')}</button>` : ''}</div><div class="list-scroll">${body}</div>`;
   need('.list-scroll', box).scrollTop = scroll;
 }
 
@@ -397,7 +399,7 @@ function onBodyKey(e: KeyboardEvent): void {
     e.preventDefault();
     const line = v.slice(ls, le), pos = ta.selectionStart;
     let next;
-    if (/^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]/.test(line)) next = line.replace(/\[([ xX])\]/, (_, c) => c === ' ' ? '[x]' : '[ ]');
+    if (/^\s*(?:[-*+]|\d+[.)])\s+\[[ xX/]\]/.test(line)) next = line.replace(/\[([ xX/])\]/, (_, c: string) => c === 'x' || c === 'X' ? '[ ]' : '[x]');
     else if (/^\s*(?:[-*+]|\d+[.)])\s+/.test(line)) next = line.replace(/^(\s*(?:[-*+]|\d+[.)])\s+)/, '$1[ ] ');
     else next = line.replace(/^(\s*)/, '$1- [ ] ');
     replaceRange(ta, ls, le, next);
@@ -405,7 +407,7 @@ function onBodyKey(e: KeyboardEvent): void {
     return;
   }
   if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && ta.selectionStart === ta.selectionEnd) {
-    const m = v.slice(ls, ta.selectionStart).match(/^(\s*)([-*+]|\d+[.)])(\s+)(\[[ xX]\]\s+)?(.*)$/);
+    const m = v.slice(ls, ta.selectionStart).match(/^(\s*)([-*+]|\d+[.)])(\s+)(\[[ xX/]\]\s+)?(.*)$/);
     if (!m) return;
     e.preventDefault();
     if (!m[5].trim() && ta.selectionStart === le) return replaceRange(ta, ls, le, ''); // puce vide : on sort de la liste

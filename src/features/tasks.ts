@@ -5,9 +5,11 @@
 //     - [ ] Reproduire le bug                       ← sous-tâche : simple ligne indentée
 import * as store from '../core/store.ts';
 import * as linear from '../integrations/linear/api.ts';
-import { esc, plain } from '../lib/markdown.ts';
-import { $, $$, icon, toast, menu, need, target, errMsg, num } from '../ui/kit.ts';
-import type { Note } from '../types.ts';
+import { esc, plain, statusOf } from '../lib/markdown.ts';
+import * as board from './board.ts';
+import { grouped, prio, day as issueDay } from '../integrations/linear/render.ts';
+import { $, $$, icon, toast, menu, need, target, errMsg, num, avatar } from '../ui/kit.ts';
+import type { Note, TaskStatus } from '../types.ts';
 import type { Issue } from '../integrations/linear/api.ts';
 
 /** Ce que la page Tâches attend de l'application. */
@@ -20,7 +22,7 @@ export interface TasksApi {
 }
 /** Une tâche, avec ce qu'on en déduit : échéance, ticket Linear, sous-tâches. */
 export interface Task {
-  note: Note; line: number; done: boolean; own: boolean;
+  note: Note; line: number; done: boolean; status: TaskStatus; own: boolean;
   text: string; due: string | null; ticket: string | null;
   subs: Task[]; sub?: boolean;
 }
@@ -30,9 +32,9 @@ let app!: TasksApi;
 export const init = (api: TasksApi): void => { app = api; };
 
 const DUE_RE = /\s@(\d{4}-\d{2}-\d{2})\s*$/;
-const TASK_RE = /^(\s*)(?:[-*+]|\d{1,9}[.)])\s+\[([ xX])\]\s+(.*)$/;
+const TASK_RE = /^(\s*)(?:[-*+]|\d{1,9}[.)])\s+\[([ xX/])\]\s+(.*)$/;
 const TICKET_RE = /(?:^|\s)([A-Z][A-Z0-9]{1,9}-\d{1,6})(?=\s|$)/;
-const PREFIX_RE = /^(\s*(?:[-*+]|\d{1,9}[.)])\s+\[[ xX]\]\s+)/;
+const PREFIX_RE = /^(\s*(?:[-*+]|\d{1,9}[.)])\s+\[[ xX/]\]\s+)/;
 const DAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
 const titleOf = (n: Note) => n.title.trim() || 'Sans titre';
 
@@ -90,7 +92,8 @@ function ownTasks(n: Note): Task[] {
   (store.getBody(n) ?? '').split('\n').forEach((raw, line) => {
     const m = raw.match(TASK_RE);
     if (!m) { if (raw.trim()) parent = null; return; }
-    const t: Task = { note: n, line, done: m[2] !== ' ', own: true, subs: [], ...parts(m[3] ?? '') };
+    const status = statusOf(m[2]);
+    const t: Task = { note: n, line, done: status === 'done', status, own: true, subs: [], ...parts(m[3] ?? '') };
     if ((m[1] ?? '').length && parent) { t.sub = true; parent.subs.push(t); } else { parent = t; out.push(t); }
   });
   return out;
@@ -102,7 +105,7 @@ function collect() {
   for (const n of store.index().live) {
     if (store.isLocked(n)) continue;
     if (n === mine) { const own = ownTasks(n); all.push(...own); subsOpen += own.reduce((s, t) => s + t.subs.filter(x => !x.done).length, 0); }
-    else for (const t of store.meta(n).tasks) all.push({ note: n, line: t.line, done: t.done, own: false, subs: [], ...parts(t.text) });
+    else for (const t of store.meta(n).tasks) all.push({ note: n, line: t.line, done: t.done, status: t.status, own: false, subs: [], ...parts(t.text) });
   }
   const open = all.filter(t => !t.done), byDue = (a: Task, b: Task) => (a.due ?? '').localeCompare(b.due ?? '');
   return {
@@ -113,6 +116,7 @@ function collect() {
     undated: open.filter(t => !t.due && t.own && !t.ticket),
     notes: open.filter(t => !t.due && !t.own),
     done: all.filter(t => t.done && t.own),
+    doing: open.filter(t => t.status === 'doing'),
     openCount: open.length + subsOpen,
   };
 }
@@ -208,11 +212,12 @@ let subFor: number | null = null; // ligne de la tâche dont on saisit une sous-
 function line(t: Task, { source = false } = {}): string {
   const late = t.due && t.due < store.dayKey() && !t.done, n = t.subs.length, d = t.subs.filter(x => x.done).length;
   return `<div class="td-row${t.done ? ' done' : ''}${t.sub ? ' td-subrow' : ''}" data-note="${t.note.id}" data-line="${t.line}">
-    <input type="checkbox" class="td-check"${t.done ? ' checked' : ''} aria-label="${t.done ? 'Rouvrir' : 'Terminer'}">
+    <input type="checkbox" class="td-check${t.status === 'doing' ? ' doing' : ''}"${t.done ? ' checked' : ''} aria-label="${t.done ? 'Rouvrir' : 'Terminer'}">
     <span class="td-text"${t.own ? ' data-edit tabindex="0" title="Cliquer pour modifier"' : ''}>${esc(plain(t.text))}</span>
+    ${t.status === 'doing' ? '<span class="td-status">En cours</span>' : ''}
     ${n ? `<span class="td-prog">${d}/${n}</span>` : ''}
     ${t.ticket ? ticketChip(t.ticket) : ''}
-    ${t.due ? `<span class="td-due${late ? ' late' : ''}">${esc(dueLabel(t.due))}</span>` : ''}
+    ${t.due ? `<span class="td-due${late ? ' late' : t.due === store.dayKey() ? ' today' : ''}">${esc(dueLabel(t.due))}</span>` : ''}
     ${source && !t.own ? `<button class="td-src" data-open-note="${t.note.id}">${esc(titleOf(t.note))}</button>` : ''}
     ${t.own && !t.sub && !t.done ? `<button class="icon-btn td-del" data-td-sub title="Ajouter une sous-tâche" aria-label="Ajouter une sous-tâche">${icon('plus')}</button>` : ''}
     ${t.own ? `<button class="icon-btn td-del" data-td-del title="Supprimer" aria-label="Supprimer">${icon('trash')}</button>` : ''}
@@ -241,22 +246,111 @@ function body() {
     + (c.done.length ? `<details class="td-sec td-donesec"><summary><h2>Terminées<span>${c.done.length}</span></h2><button class="btn btn-ghost" data-td-clear>Effacer</button></summary>${c.done.map(t => row(t)).join('')}</details>` : '');
 }
 
+// ---------- Source (mes tâches ou Linear) et affichage (liste ou Kanban) ----------
+interface Prefs { source: string; layout: 'list' | 'board' }
+const PREFS = 'carnet.tasks.view';
+const prefs: Prefs = (() => { try { return { source: 'local', layout: 'list', ...(JSON.parse(localStorage.getItem(PREFS) || '{}') as Partial<Prefs>) }; } catch { return { source: 'local', layout: 'list' }; } })();
+const savePrefs = (): void => { try { localStorage.setItem(PREFS, JSON.stringify(prefs)); } catch { /* stockage indisponible */ } };
+let views: linear.View[] = [], linearData: { key: string; issues: Issue[] } | null = null;
+
+async function loadViews(): Promise<void> {
+  if (!linear.connected()) return;
+  try { views = await linear.views(); } catch { views = []; }
+  paintChrome();
+}
+
+function paintChrome(): void {
+  const nav = $('#main .td-sources'); if (!nav) return;
+  if (prefs.source !== 'local' && (!linear.connected() || (prefs.source.startsWith('view:') && views.length && !views.some(v => 'view:' + v.id === prefs.source)))) prefs.source = 'local';
+  const chip = (src: string, label: string, dot: string) => `<button class="lv-chip${prefs.source === src ? ' sel' : ''}" data-src="${esc(src)}">${dot}${esc(label)}</button>`;
+  nav.innerHTML = linear.connected()
+    ? chip('local', 'Mes tâches', icon('check')) + chip('linear:me', 'Mes tickets Linear', icon('linear')) + views.map(v => chip('view:' + v.id, v.name, `<i class="st" style="background:${/^#[0-9a-f]{3,8}$/i.test(v.color ?? '') ? v.color : 'var(--c-indigo)'}"></i>`)).join('')
+    : '';
+  nav.hidden = !linear.connected();
+  for (const b of $$('#main .td-layout [data-layout]')) b.setAttribute('aria-selected', String(b.dataset.layout === prefs.layout));
+  const add = $('#main .td-add'); if (add) add.hidden = prefs.source !== 'local';
+  const reload = $('#main [data-td-reload]'); if (reload) reload.hidden = prefs.source === 'local';
+}
+
+// Kanban de mes tâches : à faire, en cours, terminées.
+const COLS: [TaskStatus, string, string][] = [['todo', 'À faire', 'gray'], ['doing', 'En cours', 'amber'], ['done', 'Terminées', 'green']];
+function localCard(t: Task, i: number): string {
+  const late = !!t.due && t.due < store.dayKey() && !t.done, n = t.subs.length, d = t.subs.filter(x => x.done).length;
+  return `<article class="kb-card${t.done ? ' done' : ''}" draggable="true" data-key="${t.note.id}:${t.line}" data-note="${t.note.id}" data-line="${t.line}">
+    <p>${esc(plain(t.text))}</p>
+    <footer>${t.due ? `<span class="td-due${late ? ' late' : t.due === store.dayKey() ? ' today' : ''}">${esc(dueLabel(t.due))}</span>` : ''}${t.ticket ? ticketChip(t.ticket) : ''}${n ? `<span class="td-prog">${d}/${n}</span>` : ''}${t.own ? '' : `<button class="td-src" data-open-note="${t.note.id}">${esc(titleOf(t.note))}</button>`}${board.moveButtons(i === 0, i === COLS.length - 1)}</footer></article>`;
+}
+function localBoard(): string {
+  const c = collect();
+  const todo = [...c.late, ...c.today, ...c.soon, ...c.tickets, ...c.undated, ...c.notes].filter(t => t.status === 'todo');
+  const by: Record<TaskStatus, Task[]> = { todo, doing: c.doing, done: c.done.slice(0, 30) };
+  return board.boardHTML(COLS.map(([key, label, tone], i) => ({ key, label, tone, cards: by[key].map(t => localCard(t, i)) })));
+}
+
+// Kanban d'une source Linear : colonnes par type d'état (les états précis restent visibles sur les cartes).
+const LCOLS: [string, string, string, string[]][] = [['backlog', 'Backlog', 'gray', ['triage', 'backlog']], ['unstarted', 'À faire', 'blue', ['unstarted']], ['started', 'En cours', 'amber', ['started']], ['completed', 'Terminé', 'green', ['completed']]];
+function issueCard(i: Issue, col: number): string {
+  return `<article class="kb-card" draggable="true" data-key="${esc(i.id)}" data-iid="${esc(i.id)}" data-issue="${esc(i.identifier)}" tabindex="0">
+    <p>${esc(i.title)}</p>
+    <footer>${prio(i.priority, i.priorityLabel)}<span class="lv-id">${esc(i.identifier)}</span><span class="kb-state"><i class="st" style="background:${/^#[0-9a-f]{3,8}$/i.test(i.state?.color ?? '') ? i.state?.color : 'var(--text-3)'}"></i>${esc(i.state?.name ?? '')}</span>${i.dueDate ? `<span class="td-due">${esc(issueDay(i.dueDate))}</span>` : ''}${i.assignee ? avatar(i.assignee.name) : ''}${board.moveButtons(col === 0, col === LCOLS.length - 1)}</footer></article>`;
+}
+async function paintLinear(box: HTMLElement): Promise<void> {
+  const key = prefs.source;
+  if (!linearData || linearData.key !== key) {
+    box.innerHTML = '<p class="nf-empty">Chargement depuis Linear…</p>';
+    try {
+      const view = views.find(v => 'view:' + v.id === key);
+      const issues = key === 'linear:me' ? await linear.issues({ assignee: 'me', states: ['triage', 'backlog', 'unstarted', 'started', 'completed'], limit: 100 })
+        : view ? await linear.viewIssues(view) : [];
+      if (prefs.source !== key) return; // la source a changé pendant le chargement
+      linearData = { key, issues };
+    } catch (e) { box.innerHTML = `<p class="nf-empty">Linear ne répond pas : ${esc(errMsg(e))}</p>`; return; }
+  }
+  const issues = linearData.issues;
+  box.innerHTML = prefs.layout === 'board'
+    ? board.boardHTML(LCOLS.map(([k, label, tone, types], i) => ({ key: k, label, tone, cards: issues.filter(x => types.includes(x.state?.type ?? '')).slice(0, k === 'completed' ? 30 : 200).map(x => issueCard(x, i)) })))
+    : grouped(issues.filter(x => x.state?.type !== 'canceled'));
+  const sub = $('#main .td-sub'); if (sub) sub.textContent = `${issues.filter(x => !['completed', 'canceled'].includes(x.state?.type ?? '')).length} ticket(s) ouvert(s)`;
+}
+
+async function onMove(root: HTMLElement, card: HTMLElement, col: string): Promise<void> {
+  if (card.dataset.iid) {
+    const issue = linearData?.issues.find(x => x.id === card.dataset.iid); if (!issue) return;
+    board.place(card, root, col);
+    try { const st = await linear.moveToType(issue, col); issue.state = st; toast(`${issue.identifier} → ${st.name}`); }
+    catch (e) { toast('Linear : ' + errMsg(e)); }
+    refresh();
+    return;
+  }
+  const n = store.get(card.dataset.note); if (!n) return;
+  const status: TaskStatus = col === 'doing' ? 'doing' : col === 'done' ? 'done' : 'todo';
+  await app.flush(n.id);
+  await store.setTaskStatus(n, num(card, 'line'), status);
+  app.refreshNote(n);
+}
+
 let doneOpen = false, subFocus = false;
 export function refresh(): void {
   const box = $('#main .td-list'); if (!box) return;
   if (box.querySelector('.td-edit')) return; // une modification est en cours : on ne casse pas la saisie
   const typed = box.querySelector<HTMLInputElement>('.td-subinput'), keep = typed?.value || '', had = typed && document.activeElement === typed;
-  box.innerHTML = body();
+  paintChrome();
+  if (prefs.source !== 'local') { void paintLinear(box); return; }
+  if (prefs.layout === 'board') { box.innerHTML = localBoard(); queueMicrotask(() => loadTickets(collect().doing.flatMap(t => t.ticket ? [t.ticket] : []))); }
+  else box.innerHTML = body();
   const si = box.querySelector<HTMLInputElement>('.td-subinput'); if (si) { si.value = keep; if (had || subFocus) si.focus(); subFocus = false; }
   const d = $<HTMLDetailsElement>('.td-donesec', box); if (d) { d.open = doneOpen; d.ontoggle = () => { doneOpen = d.open; }; }
   const c = collect(), late = c.late.length;
-  const sub = $('#main .td-sub'); if (sub) sub.textContent = `${c.openCount} à faire${late ? ` · ${late} en retard` : ''}`;
+  const sub = $('#main .td-sub'); if (sub) sub.textContent = `${c.openCount} à faire${c.doing.length ? ` · ${c.doing.length} en cours` : ''}${late ? ` · ${late} en retard` : ''}`;
 }
 
 export function mount(main: HTMLElement): void {
   main.innerHTML = `<header class="toolbar">${app.tbLeft()}${app.crumb('Tâches')}<div class="tb-side tb-right"></div></header>
     <div class="todo"><div class="todo-in">
-      <div class="td-head"><h1>Tâches</h1><p class="td-sub"></p></div>
+      <div class="td-head td-headbar"><div><h1>Tâches</h1><p class="td-sub"></p></div>
+        <div class="td-tools"><button class="icon-btn" data-td-reload title="Actualiser depuis Linear" aria-label="Actualiser" hidden>${icon('refresh')}</button>
+          <div class="seg td-layout" role="tablist" aria-label="Affichage"><button data-layout="list" title="Liste" aria-label="Liste">${icon('list')}</button><button data-layout="board" title="Kanban" aria-label="Kanban">${icon('board')}</button></div></div></div>
+      <nav class="td-sources" aria-label="Source des tâches"></nav>
       <form class="td-add"><span class="td-plus">${icon('plus')}</span><input placeholder="Nouvelle tâche, ex. « Appeler Paul demain »" aria-label="Nouvelle tâche" autocomplete="off"><span class="td-due td-preview" hidden></span>${linear.connected() ? `<button type="button" class="icon-btn" data-td-pick title="Créer une tâche depuis un ticket Linear" aria-label="Depuis un ticket Linear">${icon('linear')}</button>` : ''}</form>
       <div class="td-list"></div>
     </div></div>`;
@@ -277,6 +371,17 @@ export function mount(main: HTMLElement): void {
     input.value = ''; preview.hidden = true; input.focus();
   });
   const root = need('.todo', main);
+  root.classList.toggle('wide', prefs.layout === 'board');
+  board.bind(root, (card, col) => onMove(root, card, col));
+  root.addEventListener('click', e => {
+    const t = target(e), lay = t.closest('[data-layout]'), src = t.closest('[data-src]');
+    if (lay) { prefs.layout = lay.dataset.layout === 'board' ? 'board' : 'list'; savePrefs(); root.classList.toggle('wide', prefs.layout === 'board'); refresh(); return; }
+    if (src) { prefs.source = src.dataset.src ?? 'local'; savePrefs(); linearData = null; refresh(); return; }
+    if (t.closest('[data-td-reload]')) { linearData = null; refresh(); return; }
+    const card = t.closest('.kb-card[data-issue]');
+    if (card && !t.closest('button')) void import('../integrations/linear/page.ts').then(m => m.openTicket(card.dataset.issue ?? ''));
+  });
+  void loadViews();
   root.addEventListener('change', e => {
     const cb = target(e).closest<HTMLInputElement>('.td-check'), r = cb?.closest('.td-row'); if (!cb || !r) return;
     const n = store.get(r.dataset.note), line = num(r, 'line');

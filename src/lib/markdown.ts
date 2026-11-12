@@ -1,7 +1,10 @@
 // Rendu Markdown maison (aucune dépendance) avec les blocs intelligents :
 // cases à cocher, calculs `= 12 * 4`, minuteurs [timer 25m], tableaux triables, [[liens]] et #tags.
 import { evaluate, format } from './calc.ts';
-import type { NoteMeta, TaskLine } from '../types.ts';
+import type { NoteMeta, TaskLine, TaskStatus } from '../types.ts';
+
+/** Lit le marqueur d'une case : ' ' à faire, '/' en cours, 'x' terminée. */
+export const statusOf = (mark: string | undefined): TaskStatus => mark === '/' ? 'doing' : mark === 'x' || mark === 'X' ? 'done' : 'todo';
 
 /** Ce que l'appelant peut brancher sur le rendu : existence des notes liées, blocs de code spéciaux. */
 export interface RenderContext {
@@ -20,7 +23,7 @@ const unesc = (s: string): string => s.replace(/&(amp|lt|gt|quot|#39);/g, (_, e:
 
 export const TAG_RE = /(^|[\s(>])#([\p{L}\d][\p{L}\d_/-]*)/gu;
 export const LINK_RE = /\[\[([^\[\]|\n]+?)(?:\|([^\[\]\n]+))?\]\]/g;
-export const TASK_RE = /^(\s*(?:[-*+]|\d{1,9}[.)])\s+)\[([ xX])\]\s+(.*)$/;
+export const TASK_RE = /^(\s*(?:[-*+]|\d{1,9}[.)])\s+)\[([ xX/])\]\s+(.*)$/;
 const LI_RE = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 const HR_RE = /^\s*([-*_])(\s*\1){2,}\s*$/;
 const FENCE_RE = /^\s*(```|~~~)\s*([\w-]*)\s*$/;
@@ -88,12 +91,12 @@ function listHtml(items: ListItem[], st: RenderState): string {
     let html = `<${tag}${first.ordered && first.num !== 1 ? ` start="${first.num}"` : ''}>`;
     while (pos < items.length && items[pos].indent >= indent && !(items[pos].indent === indent && items[pos].ordered !== first.ordered)) {
       const it = items[pos++];
-      const task = it.text.match(/^\[([ xX])\]\s+(.*)$/);
+      const task = it.text.match(/^\[([ xX/])\]\s+(.*)$/), status = statusOf(task?.[1]);
       let inner = task
-        ? `<label class="task-row"><input type="checkbox" data-line="${it.line}"${task[1] !== ' ' ? ' checked' : ''}><span>${inline(task[2], st)}</span></label>`
+        ? `<label class="task-row"><input type="checkbox" data-line="${it.line}"${status === 'done' ? ' checked' : ''}${status === 'doing' ? ' class="doing" title="En cours"' : ''}><span>${inline(task[2], st)}</span></label>`
         : inline(it.text, st);
       while (pos < items.length && items[pos].indent > it.indent) inner += level(items[pos].indent);
-      html += `<li${task ? ` class="task${task[1] !== ' ' ? ' done' : ''}"` : ''}>${inner}</li>`;
+      html += `<li${task ? ` class="task${status === 'done' ? ' done' : status === 'doing' ? ' doing' : ''}"` : ''}>${inner}</li>`;
     }
     return html + `</${tag}>`;
   };
@@ -169,12 +172,12 @@ export function analyze(body: string): Omit<NoteMeta, "body"> {
     for (const m of l.matchAll(LINK_RE)) links.push(m[1].trim());
     for (const m of l.replace(LINK_RE, ' ').replace(/https?:\/\/\S+/g, ' ').matchAll(TAG_RE)) if (!/^\d+$/.test(m[2])) tags.add(m[2].toLowerCase());
     const t = raw.match(TASK_RE);
-    if (t) tasks.push({ line, text: t[3].trim(), done: t[2] !== ' ' });
+    if (t) { const status = statusOf(t[2]); tasks.push({ line, text: t[3].trim(), done: status === 'done', status }); }
     if (!snippet && l.trim()) snippet = plain(l).slice(0, 160);
   });
   return { tags: [...tags], links, tasks, snippet };
 }
 
-export const plain = (l: string) => l.replace(/^\s*(#{1,6}\s+|>\s?|(?:[-*+]|\d+[.)])\s+(\[[ xX]\]\s+)?)/, '')
+export const plain = (l: string) => l.replace(/^\s*(#{1,6}\s+|>\s?|(?:[-*+]|\d+[.)])\s+(\[[ xX/]\]\s+)?)/, '')
   .replace(LINK_RE, (_, t, a) => a || t).replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
   .replace(/(\*\*|~~|==|\*|`)/g, '').trim();
