@@ -1,5 +1,5 @@
 // Petite boîte à outils d'interface : icônes, menus, fenêtres modales, toasts, formats.
-import { esc } from './markdown.js';
+import { esc } from '../lib/markdown.js';
 
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 export const $ = (s, r = document) => r.querySelector(s);
@@ -31,13 +31,36 @@ const I = {
   upload: '<path d="M12 15V4M7.5 8.5L12 4l4.5 4.5M5 19.5h14"/>',
   back: '<path d="M14.5 5.5L8 12l6.5 6.5"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  github: '<path d="M9.5 20.5v-3c-3.5 1-4.5-1.5-5.5-2M14.5 20.5v-3.2c0-1 .1-1.6-.5-2.3 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 00-1.3-3.2 4.2 4.2 0 00-.1-3.2s-1-.3-3.4 1.3a11.8 11.8 0 00-6 0C6.3 2.3 5.3 2.6 5.3 2.6a4.2 4.2 0 00-.1 3.2A4.6 4.6 0 004 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2.3"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0013 0M12 18v3"/>',
+  bell: '<path d="M6 16.5V11a6 6 0 0112 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 004 0"/>',
   moon: '<path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/>',
   link: '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   restore: '<path d="M4 12a8 8 0 102.5-5.8L4 8.5"/><path d="M4 4.5v4h4"/>',
   keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M7.5 14h9"/>',
   copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6.5a2 2 0 00-2-2h-7a2 2 0 00-2 2v7a2 2 0 002 2h2"/>',
+  home: '<path d="M4 10.5L12 4l8 6.5V20h-5.5v-5.5h-5V20H4z"/>',
+  bot: '<circle cx="6" cy="6.5" r="2.5"/><circle cx="18" cy="17.5" r="2.5"/><path d="M8.5 6.5H14a4 4 0 014 4V15"/><path d="M15.6 12.6L18 15l2.4-2.4"/>',
+  sparkle: '<path d="M4.5 6.5a2 2 0 012-2h11a2 2 0 012 2v8a2 2 0 01-2 2H11l-4.5 3.5V16.5a2 2 0 01-2-2z"/><path d="M9 10.5h.01M12 10.5h.01M15 10.5h.01"/>',
+  db: '<ellipse cx="12" cy="6" rx="7" ry="2.8"/><path d="M5 6v12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8V6M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8"/>',
+  shield: '<path d="M12 3.5l7 2.8v5.4c0 4.4-3 7.6-7 8.8-4-1.2-7-4.4-7-8.8V6.3z"/><path d="M9 12l2.2 2.2L15.5 10"/>',
+  key: '<circle cx="8" cy="15" r="3.8"/><path d="M10.7 12.3L19 4M16 7l2.5 2.5M14 9l2 2"/>',
+  phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/>',
+  devices: '<rect x="2.5" y="5" width="13" height="9.5" rx="1.5"/><path d="M1.5 18h15"/><rect x="17" y="8" width="5.5" height="11" rx="1.3"/>',
+  play: '<path d="M8 5.5v13l10.5-6.5z"/>',
+  refresh: '<path d="M19.5 12a7.5 7.5 0 11-2.2-5.3L19.5 9"/><path d="M19.5 4.5V9H15"/>',
+  linear: '<path d="M4.2 13.6l6.2 6.2M3.6 10.2l10.2 10.2M4.8 6.9l12.3 12.3M7.5 4.5l12 12M11 3.6l9.4 9.4"/>',
+  plug: '<path d="M9 3.5v4M15 3.5v4M6.5 7.5h11v3.5a5.5 5.5 0 01-11 0zM12 16.5v4"/>',
+  share: '<path d="M12 15V3.5M7.5 8L12 3.5 16.5 8M5.5 12v7.5h13V12"/>',
+  chevron: '<path d="M8 10l4 4 4-4"/>',
+  chevronRight: '<path d="M10 8l4 4-4 4"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/>',
+  palette: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17M12 3.5a8.5 8.5 0 010 17"/>',
+  database: '<ellipse cx="12" cy="6" rx="7" ry="2.8"/><path d="M5 6v12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8V6"/>',
 };
+// Marque : un cercle vermillon, un signet incliné découpé en creux (reprend l'icône de l'application).
+export const logo = () => `<svg class="logo" viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.2" cy="10" r="2.7" fill="currentColor"/><rect x="10" y="1" width="2.4" height="18" rx="1.2" fill="#F04A23"/></svg>`;
 export const icon = name => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[name] || ''}</svg>`;
 
 // Raccourcis : 'mod+shift+k' -> ⇧⌘K sur Mac, Ctrl+Shift+K ailleurs.

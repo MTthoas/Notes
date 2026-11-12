@@ -1,0 +1,44 @@
+# Projet Xcode de Studio pour iPhone / iPad, généré par XcodeGen (voir native/ios.sh).
+name: Studio
+options:
+  bundleIdPrefix: app.carnet
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+targets:
+  Studio:
+    type: application
+    platform: iOS
+    sources:
+      - path: Shared
+      - path: iOS
+        excludes: ["Info.plist"]
+      - path: build/web
+        type: folder
+        buildPhase: resources
+    info:
+      path: iOS/Info.plist
+      properties:
+        CFBundleDisplayName: Studio
+        CFBundleDevelopmentRegion: fr
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSMicrophoneUsageDescription: Studio utilise le micro pour tes notes vocales. La transcription est faite sur cet appareil.
+        NSSpeechRecognitionUsageDescription: Studio transcrit tes notes vocales sur cet appareil, sans rien envoyer en ligne.
+        NSLocalNetworkUsageDescription: Studio se connecte directement à vos autres appareils sur le même réseau pour synchroniser vos notes.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.carnet.notes
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic

@@ -1,36 +1,50 @@
-// Carnet — interface. Tout est pilotable au clavier ; la palette (⌘K) donne accès à chaque action.
-import * as store from './store.js';
-import * as cr from './crypto.js';
-import { renderMarkdown, esc, plain, LINK_RE } from './markdown.js';
-import { fuzzy, fold } from './fuzzy.js';
-import { diffLines, diffWords } from './diff.js';
-import { zip } from './zip.js';
-import { createGraph } from './graph.js';
-import { $, $$, el, icon, kbd, keys, matches, isMac, rel, until, full, menu, modal, confirmBox, toast, download, closeTop, topLayer } from './kit.js';
+// Studio — interface. Tout est pilotable au clavier ; la palette (⌘K) donne accès à chaque action.
+import * as store from './core/store.js';
+import * as cr from './core/crypto.js';
+import { renderMarkdown, esc, plain, LINK_RE } from './lib/markdown.js';
+import { fuzzy, fold } from './lib/fuzzy.js';
+import { diffLines, diffWords } from './lib/diff.js';
+import { zip } from './lib/zip.js';
+import { createGraph } from './lib/graph.js';
+import * as hub from './features/hub.js';
+import * as todo from './features/tasks.js';
+import * as notifs from './integrations/linear/notifications.js';
+import * as linearView from './integrations/linear/page.js';
+import * as github from './integrations/github/api.js';
+import * as githubPage from './integrations/github/page.js';
+import * as voice from './features/voice.js';
+import * as home from './features/home.js';
+import * as linear from './integrations/linear/api.js';
+import * as vault from './core/vault.js';
+import * as link from './integrations/link.js';
+import { $, $$, el, icon, logo, kbd, keys, matches, isMac, rel, until, full, menu, modal, confirmBox, toast, download, closeTop, topLayer } from './ui/kit.js';
 
 // ---------- Préférences ----------
 const read = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* stockage indisponible */ } };
-const ui = Object.assign({ view: { type: 'all' }, id: null, mode: 'split', side: true, theme: 'auto' }, read('carnet.ui', {}));
+const ui = Object.assign({ view: { type: 'home' }, id: null, mode: 'split', side: true, theme: 'auto', tagsOpen: true }, read('carnet.ui', {}));
 const saveUI = () => write('carnet.ui', ui);
 let focusMode = false, ed = null, graph = null;
 
 const SC = {
-  palette: 'mod+k', capture: 'mod+j', newNote: 'mod+alt+n', mode: 'mod+e', focus: 'mod+shift+f',
+  palette: 'mod+k', ask: 'mod+shift+i', settings: 'mod+,', tasks: 'mod+shift+t', notifs: 'mod+shift+l', capture: 'mod+j', newNote: 'mod+alt+n', mode: 'mod+e', focus: 'mod+shift+f',
   today: 'mod+shift+d', graph: 'mod+shift+g', history: 'mod+shift+h', lock: 'mod+shift+l',
   sidebar: isMac ? 'ctrl+mod+s' : 'mod+alt+s', task: 'mod+enter', bold: 'mod+b', italic: 'mod+i',
 };
 const VIEWS = {
-  today: { label: 'Aujourd’hui', icon: 'today' }, all: { label: 'Toutes les notes', icon: 'notes' },
+  home: { label: 'Accueil', icon: 'home' }, agents: { label: 'Agents', icon: 'bot' }, settings: { label: 'Réglages', icon: 'gear' },
+  today: { label: 'Aujourd’hui', icon: 'today' }, tasks: { label: 'Tâches', icon: 'check' }, linear: { label: 'Linear', icon: 'linear' }, github: { label: 'GitHub', icon: 'github' }, all: { label: 'Toutes les notes', icon: 'notes' },
   inbox: { label: 'Boîte de réception', icon: 'inbox' }, ephemeral: { label: 'Éphémères', icon: 'hourglass' },
   graph: { label: 'Graphe', icon: 'graph' }, trash: { label: 'Corbeille', icon: 'trash' },
 };
 const titleOf = n => n.title.trim() || 'Sans titre';
+const WIDE = new Set(['graph', 'home', 'settings', 'tasks', 'linear', 'github']); // vues sans colonne de liste
 
 function applyTheme() {
   const dark = ui.theme === 'dark' || (ui.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  $('meta[name=theme-color]')?.setAttribute('content', dark ? '#252527' : '#f4f4f6');
+  $('meta[name=theme-color]')?.setAttribute('content', dark ? '#08090a' : '#f2f2f3');
+  window.webkit?.messageHandlers?.carnet?.postMessage({ type: 'theme', dark }); // app native : la fenêtre suit le thème
   graph?.redraw();
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
@@ -69,6 +83,7 @@ function viewNotes(v = ui.view) {
   if (v.type === 'trash') return all.filter(n => n.deletedAt).sort((a, b) => b.deletedAt - a.deletedAt);
   let list = all.filter(n => !n.deletedAt);
   if (v.type === 'inbox') list = list.filter(n => n.inbox);
+  if (v.type === 'agents') list = list.filter(n => (store.getBody(n) || '').includes('```agent'));
   if (v.type === 'ephemeral') return list.filter(n => n.expiresAt).sort((a, b) => a.expiresAt - b.expiresAt);
   if (v.type === 'tag') list = list.filter(n => store.meta(n).tags.some(t => t === v.tag || t.startsWith(v.tag + '/')));
   return list.sort((a, b) => (b.pinned - a.pinned) || (b.updated - a.updated));
@@ -78,7 +93,7 @@ async function setView(v, { keepNote = false } = {}) {
   await flushAll();
   ui.view = v;
   if (v.type === 'today') ui.id = (await store.dailyNote()).id;
-  else if (v.type !== 'graph' && !keepNote) {
+  else if (!WIDE.has(v.type) && !keepNote) {
     const list = viewNotes();
     if (!list.some(n => n.id === ui.id)) ui.id = list[0]?.id ?? null;
   }
@@ -92,7 +107,7 @@ async function openNote(id, { edit = false } = {}) {
   const n = store.notes.get(id); if (!n) return;
   ui.id = id;
   const t = ui.view.type;
-  if (t === 'graph' || (t !== 'today' && !viewNotes().some(x => x.id === id))) ui.view = { type: n.deletedAt ? 'trash' : 'all' };
+  if (WIDE.has(t) || (t !== 'today' && !viewNotes().some(x => x.id === id))) ui.view = { type: n.deletedAt ? 'trash' : 'all' };
   document.body.classList.add('pane-main');
   saveUI(); render();
   if (edit) { if (ui.mode === 'read') setMode('edit'); (n.title ? ed?.ta : ed?.title)?.focus(); }
@@ -115,19 +130,46 @@ async function openByTitle(title) {
 // ---------- Rendu : barre latérale ----------
 function renderSidebar() {
   const idx = store.index(), v = ui.view;
-  const count = { all: idx.live.length, inbox: idx.live.filter(n => n.inbox).length, ephemeral: idx.live.filter(n => n.expiresAt).length, trash: store.notes.size - idx.live.length, today: store.openTasks().reduce((s, g) => s + g.tasks.length, 0) };
-  const item = (type, extra = '') => `<button class="side-item${v.type === type ? ' sel' : ''}" data-view="${type}">${icon(VIEWS[type].icon)}<span>${VIEWS[type].label}</span>${count[type] ? `<span class="side-count">${count[type]}</span>` : ''}${extra}</button>`;
+  const count = { inbox: idx.live.filter(n => n.inbox).length, tasks: todo.openCount(), linear: notifs.unreadCount(), github: github.unseenCount(), ephemeral: idx.live.filter(n => n.expiresAt).length };
+  const item = type => `<button class="side-item${v.type === type ? ' sel' : ''}" data-view="${type}">${icon(VIEWS[type].icon)}<span>${VIEWS[type].label}</span>${count[type] ? `<span class="side-count">${count[type]}</span>` : ''}</button>`;
   const tags = [...idx.tags].sort((a, b) => a[0].localeCompare(b[0], 'fr'));
+  const devs = vault.isOpen() ? link.devices().length : 0;
   $('#sidebar').innerHTML = `
-    <div class="side-head"><span class="brand">Carnet</span><button class="icon-btn" data-act="new" title="Nouvelle note (${keys(SC.newNote)})" aria-label="Nouvelle note">${icon('compose')}</button></div>
-    <button class="side-search" data-act="palette">${icon('search')}<span>Rechercher</span>${kbd(SC.palette)}</button>
+    <div class="side-head">
+      <button class="ws" data-act="workspace" aria-label="Menu Studio">${logo()}<span class="ws-name">Studio</span>${icon('chevron')}</button>
+      <button class="icon-btn" data-act="palette" title="Rechercher (${keys(SC.palette)})" aria-label="Rechercher">${icon('search')}</button>
+      ${voice.available() ? `<button class="icon-btn" data-act="voice" title="Note vocale" aria-label="Note vocale">${icon('mic')}</button>` : ''}
+      <button class="icon-btn" data-act="new" title="Nouvelle note (${keys(SC.newNote)})" aria-label="Nouvelle note">${icon('compose')}</button>
+    </div>
     <div class="side-scroll">
-      <div class="side-group">${item('today')}${item('all')}${item('inbox')}${count.ephemeral || v.type === 'ephemeral' ? item('ephemeral') : ''}</div>
-      ${tags.length ? `<div class="side-label">Tags</div><div class="side-group">${tags.map(([t, c]) => `<button class="side-item${v.type === 'tag' && v.tag === t ? ' sel' : ''}" data-tag="${esc(t)}">${icon('hash')}<span>${esc(t)}</span><span class="side-count">${c}</span></button>`).join('')}</div>` : ''}
+      <div class="side-group">${item('home')}</div>
+      <div class="side-label">Notes</div>
+      <div class="side-group">${item('inbox')}${item('today')}${item('all')}${count.ephemeral || v.type === 'ephemeral' ? item('ephemeral') : ''}</div>
+      <div class="side-label">Organisation</div>
+      <div class="side-group">${item('tasks')}${item('agents')}</div>
+      <div class="side-label">Connexions</div>
+      <div class="side-group">${item('linear')}${item('github')}</div>
+      ${tags.length ? `<button class="side-label" data-act="tags" aria-expanded="${ui.tagsOpen}">${icon('chevron')}Tags</button>${ui.tagsOpen ? `<div class="side-group">${tags.map(([t, c]) => `<button class="side-item${v.type === 'tag' && v.tag === t ? ' sel' : ''}" data-tag="${esc(t)}"><i class="tag-dot"></i><span>${esc(t)}</span><span class="side-count">${c}</span></button>`).join('')}</div>` : ''}` : ''}
       <div class="side-label">Explorer</div>
       <div class="side-group">${item('graph')}${item('trash')}</div>
     </div>
-    <button class="side-capture" data-act="capture">${icon('bolt')}<span>Capture rapide</span>${kbd(SC.capture)}</button>`;
+    <button class="side-foot" data-open-conn="${vault.enabled() ? 'appareils' : 'coffre'}" title="Réglages (${keys(SC.settings)})">${icon(vault.isOpen() ? 'shield' : 'unlock')}<span>${vault.isOpen() ? 'Chiffré de bout en bout' : 'Non chiffré'}</span>${devs ? `<span class="side-count">${icon('devices')}${devs}</span>` : ''}</button>`;
+}
+
+function workspaceMenu(anchor) {
+  menu(anchor, [
+    { label: 'Réglages', icon: 'gear', keys: SC.settings, run: () => hub.openConnections('coffre') },
+    { label: 'Raccourcis clavier', icon: 'keyboard', run: openHelp },
+    '-',
+    { label: 'Thème' },
+    { label: 'Automatique', checked: ui.theme === 'auto', run: () => setTheme('auto') },
+    { label: 'Clair', checked: ui.theme === 'light', run: () => setTheme('light') },
+    { label: 'Sombre', checked: ui.theme === 'dark', run: () => setTheme('dark') },
+    '-',
+    { label: 'Importer des fichiers…', icon: 'upload', run: () => $('#file').click() },
+    { label: 'Exporter une sauvegarde', icon: 'download', run: exportJSON },
+    ...(vault.isOpen() ? ['-', { label: 'Verrouiller Studio', icon: 'lock', run: async () => { await flushAll(); vault.lock(); } }] : []),
+  ]);
 }
 
 // ---------- Rendu : liste ----------
@@ -135,15 +177,15 @@ function noteItem(n) {
   const m = store.meta(n), locked = store.isLocked(n);
   const sub = locked ? 'Note chiffrée' : (m.snippet || 'Aucun contenu');
   return `<button class="note-item${n.id === ui.id ? ' sel' : ''}" data-id="${n.id}">
-    <span class="ni-title">${n.pinned ? icon('pin') : ''}${n.enc ? icon(locked ? 'lock' : 'unlock') : ''}<span>${esc(titleOf(n))}</span></span>
-    <span class="ni-sub"><span class="ni-date">${rel(n.deletedAt || n.updated)}</span>${esc(sub)}</span>
+    <span class="ni-row"><span class="ni-title">${n.pinned ? icon('pin') : ''}${n.enc ? icon(locked ? 'lock' : 'unlock') : ''}<span>${esc(titleOf(n))}</span></span><span class="ni-date">${rel(n.deletedAt || n.updated)}</span></span>
+    <span class="ni-sub">${esc(sub)}</span>
     ${n.expiresAt ? `<span class="ni-badge">${icon('hourglass')}Autodestruction dans ${until(n.expiresAt)}</span>` : ''}
   </button>`;
 }
 
 function renderList() {
   const v = ui.view, box = $('#list');
-  if (v.type === 'graph') { box.innerHTML = ''; return; }
+  if (WIDE.has(v.type)) { box.innerHTML = ''; return; }
   const scroll = $('.list-scroll', box)?.scrollTop || 0;
   const title = v.type === 'tag' ? '#' + v.tag : VIEWS[v.type].label;
   let body, sub;
@@ -158,23 +200,30 @@ function renderList() {
   } else {
     const list = viewNotes();
     sub = `${list.length} note${list.length > 1 ? 's' : ''}`;
-    const empty = { inbox: 'Les captures rapides sans tag arrivent ici.', ephemeral: 'Aucune note éphémère.', trash: 'La corbeille est vide.', tag: 'Aucune note avec ce tag.', all: 'Aucune note pour l’instant.' }[v.type];
+    const empty = { agents: 'Aucun agent. Palette → « Nouvel agent ».', inbox: 'Les captures rapides sans tag arrivent ici.', ephemeral: 'Aucune note éphémère.', trash: 'La corbeille est vide.', tag: 'Aucune note avec ce tag.', all: 'Aucune note pour l’instant.' }[v.type];
     body = list.length ? list.map(noteItem).join('') : `<div class="list-empty">${empty}</div>`;
     if (v.type === 'trash' && list.length) body = `<div class="list-note">Suppression définitive après 30 jours.</div>` + body;
   }
-  box.innerHTML = `<div class="list-head"><div class="lh-text"><h2>${esc(title)}</h2><span>${esc(sub)}</span></div>${v.type !== 'trash' ? `<button class="icon-btn" data-act="new" title="Nouvelle note (${keys(SC.newNote)})" aria-label="Nouvelle note">${icon('plus')}</button>` : ''}</div><div class="list-scroll">${body}</div>`;
+  box.innerHTML = `<div class="list-head"><div class="lh-text"><h2>${v.type !== 'tag' ? icon(VIEWS[v.type].icon) : '<i class="tag-dot"></i>'}${esc(title)}</h2><span>${esc(sub)}</span></div>${v.type !== 'trash' ? `<button class="icon-btn" data-act="new" title="Nouvelle note (${keys(SC.newNote)})" aria-label="Nouvelle note">${icon('plus')}</button>` : ''}</div><div class="list-scroll">${body}</div>`;
   $('.list-scroll', box).scrollTop = scroll;
 }
 
 // ---------- Rendu : zone principale ----------
 const tb = (act, ic, title, combo, cls = '') => `<button class="icon-btn ${cls}" data-act="${act}" title="${esc(title)}${combo ? ` (${keys(combo)})` : ''}" aria-label="${esc(title)}">${icon(ic)}</button>`;
-const tbLeft = () => `<div class="tb-side">${tb('back', 'back', 'Retour à la liste', '', 'only-narrow')}${tb('sidebar', 'sidebar', 'Afficher ou masquer la barre latérale', SC.sidebar)}</div>`;
+const tbLeft = () => `<div class="tb-side">${WIDE.has(ui.view.type) ? '' : tb('back', 'back', 'Retour à la liste', '', 'only-narrow')}${tb('sidebar', 'sidebar', 'Afficher ou masquer la barre latérale', SC.sidebar)}</div>`;
+// Fil d'Ariane : vue courante › titre de la note.
+const crumb = cur => { const v = ui.view, parent = v.type === 'tag' ? '#' + v.tag : VIEWS[v.type]?.label; return `<div class="crumb">${parent && !WIDE.has(v.type) ? `<span>${esc(parent)}</span>${icon('chevronRight')}` : ''}<span class="crumb-cur">${esc(cur)}</span></div>`; };
 
 function renderMain() {
   const main = $('#main');
   const keep = ed && ed.note.id === ui.id && ed.ta ? { s: ed.ta.selectionStart, e: ed.ta.selectionEnd, top: ed.ta.scrollTop, ptop: ed.read?.scrollTop, focus: document.activeElement === ed.ta } : null;
   closeAc(); graph?.destroy(); graph = null; ed = null;
   if (ui.view.type === 'graph') return mountGraph(main);
+  if (ui.view.type === 'home') return home.mount(main);
+  if (ui.view.type === 'settings') return hub.mountSettings(main, ui.view.tab || 'coffre');
+  if (ui.view.type === 'tasks') return todo.mount(main);
+  if (ui.view.type === 'linear') return linearView.mount(main);
+  if (ui.view.type === 'github') return githubPage.mount(main);
   const n = store.notes.get(ui.id);
   if (!n) {
     main.innerHTML = `<header class="toolbar">${tbLeft()}</header><div class="empty"><div class="empty-card">${icon('notes')}<h3>Aucune note sélectionnée</h3><p>${kbd(SC.newNote)} nouvelle note<br>${kbd(SC.capture)} capture rapide<br>${kbd(SC.palette)} rechercher ou lancer une commande</p></div></div>`;
@@ -189,13 +238,13 @@ function mountNote(main, n, keep) {
   const seg = [['edit', 'pencil', 'Écrire'], ['split', 'split', 'Côte à côte'], ['read', 'eye', 'Lire']];
   main.innerHTML = `
     <header class="toolbar">
-      ${tbLeft()}
-      ${ro ? '<span></span>' : `<div class="seg" role="tablist" title="Changer de mode (${keys(SC.mode)})">${seg.map(([m, ic, l]) => `<button role="tab" data-mode="${m}" aria-selected="${m === mode}" aria-label="${l}" title="${l}">${icon(ic)}</button>`).join('')}</div>`}
+      ${tbLeft()}${crumb(titleOf(n))}
       <div class="tb-side tb-right">
         ${n.expiresAt && !trashed ? `<button class="chip chip-warn" data-act="expire" title="Autodestruction le ${esc(full(n.expiresAt))}">${icon('hourglass')}${until(n.expiresAt)}</button>` : ''}
-        ${trashed ? '' : tb('lock', n.enc && !locked ? 'unlock' : 'lock', n.enc ? (locked ? 'Note verrouillée' : 'Verrouiller maintenant') : 'Chiffrer cette note', n.enc && !locked ? SC.lock : '', n.enc ? 'on' : '')
-          + (locked ? '' : tb('history', 'history', 'Historique des versions', SC.history) + tb('focus', 'focus', 'Mode focus', SC.focus))
-          + tb('more', 'more', 'Plus d’actions')}
+        ${n.enc && !trashed ? tb('lock', locked ? 'lock' : 'unlock', locked ? 'Note verrouillée' : 'Verrouiller maintenant', locked ? '' : SC.lock, 'on') : ''}
+        ${ro ? '' : `<div class="seg" role="tablist" title="Changer de mode (${keys(SC.mode)})">${seg.map(([m, ic, l]) => `<button role="tab" data-mode="${m}" aria-selected="${m === mode}" aria-label="${l}" title="${l}">${icon(ic)}</button>`).join('')}</div>`}
+        ${ro ? '' : `<button class="btn btn-ghost" data-act="ask" title="Demander à l’IA (${keys(SC.ask)})">${icon('sparkle')}<span>Demander</span></button>`}
+        ${tb('more', 'more', 'Plus d’actions')}
       </div>
     </header>
     ${trashed ? `<div class="banner">${icon('trash')}<span>Cette note est dans la corbeille.</span><button class="btn" data-act="restore">Restaurer</button><button class="btn btn-danger" data-act="destroy">Supprimer définitivement</button></div>` : ''}
@@ -211,7 +260,7 @@ function mountNote(main, n, keep) {
 
   ed = { note: n, title: $('.title', main), ta: $('.body', main), preview: $('.md', main), read: $('.pane-read', main), sorts: new Map(), titleAtFocus: n.title };
   ed.title.addEventListener('focus', () => { ed.titleAtFocus = n.title; });
-  ed.title.addEventListener('input', () => { store.touch(n); n.title = ed.title.value; n.updated = Date.now(); scheduleSave(n); });
+  ed.title.addEventListener('input', () => { store.touch(n); n.title = ed.title.value; n.updated = Date.now(); scheduleSave(n); const c = $('.crumb-cur', main); if (c) c.textContent = titleOf(n); });
   ed.title.addEventListener('blur', async () => {
     const old = ed?.titleAtFocus; if (old == null || old === n.title || !old.trim()) return;
     const c = await store.renameLinks(old, n.title, n.id);
@@ -257,7 +306,8 @@ function schedulePreview() { if (!previewRaf) previewRaf = requestAnimationFrame
 function renderPreview() {
   if (!ed || !ed.preview) return;
   const n = ed.note, body = store.getBody(n) ?? '';
-  ed.preview.innerHTML = body.trim() ? renderMarkdown(body, { exists: t => !!store.findByTitle(t) }) : `<p class="placeholder">Rien à afficher pour l’instant.</p>`;
+  ed.preview.innerHTML = body.trim() ? renderMarkdown(body, { exists: t => !!store.findByTitle(t), fence: hub.fenceFor(n) }) : `<p class="placeholder">Rien à afficher pour l’instant.</p>`;
+  hub.hydrate(ed.preview);
   $$('table.sortable', ed.preview).forEach((t, i) => { const s = ed.sorts.get(i); if (s) sortTable(t, s.col, s.dir); });
   paintTimers();
   const back = n.deletedAt ? [] : store.backlinks(n);
@@ -436,6 +486,33 @@ async function toggleTask(n, line) {
   if (ed?.note === n && ed.ta) { const s = ed.ta.selectionStart, e = ed.ta.selectionEnd, top = ed.ta.scrollTop; ed.ta.value = store.getBody(n); ed.ta.setSelectionRange(s, e); ed.ta.scrollTop = top; renderPreview(); }
 }
 
+// Une note modifiée en dehors de l'éditeur (agent, IA, synchro) : on recharge le texte affiché.
+function refreshNote(n) {
+  if (!n || ed?.note !== n || !ed.ta) return;
+  const s = ed.ta.selectionStart, e = ed.ta.selectionEnd, top = ed.ta.scrollTop;
+  ed.ta.value = store.getBody(n) ?? ''; ed.ta.setSelectionRange(s, e); ed.ta.scrollTop = top; renderPreview();
+}
+function insertBlock(text) {
+  if (!ed?.ta) return;
+  const ta = ed.ta, [, le] = lineBounds(ta.value, ta.selectionEnd);
+  const before = ta.value.slice(0, le), lead = !before.trim() ? '' : before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+  replaceRange(ta, le, le, lead + text);
+  if (ui.mode === 'read') setMode('split');
+}
+// « #todo » sur une seule ligne : la tâche va dans la liste « Tâches » plutôt que dans une nouvelle note.
+async function captureTodo(text) {
+  const r = await todo.add(text.replace(/(^|\s)#todo\b/gi, ' ').replace(/\s+/g, ' ').trim());
+  if (r) toast(`Ajoutée aux tâches${r.due ? ' · échéance enregistrée' : ''}`, { label: 'Voir', run: () => setView({ type: 'tasks' }) });
+  return r;
+}
+async function quickCapture(text) {
+  const c = parseCapture(text);
+  if (c.isTodo && !text.trim().includes('\n')) return captureTodo(text);
+  const n = await store.createNote({ title: c.title, body: c.body, inbox: !c.tags.length });
+  toast(c.tags.length ? `Rangée dans ${c.tags.map(t => '#' + t).join(' ')}` : 'Ajoutée à la boîte de réception', { label: 'Ouvrir', run: () => openNote(n.id) });
+  return n;
+}
+
 // ---------- Actions sur la note ----------
 async function trash(n) {
   await flush(n.id);
@@ -497,6 +574,10 @@ function moreMenu(anchor, n) {
   if (n.deletedAt) return menu(anchor, [{ label: 'Restaurer', icon: 'restore', run: () => store.restoreNote(n).then(() => openNote(n.id)) }, { label: 'Supprimer définitivement', icon: 'trash', danger: true, run: () => destroy(n) }]);
   const locked = store.isLocked(n);
   menu(anchor, [
+    ...(locked ? [] : [
+      { label: 'Historique des versions', icon: 'history', keys: SC.history, run: () => openHistory(n) },
+      { label: 'Mode focus', icon: 'focus', keys: SC.focus, run: () => setFocus(!focusMode) },
+      '-']),
     { label: n.pinned ? 'Désépingler' : 'Épingler en haut', icon: 'pin', run: () => togglePin(n) },
     { label: n.expiresAt ? 'Modifier l’autodestruction…' : 'Rendre éphémère…', icon: 'hourglass', run: () => expireMenu(anchor, n) },
     ...(n.enc ? (locked ? [] : [{ label: 'Retirer le chiffrement', icon: 'unlock', run: () => removeEncryption(n) }]) : [{ label: 'Chiffrer…', icon: 'lock', run: () => encryptDialog(n) }]),
@@ -579,13 +660,14 @@ function openCapture() {
   const update = () => {
     ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 240) + 'px';
     const { tags, isTodo } = parseCapture(ta.value || ' ');
-    dest.innerHTML = tags.length ? `${icon('hash')}Rangée dans ${tags.map(t => `<b>#${esc(t)}</b>`).join(' ')}${isTodo ? ' · ajoutée aux tâches' : ''}` : `${icon('inbox')}Ira dans la boîte de réception`;
+    dest.innerHTML = tags.length ? `${icon('hash')}Rangée dans ${tags.map(t => `<b>#${esc(t)}</b>`).join(' ')}${isTodo ? ' · ajoutée à la liste Tâches' : ''}` : `${icon('inbox')}Ira dans la boîte de réception`;
   };
   ta.addEventListener('input', update); update();
   ta.addEventListener('keydown', async e => {
     if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
     e.preventDefault(); if (!ta.value.trim()) return;
     const open = e.metaKey || e.ctrlKey, c = parseCapture(ta.value);
+    if (c.isTodo && !ta.value.trim().includes('\n')) { m.close(); await captureTodo(ta.value); if (open) setView({ type: 'tasks' }); return; }
     const n = await store.createNote({ title: c.title, body: c.body, inbox: !c.tags.length });
     m.close();
     if (open) openNote(n.id);
@@ -600,9 +682,26 @@ function commands() {
   return [
     c('Nouvelle note', 'compose', () => newNote(), SC.newNote, 'créer ajouter'),
     c('Capture rapide', 'bolt', openCapture, SC.capture, 'inbox idée todo'),
-    c('Aujourd’hui', 'today', () => setView({ type: 'today' }), SC.today, 'note du jour tâches quotidienne daily'),
-    c('Toutes les notes', 'notes', () => setView({ type: 'all' }), '', 'liste'),
+    c('Aujourd’hui', 'today', () => setView({ type: 'today' }), SC.today, 'note du jour quotidienne daily'),
+    c('Tâches', 'check', () => setView({ type: 'tasks' }), SC.tasks, 'todo liste à faire'),
+    c('Linear : mes tickets', 'linear', () => setView({ type: 'linear', tab: 'issues' }), SC.notifs, 'linear issues tickets'),
+    c('Linear : projets', 'linear', () => setView({ type: 'linear', tab: 'projects' }), '', 'linear projects roadmap'),
+    c('Linear : notifications', 'bell', () => setView({ type: 'linear', tab: 'notifs' }), '', 'linear boîte inbox mentions'),
+    c('GitHub : actualité des dépôts', 'github', () => setView({ type: 'github' }), '', 'github repos commits pull requests'),
+    ...(voice.available() ? [c('Note vocale', 'mic', () => voice.record(), '', 'dictée micro voix enregistrer')] : []),
+    c('Ajouter une tâche', 'plus', async () => { await setView({ type: 'tasks' }); }, '', 'todo nouvelle tâche'),
+    c('Notes', 'notes', () => setView({ type: 'all' }), '', 'liste toutes'),
     c('Boîte de réception', 'inbox', () => setView({ type: 'inbox' }), '', 'inbox'),
+    c('Accueil', 'home', () => setView({ type: 'home' }), '', 'widgets tableau de bord dashboard'),
+    c('Demander à l’IA', 'sparkle', () => hub.askAI(), SC.ask, 'claude chatgpt openai assistant question'),
+    c('Agents', 'bot', () => setView({ type: 'agents' }), '', 'automatisation ordonnanceur'),
+    c('Nouvel agent', 'bot', hub.newAgentNote, '', 'créer automatisation planifier'),
+    c('Réglages : sécurité et chiffrement', 'shield', () => hub.openConnections('coffre'), '', 'sécurité mot de passe face id touch id passkey'),
+    c('Réglages : intelligence artificielle', 'sparkle', () => hub.openConnections('ia'), '', 'clé api anthropic chatgpt ollama'),
+    c('Réglages : Linear', 'linear', () => hub.openConnections('linear'), '', 'issues tickets'),
+    c('Lier un téléphone ou un ordinateur', 'phone', () => hub.openConnections('appareils'), '', 'appareils synchronisation iphone mac qr'),
+    c('Synchroniser maintenant', 'refresh', () => { link.syncNow(); toast('Recherche des appareils…'); }, '', 'appareils sync'),
+    ...(vault.isOpen() ? [c('Verrouiller le coffre', 'lock', async () => { await flushAll(); vault.lock(); }, '', 'sécurité fermer')] : []),
     c('Graphe des notes', 'graph', () => setView({ type: 'graph' }), SC.graph, 'liens carte'),
     c('Corbeille', 'trash', () => setView({ type: 'trash' }), '', 'supprimées'),
     ...(open ? [
@@ -612,6 +711,10 @@ function commands() {
       c('Mode : lire', 'eye', () => setMode('read'), '', 'lecture aperçu preview'),
       c('Historique des versions', 'history', () => openHistory(n), SC.history, 'diff restaurer version'),
       c('Exporter cette note en Markdown', 'download', () => exportNote(n), '', 'md télécharger'),
+      c('Insérer un agent', 'bot', () => insertBlock(hub.AGENT_TEMPLATE), '', 'bloc automatisation'),
+      c('Insérer un schéma de base de données', 'db', () => insertBlock(hub.SCHEMA_TEMPLATE), '', 'sql erd tables diagramme'),
+      c('Insérer une liste Linear', 'linear', () => insertBlock('```linear\nassigné: moi\nétat: en cours, à faire\nlimite: 10\n```\n'), '', 'issues'),
+      c('Linear : créer une issue depuis la sélection', 'linear', hub.issueFromSelection, '', 'ticket tâche'),
     ] : []),
     ...(live ? [
       c(n.pinned ? 'Désépingler la note' : 'Épingler la note', 'pin', () => togglePin(n), '', 'pin favori'),
@@ -629,6 +732,7 @@ function commands() {
     c('Thème : sombre', 'moon', () => setTheme('dark'), '', 'apparence dark nuit'),
     c('Afficher ou masquer la barre latérale', 'sidebar', toggleSidebar, SC.sidebar, 'sidebar'),
     c('Raccourcis clavier', 'keyboard', openHelp, '', 'aide help'),
+    c('Réglages', 'gear', () => hub.openConnections('coffre'), SC.settings, 'préférences paramètres options'),
   ];
 }
 function setTheme(t) { ui.theme = t; saveUI(); applyTheme(); }
@@ -696,19 +800,25 @@ function openPalette(prefill = '') {
 }
 
 function openHelp() {
-  const rows = [['Palette de commandes', SC.palette], ['Capture rapide', SC.capture], ['Nouvelle note', SC.newNote], ['Aujourd’hui', SC.today], ['Changer de mode (écrire, côte à côte, lire)', SC.mode], ['Mode focus', SC.focus], ['Graphe', SC.graph], ['Historique', SC.history], ['Verrouiller la note chiffrée', SC.lock], ['Barre latérale', SC.sidebar], ['Créer ou cocher une tâche', SC.task], ['Gras / italique', SC.bold], ['Indenter / désindenter', 'tab']];
-  const syntax = [['[[Titre]]', 'lien vers une note (créée au clic si absente)'], ['#tag', 'range la note sous ce tag'], ['- [ ] tâche', 'case à cocher, reprise dans Aujourd’hui'], ['`= 12 * 4`', 'calcul affiché avec son résultat'], ['[timer 25m]', 'minuteur (25m, 1h30m, 90s, 5:00)'], ['| a | b |', 'tableau : clic sur l’en-tête pour trier']];
+  const rows = [['Palette de commandes', SC.palette], ['Capture rapide', SC.capture], ['Nouvelle note', SC.newNote], ['Aujourd’hui', SC.today], ['Changer de mode (écrire, côte à côte, lire)', SC.mode], ['Mode focus', SC.focus], ['Graphe', SC.graph], ['Historique', SC.history], ['Verrouiller la note chiffrée', SC.lock], ['Barre latérale', SC.sidebar], ['Réglages', SC.settings], ['Tâches', SC.tasks], ['Linear', SC.notifs], ['Demander à l’IA', SC.ask], ['Créer ou cocher une tâche', SC.task], ['Gras / italique', SC.bold], ['Indenter / désindenter', 'tab']];
+  const syntax = [['[[Titre]]', 'lien vers une note (créée au clic si absente)'], ['#tag', 'range la note sous ce tag'], ['- [ ] tâche', 'case à cocher, reprise dans Tâches'], ['Appeler Paul demain', 'tâche avec échéance (page Tâches)'], ['`= 12 * 4`', 'calcul affiché avec son résultat'], ['[timer 25m]', 'minuteur (25m, 1h30m, 90s, 5:00)'], ['| a | b |', 'tableau : clic sur l’en-tête pour trier'], ['```schema / ```sql', 'diagramme de base de données'], ['```agent', 'agent IA lançable ou planifié'], ['```linear', 'liste d’issues Linear']];
   const m = modal({ title: 'Raccourcis et syntaxe', cls: 'help', html: `<div class="help-grid"><div><h4>Clavier</h4>${rows.map(([l, k]) => `<div class="help-row"><span>${l}</span>${kbd(k)}</div>`).join('')}</div><div><h4>Dans une note</h4>${syntax.map(([s, l]) => `<div class="help-row"><code>${esc(s)}</code><span>${l}</span></div>`).join('')}</div></div><div class="modal-actions"><button class="btn btn-primary" autofocus>Fermer</button></div>` });
   $('.btn', m.node).onclick = m.close;
 }
 
 // ---------- Import / export ----------
 const stamp = () => store.dayKey();
-async function exportJSON() { await flushAll(); download(`carnet-${stamp()}.json`, new Blob([await store.exportJSON()], { type: 'application/json' })); toast('Sauvegarde JSON téléchargée'); }
+async function exportJSON() {
+  await flushAll();
+  const json = await hub.sealBackup(await store.exportJSON()); if (!json) return;
+  download(`carnet-${stamp()}.json`, new Blob([json], { type: 'application/json' }));
+  toast(vault.enabled() ? 'Sauvegarde chiffrée téléchargée' : 'Sauvegarde JSON téléchargée');
+}
 async function exportZip() {
   await flushAll();
   const { files, skipped } = store.markdownFiles();
   if (!files.length) return toast('Aucune note à exporter.');
+  if (vault.enabled() && !await confirmBox({ title: 'Exporter en clair ?', text: 'Le coffre est actif, mais un export Markdown est lisible par n’importe qui. Pour une sauvegarde chiffrée, utilise l’export JSON.', ok: 'Exporter en clair' })) return;
   download(`carnet-${stamp()}.zip`, zip(files));
   toast(`${files.length} note${files.length > 1 ? 's' : ''} exportée${files.length > 1 ? 's' : ''}${skipped ? ` — ${skipped} chiffrée${skipped > 1 ? 's' : ''} ignorée${skipped > 1 ? 's' : ''} (présentes dans l’export JSON)` : ''}`);
 }
@@ -718,7 +828,8 @@ async function importFiles(files) {
   for (const f of files) {
     try {
       const text = await f.text();
-      if (/\.json$/i.test(f.name)) notes += await store.importJSON(text);
+      if (/\.json$/i.test(f.name)) notes += await store.importJSON(await hub.openBackup(text));
+      else if (/\.carnet$/i.test(f.name)) await hub.importPacket(text);
       else if (/\.(md|markdown|txt)$/i.test(f.name)) { last = await store.importMarkdown(f.name, text); notes++; }
       else errors.push(f.name);
     } catch (e) { errors.push(`${f.name} (${e.message})`); }
@@ -736,7 +847,7 @@ function mountGraph(main) {
     const k = [n.id, id].sort().join('|');
     if (id !== n.id && !seen.has(k)) { seen.add(k); edges.push({ a: n.id, b: id }); }
   }
-  main.innerHTML = `<header class="toolbar">${tbLeft()}<span class="tb-title">Graphe</span><div class="tb-side tb-right"></div></header>
+  main.innerHTML = `<header class="toolbar">${tbLeft()}${crumb('Graphe')}<div class="tb-side tb-right"></div></header>
     <div class="graph-wrap"><canvas aria-label="Graphe des liens entre notes"></canvas>
       <div class="graph-info">${idx.live.length} note${idx.live.length > 1 ? 's' : ''} · ${edges.length} lien${edges.length > 1 ? 's' : ''}${ghosts.size ? ` · ${ghosts.size} à créer` : ''}</div>
       <div class="graph-ctl"><button data-z="0.8" aria-label="Dézoomer">−</button><button data-z="0" aria-label="Recentrer">⌖</button><button data-z="1.25" aria-label="Zoomer">+</button></div>
@@ -750,12 +861,15 @@ function mountGraph(main) {
 function render() {
   document.body.classList.toggle('no-side', !ui.side); document.body.classList.toggle('side-open', ui.side);
   document.body.dataset.v = ui.view.type;
+  document.body.classList.toggle('no-list', WIDE.has(ui.view.type));
   renderSidebar(); renderList(); renderMain();
 }
 
 store.onChange((kind, id, remote) => {
   if (ui.id && !store.notes.has(ui.id)) { ui.id = null; saveUI(); }
   renderSidebar(); renderList();
+  if (ui.view.type === 'home' && !topLayer() && !$('#main').contains(document.activeElement)) return renderMain();
+  if (ui.view.type === 'tasks') return todo.refresh();
   const typing = ed && document.activeElement && $('#main').contains(document.activeElement) && !remote;
   if (['lock', 'unlock', 'destroy', 'purge', 'import'].includes(kind) || (remote && (!id || id === ui.id) && !pending.has(ui.id))) renderMain();
   else if (kind === 'save' && ed && id !== ed.note.id && !typing) renderPreview();
@@ -768,8 +882,11 @@ document.addEventListener('click', async e => {
   if (act) {
     const anchor = t.closest('[data-act]');
     if (act === 'new') return newNote();
+    if (act === 'workspace') return workspaceMenu(anchor);
+    if (act === 'tags') { ui.tagsOpen = !ui.tagsOpen; saveUI(); return renderSidebar(); }
     if (act === 'palette') return openPalette();
     if (act === 'capture') return openCapture();
+    if (act === 'voice') return voice.record();
     if (act === 'sidebar') return toggleSidebar();
     if (act === 'back') return document.body.classList.remove('pane-main');
     if (!n) return;
@@ -777,13 +894,16 @@ document.addEventListener('click', async e => {
     if (act === 'expire') return expireMenu(anchor, n);
     if (act === 'lock') return lockAction(n);
     if (act === 'history') return openHistory(n);
+    if (act === 'ask') return hub.askAI();
     if (act === 'focus') return setFocus(!focusMode);
     if (act === 'restore') { await store.restoreNote(n); return openNote(n.id); }
     if (act === 'destroy') return destroy(n);
     if (act === 'backlinks') return menu(anchor, [{ label: 'Rétroliens' }, ...store.backlinks(n).map(b => ({ label: titleOf(b), icon: 'notes', run: () => openNote(b.id) }))]);
     return;
   }
+  if (act === undefined && await hub.click(e)) return;
   const view = t.closest('[data-view]'); if (view) return setView({ type: view.dataset.view });
+  const on = t.closest('[data-open-note]'); if (on && store.notes.has(on.dataset.openNote)) return openNote(on.dataset.openNote);
   const tag = t.closest('[data-tag]'); if (tag) { e.preventDefault(); return setView({ type: 'tag', tag: tag.dataset.tag }); }
   const mode = t.closest('.seg [data-mode]'); if (mode) return setMode(mode.dataset.mode);
   const idEl = t.closest('#list [data-id], .backlink[data-id]'); if (idEl) return openNote(idEl.dataset.id);
@@ -822,6 +942,10 @@ document.addEventListener('keydown', e => {
   }
   if (matches(e, SC.palette) || (isMac && e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'k')) { e.preventDefault(); return openPalette(); }
   if (matches(e, SC.capture)) { e.preventDefault(); return openCapture(); }
+  if (matches(e, SC.ask)) { e.preventDefault(); return hub.askAI(); }
+  if (matches(e, SC.settings)) { e.preventDefault(); return hub.openConnections('coffre'); }
+  if (matches(e, SC.tasks)) { e.preventDefault(); return setView({ type: 'tasks' }); }
+  if (matches(e, SC.notifs)) { e.preventDefault(); return setView({ type: 'linear' }); }
   if (topLayer()) return;
   const n = store.notes.get(ui.id), open = n && !n.deletedAt && !store.isLocked(n);
   const on = (combo, fn) => { if (matches(e, combo)) { e.preventDefault(); fn(); return true; } };
@@ -842,13 +966,13 @@ addEventListener('pagehide', flushAll);
 
 // ---------- Démarrage ----------
 const SEED = [
-  ['Bienvenue dans Carnet', `Tes notes vivent **uniquement dans ce navigateur** : pas de compte, pas de serveur, et tout fonctionne hors ligne.
+  ['Bienvenue dans Studio', `Tes notes vivent **uniquement dans ce navigateur** : pas de compte, pas de serveur, et tout fonctionne hors ligne.
 
 ## L’essentiel en 30 secondes
 - [ ] Ouvrir la palette avec \`${keys(SC.palette)}\` et taper quelques lettres
 - [ ] Capturer une idée avec \`${keys(SC.capture)}\`, en ajoutant \`#idée\` ou \`#todo\`
 - [ ] Suivre un lien : [[Blocs intelligents]]
-- [x] Installer Carnet (c’est déjà fait)
+- [x] Installer Studio (c’est déjà fait)
 
 Les liens s’écrivent \`[[Titre de la note]]\`. Les notes qui pointent vers celle-ci apparaissent en bas, dans les rétroliens, et la vue **Graphe** dessine l’ensemble.
 
@@ -878,7 +1002,7 @@ Clique sur un en-tête pour trier.
 - [ ] Une tâche à cocher ici ou depuis la vue Aujourd’hui
 - [x] Une tâche terminée
 
-Retour à [[Bienvenue dans Carnet]].
+Retour à [[Bienvenue dans Studio]].
 
 #carnet`],
   ['Raccourcis et astuces', `- **Historique** : chaque note garde ses versions, avec comparaison visuelle et restauration.
@@ -890,14 +1014,76 @@ Retour à [[Bienvenue dans Carnet]].
 
 Dans l’éditeur, \`${keys(SC.task)}\` crée ou coche une tâche, et taper \`[[\` propose les notes existantes.
 
-Voir aussi [[Blocs intelligents]] et [[Bienvenue dans Carnet]].
+Voir aussi [[Blocs intelligents]], [[IA, agents et schémas]] et [[Bienvenue dans Studio]].
+
+#carnet`],
+  ['IA, agents et schémas', `Commence par **Réglages** (menu Studio en haut à gauche, ou ⌘ virgule) → **Sécurité** : tout le carnet est alors chiffré, et tes clés API aussi.
+
+## Schéma de base de données
+Écris du SQL (\`CREATE TABLE…\`) dans un bloc \`sql\`, ou ce format court dans un bloc \`schema\`. Les tables se déplacent à la souris.
+
+\`\`\`schema
+users
+  id uuid pk
+  email text unique
+  name text?
+
+projects
+  id uuid pk
+  owner_id uuid > users.id
+  title text
+
+tasks
+  id uuid pk
+  project_id uuid > projects.id
+  assignee_id uuid? > users.id
+  done bool default=false
+\`\`\`
+
+## Agent
+Un agent est une consigne que l’IA exécute avec des outils (notes, Linear, autres agents). Toute modification te sera soumise.
+
+\`\`\`agent
+nom: Revue du matin
+outils: notes, linear
+sortie: journal
+planning: jours ouvrés 9h
+---
+Liste mes tâches ouvertes les plus urgentes, puis propose les 3 priorités du jour sous forme de cases à cocher.
+\`\`\`
+
+## Linear
+\`\`\`linear
+assigné: moi
+état: en cours, à faire
+limite: 8
+\`\`\`
+
+Les notes chiffrées et celles taguées \`#privé\` ne sont jamais envoyées à une IA.
 
 #carnet`],
 ];
 
+// Points d'entrée pour l'app native (menu Réglages, enregistrement avant de quitter).
+window.carnet = { flush: () => flushAll(), settings: () => hub.openConnections('coffre'), voice: p => voice.onNative(p) };
+
 async function start() {
   applyTheme();
+  if (!VIEWS[ui.view?.type] && ui.view?.type !== 'tag') ui.view = { type: 'home' };
+  await hub.gate(); // coffre : rien n'est lu avant le déverrouillage
   const gone = await store.init();
+  todo.init({ flush, refreshNote, toggleTask, tbLeft, crumb });
+  const shared = { setView, openNote, capture: quickCapture, view: () => ui.view.type, viewState: () => ui.view, renderSidebar, tbLeft, crumb,
+    onCount: () => { renderSidebar(); linearView.refreshCount(); if (ui.view.type === 'home' && !topLayer() && !$('#main').contains(document.activeElement)) renderMain(); } };
+  home.init(shared); voice.init(shared); linearView.init(shared); githubPage.init(shared);
+
+  hub.init({
+    openNote, setView, renderMain, flush, flushAll, refreshNote, capture: quickCapture, crumb,
+    theme: () => ui.theme, setTheme, exportJSON, exportZip, pickFiles: () => $('#file').click(), openHelp,
+    refreshPreview: () => renderPreview(), current: () => store.notes.get(ui.id), view: () => ui.view.type, tbLeft,
+    selection: () => { if (!ed?.ta) return null; const { selectionStart: a, selectionEnd: b, value: v } = ed.ta, [ls] = lineBounds(v, a), [, le] = lineBounds(v, b); return { text: a === b ? v.slice(ls, le) : v.slice(a, b), end: le }; },
+    insertAtLineEnd: (pos, text) => { if (ed?.ta) replaceRange(ed.ta, pos, pos, text); },
+  });
   if (!store.notes.size && !read('carnet.seeded', false)) {
     const t = Date.now();
     for (const [i, [title, body]] of SEED.entries()) await store.createNote({ title, body, created: t - i * 1000, updated: t - i * 1000, pinned: i === 0 });
@@ -906,9 +1092,11 @@ async function start() {
   }
   if (ui.view.type === 'tag' && !store.index().tags.has(ui.view.tag)) ui.view = { type: 'all' };
   if (ui.view.type === 'today') ui.id = (await store.dailyNote()).id;
-  if (!store.notes.has(ui.id)) ui.id = ui.view.type === 'graph' ? null : viewNotes()[0]?.id ?? null;
+  if (!store.notes.has(ui.id)) ui.id = WIDE.has(ui.view.type) ? null : viewNotes()[0]?.id ?? null;
   if (matchMedia('(max-width: 900px)').matches) ui.side = false;
   render();
+  notifs.init(shared); github.init(shared);
+  if (voice.available()) document.body.insertAdjacentHTML('beforeend', `<button class="fab-mic" data-act="voice" aria-label="Note vocale">${icon('mic')}</button>`);
   for (const g of gone.filter(g => g.expired)) toast(`« ${g.title.trim() || 'Sans titre'} » s’est autodétruite`);
   const params = new URLSearchParams(location.search);
   if (params.has('capture')) openCapture(); else if (params.has('new')) newNote(); else if (params.has('today')) setView({ type: 'today' });
@@ -920,6 +1108,6 @@ async function start() {
     for (const g of out.filter(g => g.expired)) toast(`« ${g.title.trim() || 'Sans titre'} » s’est autodétruite`);
     if (!out.length && !topLayer()) { renderList(); const chip = $('.chip-warn'); const n = store.notes.get(ui.id); if (chip && n?.expiresAt) chip.lastChild.textContent = until(n.expiresAt); }
   }, 30000);
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
 }
-start().catch(e => { console.error(e); document.body.insertAdjacentHTML('beforeend', `<div class="fatal">Carnet n’a pas pu démarrer : ${esc(e.message)}.<br>Le stockage local du navigateur est peut-être désactivé (navigation privée ?).</div>`); });
+start().catch(e => { console.error(e); document.body.insertAdjacentHTML('beforeend', `<div class="fatal">Studio n’a pas pu démarrer : ${esc(e.message)}.<br>Le stockage local du navigateur est peut-être désactivé (navigation privée ?).</div>`); });

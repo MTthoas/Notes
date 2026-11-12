@@ -2,8 +2,8 @@
 // chiffrement, notes éphémères, import/export. Aucune dépendance au DOM.
 import * as db from './db.js';
 import * as cr from './crypto.js';
-import { fold } from './fuzzy.js';
-import { analyze, LINK_RE } from './markdown.js';
+import { fold } from '../lib/fuzzy.js';
+import { analyze, LINK_RE } from '../lib/markdown.js';
 
 export const notes = new Map();
 const unlocked = new Map();   // id -> { key, body } pour les notes chiffrées déverrouillées
@@ -115,6 +115,7 @@ export async function trashNote(n) { n.deletedAt = Date.now(); n.pinned = false;
 export async function restoreNote(n) { n.deletedAt = null; await saveNote(n, { version: false }); }
 
 export async function destroyNote(id, silent = false) {
+  if (notes.has(id)) tomb(id);
   notes.delete(id); unlocked.delete(id); bursts.delete(id); pre.delete(id);
   await db.del('notes', id);
   await db.delMany('versions', (await db.byIndex('versions', 'noteId', id)).map(v => v.id));
@@ -253,7 +254,7 @@ export async function exportJSON() {
 
 export async function importJSON(text) {
   const data = JSON.parse(text);
-  if (data.app !== 'carnet' || !Array.isArray(data.notes)) throw new Error('Ce fichier n’est pas une sauvegarde Carnet.');
+  if (data.app !== 'carnet' || !Array.isArray(data.notes)) throw new Error('Ce fichier n’est pas une sauvegarde Studio.');
   let count = 0;
   for (const rec of data.notes) {
     if (!rec || typeof rec.id !== 'string' || typeof rec.title !== 'string') continue;
@@ -306,4 +307,45 @@ export async function importMarkdown(name, text) {
     if (h) { title = h[1].trim(); text = text.slice(h[0].length).replace(/^\n+/, ''); }
   }
   return createNote({ title, body: text.replace(/\n+$/, ''), created, updated });
+}
+
+// ---------- Synchronisation entre appareils ----------
+// Les suppressions définitives laissent une « tombe » (id + date) pendant 90 jours,
+// pour que l'autre appareil efface aussi la note au lieu de la renvoyer.
+const TOMBS = 'carnet.tombs';
+export function tombs() {
+  let t = {}; try { t = JSON.parse(localStorage.getItem(TOMBS)) || {}; } catch { /* vide */ }
+  const limit = Date.now() - 90 * DAY;
+  for (const [id, ts] of Object.entries(t)) if (ts < limit) delete t[id];
+  return t;
+}
+function tomb(id) { const t = tombs(); t[id] = Date.now(); try { localStorage.setItem(TOMBS, JSON.stringify(t)); } catch { /* plein */ } }
+
+export const manifest = () => [...notes.values()].map(n => ({ id: n.id, updated: n.updated, deletedAt: n.deletedAt || null }));
+// Enregistrement tel qu'il est stocké : une note chiffrée par mot de passe voyage chiffrée.
+export const record = id => { const n = notes.get(id); if (!n) return null; const r = { ...n }; if (r.enc) r.body = ''; return r; };
+
+// Applique des notes reçues. Règle : la version la plus récente gagne, mais la version locale
+// écrasée est d'abord rangée dans l'historique — rien n'est perdu en cas d'édition des deux côtés.
+export async function mergeRemote(records = [], remoteTombs = {}) {
+  let changed = 0;
+  for (const rec of records) {
+    if (!rec || typeof rec.id !== 'string' || typeof rec.title !== 'string' || typeof rec.updated !== 'number') continue;
+    if (tombs()[rec.id] >= rec.updated) continue;
+    const cur = notes.get(rec.id);
+    if (cur && cur.updated >= rec.updated) continue;
+    if (cur) {
+      const body = getBody(cur);
+      if (!cur.enc && body != null && (body !== rec.body || cur.title !== rec.title)) await db.put('versions', { id: uid(), noteId: cur.id, ts: cur.updated, title: cur.title, body });
+      else if (cur.enc && cur.enc.ct && rec.enc?.ct !== cur.enc.ct) await db.put('versions', { id: uid(), noteId: cur.id, ts: cur.updated, title: cur.title, enc: { iv: cur.enc.iv, ct: cur.enc.ct } });
+    }
+    const clean = { ...rec }; if (clean.enc) clean.body = '';
+    await db.put('notes', clean); changed++;
+  }
+  for (const [id, ts] of Object.entries(remoteTombs)) {
+    const cur = notes.get(id);
+    if (cur && cur.updated <= ts) { await destroyNote(id, true); changed++; }
+  }
+  if (changed) { await load(); emit('import', null); }
+  return changed;
 }

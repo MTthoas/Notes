@@ -42,7 +42,9 @@ function inline(text, st) {
   const hold = html => `\u0000${held.push(html) - 1}\u0000`;
   let s = text.replace(/`([^`\n]+)`/g, (_, c) => hold(/^=\s*\S/.test(c) ? calcHtml(c.replace(/^=\s*/, '')) : `<code>${esc(c)}</code>`));
   s = esc(s);
-  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => safeUrl(unesc(url)) ? hold(`<img src="${url}" alt="${alt}" loading="lazy">`) : m);
+  // Images distantes : jamais chargées automatiquement (une image peut servir de mouchard
+  // ou de canal de fuite) — la politique de sécurité de la page les bloquerait de toute façon.
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => safeUrl(unesc(url)) ? hold(`<a class="ext-img" href="${url}" target="_blank" rel="noopener noreferrer" title="Image distante non chargée">🖼 ${alt || 'image'}</a>`) : m);
   s = s.replace(/\[([^\]\[]+)\]\(([^)\s]+)\)/g, (m, label, url) => safeUrl(unesc(url)) ? hold(`<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`) : m);
   s = s.replace(LINK_RE, (_, title, alias) => {
     const t = unesc(title).trim();
@@ -99,7 +101,9 @@ function blocks(lines, base, st) {
       const buf = []; i++;
       while (i < lines.length && !new RegExp('^\\s*' + m[1] + '\\s*$').test(lines[i])) buf.push(lines[i++]);
       i++;
-      out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`); continue;
+      // Blocs spéciaux (```sql, ```schema, ```agent, ```linear…) : rendus par l'application.
+      const custom = st.ctx.fence?.(m[2].toLowerCase(), buf.join('\n'), st.fence++);
+      out.push(custom ?? `<pre><code>${esc(buf.join('\n'))}</code></pre>`); continue;
     }
     if ((m = line.match(HEAD_RE))) { out.push(`<h${m[1].length}>${inline(m[2], st)}</h${m[1].length}>`); i++; continue; }
     if (HR_RE.test(line)) { out.push('<hr>'); i++; continue; }
@@ -137,7 +141,7 @@ function blocks(lines, base, st) {
 }
 
 export function renderMarkdown(src, ctx = {}) {
-  return blocks(src.split('\n'), 0, { timer: 0, ctx });
+  return blocks(src.split('\n'), 0, { timer: 0, fence: 0, ctx });
 }
 
 // Analyse légère du texte brut : tags, liens, tâches et extrait (hors blocs de code).
