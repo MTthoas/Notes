@@ -11,16 +11,16 @@ VERSION="$(date +%Y.%m.%d)"
 
 echo "→ Préparation"
 [ -d "$APP" ] && rm -r "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/web"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "→ Fichiers de l'application"
-cp -R "$ROOT/index.html" "$ROOT/manifest.webmanifest" "$ROOT/css" "$ROOT/js" "$ROOT/fonts" "$ROOT/icons" "$APP/Contents/Resources/web/"
+"$ROOT/native/copy-web.sh" "$APP/Contents/Resources/web"
 
 echo "→ Compilation (Swift)"
 SOURCES=("$ROOT"/native/Shared/*.swift "$ROOT"/native/macOS/*.swift)
 for ARCH in arm64 x86_64; do
   swiftc -O -target "$ARCH-apple-macos13.0" -parse-as-library -module-name Studio \
-    -framework AppKit -framework WebKit -framework UserNotifications -framework Speech -framework AVFoundation "${SOURCES[@]}" -o "$BUILD/Studio-$ARCH"
+    -framework AppKit -framework WebKit -framework UserNotifications -framework Speech -framework AVFoundation -framework LocalAuthentication -framework Security "${SOURCES[@]}" -o "$BUILD/Studio-$ARCH"
 done
 lipo -create "$BUILD/Studio-arm64" "$BUILD/Studio-x86_64" -output "$APP/Contents/MacOS/Studio"
 rm "$BUILD/Studio-arm64" "$BUILD/Studio-x86_64"
@@ -56,6 +56,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>Vos notes restent sur vos appareils.</string>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+  <key>NSFaceIDUsageDescription</key><string>Studio utilise Face ID pour ouvrir ton coffre chiffré.</string>
   <key>NSMicrophoneUsageDescription</key><string>Studio utilise le micro pour tes notes vocales. La transcription est faite sur cet appareil.</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>Studio transcrit tes notes vocales sur cet appareil, sans rien envoyer en ligne.</string>
   <key>NSLocalNetworkUsageDescription</key><string>Studio se connecte directement à vos autres appareils sur le même réseau pour synchroniser vos notes.</string>

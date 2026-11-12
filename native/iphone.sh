@@ -34,9 +34,7 @@ fi
 BUNDLE="app.carnet.notes.$(echo "$TEAM" | tr 'A-Z' 'a-z')"
 
 echo "→ Fichiers de l'application"
-[ -d "$BUILD/web" ] && rm -r "$BUILD/web"
-mkdir -p "$BUILD/web"
-cp -R "$ROOT/index.html" "$ROOT/manifest.webmanifest" "$ROOT/css" "$ROOT/js" "$ROOT/fonts" "$ROOT/icons" "$BUILD/web/"
+"$NATIVE/copy-web.sh" "$BUILD/web"
 
 command -v xcodegen >/dev/null || {
   if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]; then arch -arm64 /opt/homebrew/bin/brew install xcodegen; else brew install xcodegen; fi
@@ -44,10 +42,20 @@ command -v xcodegen >/dev/null || {
 (cd "$NATIVE" && xcodegen generate --spec project.yml --quiet)
 
 echo "→ Compilation (1 à 2 minutes la première fois)"
-xcodebuild -project "$NATIVE/Studio.xcodeproj" -scheme Studio -configuration Release \
+LOG="$BUILD/xcodebuild.log"
+if ! xcodebuild -project "$NATIVE/Studio.xcodeproj" -scheme Studio -configuration Release \
   -destination "id=$DEVICE" -derivedDataPath "$BUILD/dd" -allowProvisioningUpdates \
   DEVELOPMENT_TEAM="$TEAM" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE" CODE_SIGN_STYLE=Automatic \
-  -quiet build
+  -quiet build >"$LOG" 2>&1; then
+  if grep -q "is not installed" "$LOG"; then
+    echo "✗ La plateforme iOS n'est pas installée dans Xcode (téléchargement unique, plusieurs Go)."
+    echo "  Xcode → Settings → Components → iOS → Get   (ou : xcodebuild -downloadPlatform iOS)"
+  else
+    grep -E "error:" "$LOG" | head -15 || tail -25 "$LOG"
+    echo "  Journal complet : $LOG"
+  fi
+  exit 1
+fi
 
 echo "→ Installation sur l'iPhone"
 xcrun devicectl device install app --device "$DEVICE" "$BUILD/dd/Build/Products/Release-iphoneos/Studio.app"

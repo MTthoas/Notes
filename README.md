@@ -2,14 +2,16 @@
 
 Notes Markdown reliées entre elles, stockées uniquement dans le navigateur. Pas de compte, pas de serveur, pas de dépendance, pas d'étape de build.
 
-Connectées à Claude, OpenAI ou un modèle local, à Linear et à tes autres appareils — toujours sans backend, et chiffrées de bout en bout.
+Connectées à Claude, OpenAI ou un modèle local, à Linear, à GitHub et à tes autres appareils — toujours sans backend, et chiffrées de bout en bout.
+
+[![Build](https://github.com/MTthoas/Notes/actions/workflows/build.yml/badge.svg)](https://github.com/MTthoas/Notes/actions/workflows/build.yml) · Licence [MIT](LICENSE)
 
 ## Applications Mac et iPhone
 
 Studio existe aussi en applications natives qui embarquent leurs fichiers : rien n'est mis en ligne, aucun serveur.
 
-- **Mac** : `./native/build-mac.sh --install` construit `Studio.app` (Apple Silicon et Intel, ~1 Mo) et l'installe dans `/Applications`. Seuls les outils en ligne de commande d'Apple sont nécessaires.
-- **iPhone / iPad** : installer Xcode (App Store), puis `./native/ios.sh` génère le projet et l'ouvre ; choisir son identifiant Apple dans *Signing*, brancher l'iPhone et lancer (⌘R). Avec un identifiant Apple gratuit, Apple impose de réinstaller l'app tous les 7 jours.
+- **Mac** : `./native/build-mac.sh --install` construit `Studio.app` (Apple Silicon et Intel, ~1 Mo) et l'installe dans `/Applications`. Seuls les outils en ligne de commande d'Apple sont nécessaires. Chaque push produit aussi l'app dans l'onglet *Actions* de GitHub, et chaque tag `v…` la publie dans les *Releases*.
+- **iPhone / iPad** : Xcode (App Store) avec la plateforme iOS (Xcode → Settings → Components), ton identifiant Apple ajouté dans Xcode → Settings → Accounts, l'iPhone branché, puis `./native/iphone.sh` compile et installe l'app sans ouvrir Xcode. Avec un identifiant Apple gratuit, Apple impose de réinstaller l'app tous les 7 jours.
 - Les deux apps se relient ensuite par Réglages → Appareils.
 
 Le dossier [`native/`](native/) contient la coquille Swift commune ([`Shared/Shell.swift`](native/Shared/Shell.swift)) : les fichiers sont servis par un schéma interne `carnet://`, les liens externes s'ouvrent dans le navigateur, et les exports passent par les panneaux du système.
@@ -35,7 +37,7 @@ Après une modification, incrémenter `CACHE` dans `sw.js` pour que les navigate
 
 ## Sécurité
 
-- **Coffre** (Réglages → Sécurité, `⌘,`) : une clé maîtresse aléatoire de 256 bits chiffre (AES-GCM) chaque enregistrement IndexedDB — notes, historique — ainsi que les clés API et les appareils liés. Elle est emballée par une clé dérivée du mot de passe (PBKDF2, 600 000 itérations) et, en option, par une passkey Face ID / Touch ID (WebAuthn, extension PRF). Verrouillage automatique après inactivité.
+- **Coffre** (Réglages → Sécurité, `⌘,`) : une clé maîtresse aléatoire de 256 bits chiffre (AES-GCM) chaque enregistrement IndexedDB — notes, historique — ainsi que les clés API et les appareils liés. Elle est emballée par une clé dérivée du mot de passe (PBKDF2, 600 000 itérations) et, en option, par une passkey Face ID / Touch ID dans un navigateur (WebAuthn, extension PRF) ou, dans les apps natives, par un secret aléatoire du trousseau du système que Touch ID / Face ID libère (le mot de passe n'est jamais stocké et reste toujours valable). Verrouillage automatique après inactivité.
 - **Politique de sécurité (CSP)** dans `index.html` : le code ne peut joindre que `api.anthropic.com`, `api.openai.com`, `api.linear.app`, `ntfy.sh` et `localhost`. Une clé ne peut donc pas partir ailleurs, même en cas de faille. Aucune image distante n'est chargée.
 - **IA** : appels directs du navigateur vers le fournisseur, avec ta clé. Les notes chiffrées et celles taguées `#privé` ne sont jamais envoyées. Toute action d'écriture d'un agent (créer une note, une issue…) demande ton accord.
 - **Sauvegarde JSON** : chiffrée par mot de passe quand le coffre est actif.
@@ -58,25 +60,41 @@ Les agents planifiés tournent tant que l'application est ouverte (rattrapage un
 
 ## Organisation
 
-| Fichier | Rôle |
-|---|---|
-| `js/app.js` | Interface : éditeur, palette, capture, historique, raccourcis |
-| `js/store.js` | Données : notes, index des liens et tags, versions, chiffrement, import/export |
-| `js/markdown.js` | Rendu Markdown et blocs intelligents |
-| `js/calc.js` | Évaluateur des calculs inline (sans `eval`) |
-| `js/graph.js` | Vue en graphe (canvas) |
-| `js/kit.js` | Icônes, menus, fenêtres, toasts |
-| `js/notifs.js` | Notifications Linear : interrogation directe de l’API toutes les minutes, page dédiée, pastille et notifications système |
-| `js/todo.js` | Page Tâches : ajout en langage naturel, échéances, regroupement |
-| `js/hub.js` | Interface des connexions, agents, blocs spéciaux, accueil en widgets |
-| `js/vault.js` | Coffre : clé maîtresse, mot de passe, passkey, secrets |
-| `js/ai.js` | Fournisseurs d'IA, boucle d'agent et outils, planification |
-| `js/linear.js` | Client GraphQL Linear |
-| `js/link.js` | Liaison et synchronisation entre appareils |
-| `js/schema.js` | Lecture SQL / mini-langage, mise en page et rendu des schémas |
-| `js/qr.js` | Générateur de QR code |
-| `js/db.js`, `crypto.js`, `fuzzy.js`, `diff.js`, `zip.js` | IndexedDB, AES-GCM, recherche floue, diff, archive ZIP |
-| `css/app.css` | Styles, thèmes clair et sombre |
-| `sw.js` | Cache hors ligne |
+```
+index.html, sw.js, manifest.webmanifest   page, cache hors ligne, installation
+css/app.css                               styles, thèmes clair et sombre
+js/
+  app.js            interface : vues, éditeur, palette, raccourcis (point d'entrée)
+  boot.js           thème appliqué avant le premier affichage
+  core/             données et sécurité — aucun code d'interface
+    store.js          notes, index des liens et tags, versions, import/export
+    db.js             IndexedDB, chiffrement transparent des enregistrements
+    crypto.js         AES-GCM, PBKDF2, HKDF
+    vault.js          coffre : clé maîtresse, mot de passe, passkey, biométrie, secrets
+    biometric.js      pont vers Touch ID / Face ID de l'app native
+  features/         pages et fonctions de l'app
+    home.js           accueil
+    tasks.js          tâches, sous-tâches, échéances, tickets Linear
+    voice.js          notes vocales (transcription sur l'appareil)
+    hub.js            réglages, coffre, agents, blocs spéciaux, liaison d'appareils
+  integrations/     services extérieurs, appelés directement depuis l'app
+    ai.js             Claude, OpenAI, modèle local : boucle d'agent et outils
+    link.js           liaison et synchronisation entre appareils (WebRTC)
+    linear/           api.js (GraphQL), page.js (tickets, projets, fiche), notifications.js
+    github/           api.js (actualité des dépôts), page.js
+  lib/              outils sans état : markdown, calc, schema, graph, qr, fuzzy, diff, zip
+  ui/               kit.js (icônes, menus, fenêtres), caret.js (curseur d'écriture)
+native/             apps Mac et iPhone (Swift) et leurs scripts de build
+scripts/check.mjs   vérifications lancées par la CI
+```
+
+Règle de dépendance : `lib/` et `core/` n'importent jamais `features/` ni `integrations/` ; seules les pages (`features/`, `integrations/*/page.js`) touchent à l'interface.
+
+## Builds, licence et contributions
+
+- **CI** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) à chaque push et pull request : `node scripts/check.mjs` (syntaxe, imports, cache hors ligne complet, aucune clé d'API dans le code), build de l'app Mac, compilation de l'app iPhone. Les mêmes vérifications se lancent en local avec `node scripts/check.mjs`.
+- **Publication** : `git tag v1.0.0 && git push --tags` publie `Studio-macOS.zip` dans les Releases.
+- **Licence** : [MIT](LICENSE). Chacun peut lire, réutiliser et modifier le code.
+- **Contributions** : les pull requests sont bienvenues ; seul le mainteneur peut les accepter ([`CODEOWNERS`](.github/CODEOWNERS)).
 
 Les données vivent dans IndexedDB (base `carnet`). Vider les données du site efface les notes : l'export JSON (palette → « Exporter tout en JSON ») sert de sauvegarde.

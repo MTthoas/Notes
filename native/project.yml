@@ -33,6 +33,7 @@ targets:
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        NSFaceIDUsageDescription: Studio utilise Face ID pour ouvrir ton coffre chiffré.
         NSMicrophoneUsageDescription: Studio utilise le micro pour tes notes vocales. La transcription est faite sur cet appareil.
         NSSpeechRecognitionUsageDescription: Studio transcrit tes notes vocales sur cet appareil, sans rien envoyer en ligne.
         NSLocalNetworkUsageDescription: Studio se connecte directement à vos autres appareils sur le même réseau pour synchroniser vos notes.

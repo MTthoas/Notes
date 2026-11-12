@@ -1,0 +1,97 @@
+# Studio : vérifications et builds à chaque push et chaque pull request.
+#   check  → syntaxe, imports, cache hors ligne, absence de secrets (scripts/check.mjs)
+#   macos  → construit Studio.app (Apple Silicon + Intel), téléchargeable dans l'onglet Actions
+#   ios    → vérifie que l'app iPhone compile (sans signature : non installable, voir README)
+#   release → sur un tag « v1.2.3 », publie Studio.app dans les Releases
+name: Build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# Par défaut, le jeton du workflow ne peut que lire le dépôt.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Vérifications
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check.mjs
+
+  macos:
+    name: App Mac
+    needs: check
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Construire Studio.app
+        run: ./native/build-mac.sh
+      - name: Vérifier le binaire
+        run: |
+          lipo -archs native/build/Studio.app/Contents/MacOS/Studio
+          codesign --verify --verbose native/build/Studio.app
+      - name: Archiver
+        run: ditto -c -k --keepParent native/build/Studio.app Studio-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Studio-macOS
+          path: Studio-macOS.zip
+          retention-days: 30
+
+  ios:
+    name: App iPhone (compilation)
+    needs: check
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Outils
+        run: brew install xcodegen
+      - name: Compiler pour le simulateur
+        working-directory: native
+        run: |
+          ./copy-web.sh build/web
+          xcodegen generate --spec project.yml --quiet
+          xcodebuild -project Studio.xcodeproj -scheme Studio \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO -quiet build
+
+  release:
+    name: Publication
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, ios]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write   # seule étape autorisée à écrire : créer la Release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Studio-macOS
+      - name: Créer la Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" Studio-macOS.zip \
+            --repo "$GITHUB_REPOSITORY" --title "Studio $GITHUB_REF_NAME" --generate-notes
