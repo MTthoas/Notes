@@ -1,0 +1,23 @@
+{
+  "name": "studio",
+  "version": "1.0.0",
+  "description": "Notes, tâches, Linear et GitHub au même endroit, chiffrés, sans serveur.",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "watch": "node scripts/build.ts --watch",
+    "typecheck": "tsc -p . && tsc -p src/sw",
+    "check": "node scripts/check.ts",
+    "verify": "npm run typecheck && npm run build && npm run check",
+    "serve": "node scripts/build.ts --watch --serve"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

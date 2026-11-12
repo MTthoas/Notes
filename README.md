@@ -1,6 +1,6 @@
 # Studio
 
-Notes Markdown reliées entre elles, stockées uniquement dans le navigateur. Pas de compte, pas de serveur, pas de dépendance, pas d'étape de build.
+Notes Markdown reliées entre elles, stockées uniquement sur tes appareils. Pas de compte, pas de serveur, aucune dépendance à l'exécution. Écrit en TypeScript strict.
 
 Connectées à Claude, OpenAI ou un modèle local, à Linear, à GitHub et à tes autres appareils — toujours sans backend, et chiffrées de bout en bout.
 
@@ -19,16 +19,22 @@ Le dossier [`native/`](native/) contient la coquille Swift commune ([`Shared/She
 ## Lancer en local
 
 ```bash
-python3 -m http.server 8000
+npm install          # TypeScript et esbuild (outils de développement uniquement)
+npm run serve        # build en continu + http://localhost:8000
 ```
 
-Puis ouvrir http://localhost:8000. Un simple double-clic sur `index.html` ne suffit pas : les modules JavaScript et le chiffrement demandent `http://localhost` ou HTTPS.
+Les modules JavaScript et le chiffrement demandent `http://localhost` ou HTTPS : ouvrir `index.html` directement ne suffit pas.
+
+| Commande | Rôle |
+|---|---|
+| `npm run build` | Compile `src/` dans `dist/` : un seul `app.js` minifié, CSS minifié, service worker avec la liste des fichiers et une version de cache calculée sur leur contenu |
+| `npm run typecheck` | Vérifie les types (TypeScript strict, sans aucun `any` implicite) |
+| `npm run check` | Vérifie le build : fichiers cités présents, cache hors ligne complet, aucune clé d'API dans le dépôt |
+| `npm run verify` | Les trois à la suite (ce que lance la CI) |
 
 ## Publier sur GitHub Pages
 
-Pousser ce dossier dans un dépôt, puis Settings → Pages → « Deploy from a branch » → branche `main`, dossier `/ (root)`. Tous les chemins sont relatifs, l'app fonctionne donc dans un sous-dossier.
-
-Après une modification, incrémenter `CACHE` dans `sw.js` pour que les navigateurs récupèrent la nouvelle version.
+Servir le dossier `dist/` produit par `npm run build` (chaque Release contient aussi `Studio-web.zip`). Tous les chemins sont relatifs : l'app fonctionne dans un sous-dossier. La version du cache hors ligne change d'elle-même à chaque build.
 
 ## Sur Mac
 
@@ -61,39 +67,42 @@ Les agents planifiés tournent tant que l'application est ouverte (rattrapage un
 ## Organisation
 
 ```
-index.html, sw.js, manifest.webmanifest   page, cache hors ligne, installation
-css/app.css                               styles, thèmes clair et sombre
-js/
-  app.js            interface : vues, éditeur, palette, raccourcis (point d'entrée)
-  boot.js           thème appliqué avant le premier affichage
+index.html, manifest.webmanifest   page et installation (copiés dans dist/ au build)
+css/app.css                        styles, thèmes clair et sombre
+src/                               TypeScript strict
+  app.ts            interface : vues, éditeur, palette, raccourcis (point d'entrée)
+  boot.ts           thème appliqué avant le premier affichage
+  types.ts          types du domaine : Note, Version, vues, API de l'application
+  env.d.ts          pont vers l'app native (Touch ID, notes vocales, notifications)
   core/             données et sécurité — aucun code d'interface
-    store.js          notes, index des liens et tags, versions, import/export
-    db.js             IndexedDB, chiffrement transparent des enregistrements
-    crypto.js         AES-GCM, PBKDF2, HKDF
-    vault.js          coffre : clé maîtresse, mot de passe, passkey, biométrie, secrets
-    biometric.js      pont vers Touch ID / Face ID de l'app native
+    store.ts          notes, index des liens et tags, versions, import/export, fusion entre appareils
+    db.ts             IndexedDB, chiffrement transparent des enregistrements
+    crypto.ts         AES-GCM, PBKDF2, HKDF
+    vault.ts          coffre : clé maîtresse, mot de passe, passkey, biométrie, secrets
+    biometric.ts      pont vers Touch ID / Face ID de l'app native
   features/         pages et fonctions de l'app
-    home.js           accueil
-    tasks.js          tâches, sous-tâches, échéances, tickets Linear
-    voice.js          notes vocales (transcription sur l'appareil)
-    hub.js            réglages, coffre, agents, blocs spéciaux, liaison d'appareils
+    home.ts           accueil
+    tasks.ts          tâches, sous-tâches, échéances, tickets Linear
+    voice.ts          notes vocales (transcription sur l'appareil)
+    hub.ts            réglages, coffre, agents, blocs spéciaux, liaison d'appareils
   integrations/     services extérieurs, appelés directement depuis l'app
-    ai.js             Claude, OpenAI, modèle local : boucle d'agent et outils
-    link.js           liaison et synchronisation entre appareils (WebRTC)
-    linear/           api.js (GraphQL), page.js (tickets, projets, fiche), notifications.js
-    github/           api.js (actualité des dépôts), page.js
+    ai.ts             Claude, OpenAI, modèle local : boucle d'agent et outils
+    link.ts           liaison et synchronisation entre appareils (WebRTC)
+    linear/           api.ts (GraphQL typé), page.ts (tickets, projets, fiche), notifications.ts
+    github/           api.ts (actualité des dépôts), page.ts
   lib/              outils sans état : markdown, calc, schema, graph, qr, fuzzy, diff, zip
-  ui/               kit.js (icônes, menus, fenêtres), caret.js (curseur d'écriture)
+  ui/               kit.ts (icônes, menus, fenêtres), caret.ts (curseur d'écriture)
+  sw/sw.ts          service worker (compilé avec les types « worker »)
 native/             apps Mac et iPhone (Swift) et leurs scripts de build
-scripts/check.mjs   vérifications lancées par la CI
+scripts/            build.ts (esbuild) et check.ts, exécutés directement par Node
 ```
 
-Règle de dépendance : `lib/` et `core/` n'importent jamais `features/` ni `integrations/` ; seules les pages (`features/`, `integrations/*/page.js`) touchent à l'interface.
+Règles : `lib/` et `core/` n'importent jamais `features/` ni `integrations/` ; seules les pages touchent à l'interface. Toute donnée venue de l'extérieur (sauvegarde, autre appareil, API) est validée avant usage ; un élément d'interface manquant lève une erreur explicite (`need()`) plutôt qu'un plantage obscur.
 
 ## Builds, licence et contributions
 
-- **CI** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) à chaque push et pull request : `node scripts/check.mjs` (syntaxe, imports, cache hors ligne complet, aucune clé d'API dans le code), build de l'app Mac, compilation de l'app iPhone. Les mêmes vérifications se lancent en local avec `node scripts/check.mjs`.
-- **Publication** : `git tag v1.0.0 && git push --tags` publie `Studio-macOS.zip` dans les Releases.
+- **CI** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) à chaque push et pull request : types TypeScript stricts, build, vérifications (cache hors ligne complet, aucune clé d'API dans le code), build de l'app Mac, compilation de l'app iPhone. En local : `npm run verify`.
+- **Publication** : chaque push sur `main` publie une Release (`v1.0.<n>`) avec `Studio-macOS.zip` et `Studio-web.zip`. Un tag `v…` fait de même avec son propre nom.
 - **Licence** : [MIT](LICENSE). Chacun peut lire, réutiliser et modifier le code.
 - **Contributions** : les pull requests sont bienvenues ; seul le mainteneur peut les accepter ([`CODEOWNERS`](.github/CODEOWNERS)).
 
