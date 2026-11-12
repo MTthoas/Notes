@@ -1,8 +1,9 @@
-# Studio : vérifications et builds à chaque push et chaque pull request.
-#   check  → syntaxe, imports, cache hors ligne, absence de secrets (scripts/check.mjs)
-#   macos  → construit Studio.app (Apple Silicon + Intel), téléchargeable dans l'onglet Actions
-#   ios    → vérifie que l'app iPhone compile (sans signature : non installable, voir README)
-#   release → sur un tag « v1.2.3 », publie Studio.app dans les Releases
+# Studio : vérifications, builds et publication.
+#   check   → types TypeScript stricts, build, cache hors ligne complet, aucun secret dans le code
+#   macos   → construit Studio.app (Apple Silicon + Intel)
+#   ios     → vérifie que l'app iPhone compile (sans signature : non installable, voir README)
+#   release → à chaque push sur main (et sur un tag v…), publie une Release avec l'app Mac et l'app web,
+#             et le paquet @mtthoas/studio (app web compilée) dans les Packages du dépôt
 name: Build
 
 on:
@@ -24,15 +25,29 @@ jobs:
   check:
     name: Vérifications
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-      - run: node scripts/check.mjs
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Types (TypeScript strict)
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Vérifications du build
+        run: npm run check
+      - name: Archiver l'app web
+        run: cd dist && zip -qr ../Studio-web.zip . -x '*.map'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Studio-web
+          path: Studio-web.zip
+          retention-days: 30
 
   macos:
     name: App Mac
@@ -43,6 +58,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
       - name: Construire Studio.app
         run: ./native/build-mac.sh
       - name: Vérifier le binaire
@@ -66,6 +86,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
       - name: Outils
         run: brew install xcodegen
       - name: Compiler pour le simulateur
@@ -79,19 +104,62 @@ jobs:
 
   release:
     name: Publication
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [macos, ios]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write   # seule étape autorisée à écrire : créer la Release
+      contents: write   # créer la Release
+      packages: write   # publier le paquet dans GitHub Packages
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://npm.pkg.github.com
+          scope: '@mtthoas'
+      - name: Version
+        id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            # Push sur main : version de package.json + numéro de build (ex. 1.0.42)
+            VERSION="$(node -p "require('./package.json').version.split('.').slice(0, 2).join('.')").${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           name: Studio-macOS
+      - uses: actions/download-artifact@v4
+        with:
+          name: Studio-web
       - name: Créer la Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" Studio-macOS.zip \
-            --repo "$GITHUB_REPOSITORY" --title "Studio $GITHUB_REF_NAME" --generate-notes
+          TAG="v${{ steps.v.outputs.version }}"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" Studio-macOS.zip Studio-web.zip \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Studio $TAG" --generate-notes
+      - name: Publier le paquet @mtthoas/studio
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          mkdir -p pkg/dist && unzip -q Studio-web.zip -d pkg/dist
+          cp README.md LICENSE pkg/
+          node -e '
+            const fs = require("fs");
+            fs.writeFileSync("pkg/package.json", JSON.stringify({
+              name: "@mtthoas/studio",
+              version: process.env.VERSION,
+              description: "Studio : notes, tâches, Linear et GitHub au même endroit, chiffrés, sans serveur. Application web compilée (dist/).",
+              license: "MIT",
+              repository: { type: "git", url: "https://github.com/MTthoas/Notes.git" },
+              files: ["dist", "README.md", "LICENSE"],
+              publishConfig: { registry: "https://npm.pkg.github.com" }
+            }, null, 2));'
+          cd pkg && npm publish

@@ -3,3 +3,8 @@ native/build/
 native/*.xcodeproj/
 xcuserdata/
 .DS_Store
+
+# Dépendances et fichiers compilés : jamais dans le dépôt
+node_modules/
+dist/
+dist-test/

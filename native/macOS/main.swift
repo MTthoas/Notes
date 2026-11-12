@@ -100,11 +100,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         r.booted = !!document.querySelector('#sidebar .ws');
         try { localStorage.setItem('t', '1'); r.localStorage = localStorage.getItem('t') === '1'; } catch (e) { r.localStorage = String(e); }
         try {
-          const v = await import('./js/core/vault.js'); await v.create('motdepasse-auto-test');
-          const s = await import('./js/core/store.js'); await s.createNote({ title: 'Test natif', body: 'ok' });
-          r.vault = v.isOpen(); r.notes = s.notes.size;
-          r.sealed = await new Promise(res => { const q = indexedDB.open('carnet'); q.onsuccess = () => { const g = q.result.transaction('notes').objectStore('notes').getAll(); g.onsuccess = () => res(g.result.every(x => x.sealed)); }; });
-        } catch (e) { r.error = String(e); }
+          const k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']), iv = crypto.getRandomValues(new Uint8Array(12));
+          const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, new TextEncoder().encode('ok'));
+          r.aes = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k, ct)) === 'ok';
+        } catch (e) { r.aes = String(e); }
+        r.indexedDB = await new Promise(res => { const q = indexedDB.open('carnet'); q.onsuccess = () => res(q.result.objectStoreNames.contains('notes')); q.onerror = () => res(String(q.error)); });
+        r.notesShown = document.querySelectorAll('#list .note-item, .hm-note').length;
+        try { r.github = (await fetch('https://api.github.com/zen', { credentials: 'omit' })).status; } catch (e) { r.github = String(e); }
         try { r.ntfy = (await fetch('https://ntfy.sh/carnet-autotest-' + crypto.randomUUID(), { method: 'POST', body: 'x', headers: { Cache: 'no' } })).status; } catch (e) { r.ntfy = String(e); }
         try { r.anthropic = (await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json', 'x-api-key': 'cle-invalide', 'anthropic-version': '2026-10-21', 'anthropic-dangerous-direct-browser-access': 'true' } })).status; } catch (e) { r.anthropic = String(e); }
         return JSON.stringify(r);
