@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Carnet</title>
+<meta name="description" content="Des notes Markdown reliées entre elles, stockées uniquement dans ton navigateur. Sans compte, hors ligne.">
+<meta name="theme-color" content="#f4f4f6">
+<meta name="color-scheme" content="light dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Carnet">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<script>
+  // Applique le thème avant le premier rendu pour éviter tout flash.
+  try { var t = (JSON.parse(localStorage.getItem('carnet.ui')) || {}).theme || 'auto';
+    document.documentElement.dataset.theme = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'; } catch (e) {}
+</script>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+  <nav id="sidebar" aria-label="Navigation"></nav>
+  <section id="list" aria-label="Liste des notes"></section>
+  <main id="main"></main>
+</div>
+<div id="scrim"></div>
+<div id="layer"></div>
+<div id="toasts" aria-live="polite"></div>
+<input type="file" id="file" hidden multiple accept=".md,.markdown,.txt,.json">
+<noscript><p style="padding:2rem;font-family:system-ui">Carnet a besoin de JavaScript pour fonctionner.</p></noscript>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
