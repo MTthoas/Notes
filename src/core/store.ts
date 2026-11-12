@@ -2,6 +2,7 @@
 // chiffrement, notes éphémères, import/export. Aucune dépendance au DOM.
 import * as db from './db.ts';
 import * as cr from './crypto.ts';
+import * as events from './events.ts';
 import { fold } from '../lib/fuzzy.ts';
 import { analyze, LINK_RE } from '../lib/markdown.ts';
 import type { Note, NoteMeta, TaskStatus, Version } from '../types.ts';
@@ -176,6 +177,13 @@ export function openTasks(exceptId?: string): TaskGroup[] {
     .sort((a, b) => b.note.updated - a.note.updated);
 }
 
+/** Une tâche terminée déclenche les automatisations « déclencheur: tâche » (sauf note chiffrée ou privée). */
+function announceDone(n: Note, raw: string): void {
+  if (n.enc || meta(n).tags.some(t => /^priv[ée]/.test(t))) return;
+  const text = raw.replace(/^\s*(?:[-*+]|\d+[.)])\s+\[[ xX/]\]\s+/, '').trim();
+  events.emit('tache', `« ${text} » (note « ${n.title.trim() || 'Sans titre'} »)`);
+}
+
 /** Change l'état d'une tâche (Kanban) : à faire, en cours ou terminée. */
 export async function setTaskStatus(n: Note, line: number, status: TaskStatus): Promise<void> {
   const body = getBody(n); if (body == null) return;
@@ -183,6 +191,7 @@ export async function setTaskStatus(n: Note, line: number, status: TaskStatus): 
   if (!/^\s*(?:[-*+]|\d+[.)])\s+\[[ xX/]\]/.test(cur)) return;
   const next = cur.replace(/\[([ xX/])\]/, status === 'done' ? '[x]' : status === 'doing' ? '[/]' : '[ ]');
   if (next === cur) return;
+  if (status === 'done') announceDone(n, cur);
   touch(n);
   lines[line] = next;
   setBody(n, lines.join('\n'));
@@ -196,7 +205,9 @@ export async function toggleTask(n: Note, line: number): Promise<void> {
   if (!/\[[ xX/]\]/.test(lines[line] || '')) return;
   touch(n);
   // Cocher termine la tâche (même « en cours ») ; décocher la rouvre.
-  lines[line] = (lines[line] ?? '').replace(/\[([ xX/])\]/, (_: string, c: string) => c === 'x' || c === 'X' ? '[ ]' : '[x]');
+  const before = lines[line] ?? '';
+  lines[line] = before.replace(/\[([ xX/])\]/, (_: string, c: string) => c === 'x' || c === 'X' ? '[ ]' : '[x]');
+  if (/\[[xX]\]/.test(lines[line] ?? '') && !/\[[xX]\]/.test(before)) announceDone(n, before);
   setBody(n, lines.join('\n'));
   n.updated = Date.now();
   await saveNote(n);
