@@ -42,7 +42,7 @@ function startVaultServices() { if (services) return; services = true; vault.sta
 export function gate() {
   if (!vault.enabled()) return Promise.resolve();
   return new Promise(res => {
-    const node = el(`<div class="vault-lock"><form class="lock-card">${icon('shield')}<h3>Studio est verrouillé</h3><p>Tes notes sont chiffrées sur cet appareil.</p><input type="password" placeholder="Mot de passe du coffre" autocomplete="current-password" aria-label="Mot de passe du coffre"><button class="btn btn-primary">Déverrouiller</button>${vault.hasPasskey() ? `<button type="button" class="btn" data-pk>${icon('key')}Face ID / Touch ID</button>` : ''}<p class="lock-err" role="alert"></p></form></div>`);
+    const node = el(`<div class="vault-lock"><form class="lock-card">${icon('shield')}<h3>Studio est verrouillé</h3><p>Tes notes sont chiffrées sur cet appareil.</p><input type="password" placeholder="Mot de passe du coffre" autocomplete="current-password" aria-label="Mot de passe du coffre"><button class="btn btn-primary">Déverrouiller</button>${vault.hasPasskey() ? `<button type="button" class="btn" data-pk>${icon('key')}Face ID / Touch ID</button>` : ''}${vault.hasBiometric() ? `<button type="button" class="btn" data-bio>${icon('key')}Ouvrir avec ${esc(vault.biometricKind())}</button>` : ''}<p class="lock-err" role="alert"></p></form></div>`);
     document.body.append(node);
     const form = $('form', node), input = $('input', form), err = $('.lock-err', form);
     const done = () => { node.remove(); res(); };
@@ -52,6 +52,15 @@ export function gate() {
       form.classList.add('busy');
       try { await vault.unlockPassword(input.value); done(); } catch { fail('Mot de passe incorrect.'); }
     });
+    // Biométrie de l'app native : proposée d'office à l'ouverture, sauf juste après un verrouillage volontaire.
+    const unlockBio = async () => {
+      form.classList.add('busy');
+      try { await vault.unlockBiometric(); done(); }
+      catch (e) { form.classList.remove('busy'); err.textContent = e.code === 'cancel' ? '' : e.message; input.focus(); }
+    };
+    $('[data-bio]', form)?.addEventListener('click', unlockBio);
+    let manual = false; try { manual = sessionStorage.getItem('studio.manualLock') === '1'; sessionStorage.removeItem('studio.manualLock'); } catch { /* ignoré */ }
+    if (vault.hasBiometric() && !manual) setTimeout(unlockBio, 250);
     $('[data-pk]', form)?.addEventListener('click', async () => {
       try { await vault.unlockPasskey(); done(); } catch (e) { fail(e.name === 'NotAllowedError' ? 'Authentification annulée.' : e.message); }
     });
@@ -410,8 +419,9 @@ function tabVault() {
   const s = vault.settings();
   return `<section class="cx-sec"><h4>${icon('shield')}Coffre actif</h4><p>Base de notes, historique, clés et appareils : chiffrés sur le disque. Restent lisibles : les identifiants techniques des notes et tes préférences d’affichage.</p>
     <div class="cx-grid"><button class="btn" data-v="lock">${icon('lock')}Verrouiller maintenant</button><button class="btn" data-v="pw">Changer le mot de passe…</button></div></section>
-    <section class="cx-sec"><h4>${icon('key')}Face ID / Touch ID</h4>${vault.hasPasskey() ? `<p>Une passkey de cet appareil peut ouvrir le coffre.</p><button class="btn" data-v="pk-del">Retirer la passkey</button>`
-      : vault.passkeyPossible() ? `<p>Ouvre le coffre avec ta biométrie : une passkey dérive une clé (extension PRF) qui emballe la clé maîtresse. Safari 18+, Chrome récents.</p><button class="btn btn-primary" data-v="pk-add">Ajouter Face ID / Touch ID</button>` : '<p>Ce navigateur ne gère pas les passkeys.</p>'}</section>
+    ${biometricSection()}
+    ${vault.biometricPossibleSync() ? '' : `<section class="cx-sec"><h4>${icon('key')}Face ID / Touch ID</h4>${vault.hasPasskey() ? `<p>Une passkey de cet appareil peut ouvrir le coffre.</p><button class="btn" data-v="pk-del">Retirer la passkey</button>`
+      : vault.passkeyPossible() ? `<p>Ouvre le coffre avec ta biométrie : une passkey dérive une clé (extension PRF) qui emballe la clé maîtresse. Safari 18+, Chrome récents.</p><button class="btn btn-primary" data-v="pk-add">Ajouter Face ID / Touch ID</button>` : '<p>Ce navigateur ne gère pas les passkeys.</p>'}</section>`}
     <section class="cx-sec"><h4>${icon('history')}Verrouillage automatique</h4><select class="field" data-autolock>${[[5, '5 minutes'], [15, '15 minutes'], [30, '30 minutes'], [60, '1 heure'], [0, 'Jamais']].map(([v, l]) => `<option value="${v}"${s.autolock === v ? ' selected' : ''}>Après ${l} d’inactivité</option>`).join('').replace('Après Jamais d’inactivité', 'Jamais')}</select></section>
     <section class="cx-sec"><button class="btn btn-danger" data-v="off">Désactiver le coffre…</button></section>`;
 }
@@ -426,6 +436,18 @@ function tabAI() {
     <section class="cx-sec"><h4>OpenAI (ChatGPT)</h4>${keyField('openai', 'Clé OpenAI', 'sk-…')}<input class="field" data-cfg="openaiModel" value="${esc(c.openaiModel)}" placeholder="Modèle, ex. gpt-5" aria-label="Modèle OpenAI"></section>
     <section class="cx-sec"><h4>Modèle local — rien ne quitte ta machine</h4><p class="modal-hint">Ollama ou LM Studio (API compatible OpenAI). Pour Ollama, autorise l’origine de Studio : <code>OLLAMA_ORIGINS=${esc(location.origin)}</code></p><div class="cx-grid"><input class="field" data-cfg="localUrl" value="${esc(c.localUrl)}" placeholder="http://localhost:11434/v1" aria-label="Adresse du serveur local"><input class="field" data-cfg="localModel" value="${esc(c.localModel)}" placeholder="Modèle" aria-label="Modèle local"></div></section>
     <section class="cx-sec"><button class="btn" data-v="test">${icon('play')}Tester le fournisseur par défaut</button><span class="cx-test"></span></section>`;
+}
+
+// Réglages → Sécurité : Touch ID / Face ID de l'app native (le navigateur utilise la section passkey juste dessous).
+let bioInfo = null;
+function biometricSection() {
+  if (!vault.biometricPossibleSync()) return '';
+  const kind = vault.hasBiometric() ? vault.biometricKind() : (bioInfo?.kind || 'Touch ID / Face ID');
+  bioInfo || vault.biometricPossible().then(i => { bioInfo = i; refreshConnections(); });
+  return `<section class="cx-sec"><h4>${icon('key')}${esc(kind)}</h4>${vault.hasBiometric()
+    ? `<p>${esc(kind)} ouvre le coffre à l’ouverture de l’app. Le mot de passe reste valable à tout moment.</p><button class="btn" data-v="bio-del">Retirer ${esc(kind)}</button>`
+    : bioInfo?.available === false ? `<p>${esc(bioInfo.reason || 'La biométrie n’est pas disponible sur cet appareil.')}</p>`
+    : `<p>Ouvre le coffre avec ton empreinte ou ton visage. Un secret aléatoire est gardé dans le trousseau du système et n’en sort qu’après la vérification ; ton mot de passe n’est jamais enregistré.</p><button class="btn btn-primary" data-v="bio-add"${bioInfo ? '' : ' disabled'}>Activer ${esc(kind)}</button>`}</section>`;
 }
 
 function tabGithub() {
@@ -464,12 +486,14 @@ async function onConnClick(e) {
   const fg = t.closest('[data-dev-forget]'); if (fg) { if (await confirmBox({ title: 'Oublier cet appareil ?', text: 'La liaison sera supprimée ici. Fais de même sur l’autre appareil.', ok: 'Oublier', danger: true })) await link.forget(fg.dataset.devForget); return; }
   const pk = t.closest('[data-dev-packet]'); if (pk) return sendPacket(link.devices().find(d => d.secret === pk.dataset.devPacket));
   const v = t.closest('[data-v]')?.dataset.v; if (!v) return;
-  if (v === 'lock') { await app.flushAll(); vault.lock(); }
+  if (v === 'lock') { await app.flushAll(); try { sessionStorage.setItem('studio.manualLock', '1'); } catch { /* ignoré */ } vault.lock(); }
   if (v === 'pw') {
     const old = await askPassword({ title: 'Mot de passe actuel', text: 'Saisis le mot de passe actuel du coffre.' }); if (!old) return;
     const nw = await askPassword({ title: 'Nouveau mot de passe', text: 'Choisis le nouveau mot de passe.', confirm: true }); if (!nw) return;
     try { await vault.changePassword(old, nw); toast('Mot de passe changé'); } catch { toast('Mot de passe actuel incorrect'); }
   }
+  if (v === 'bio-add') { try { await vault.addBiometric(); toast(`${vault.biometricKind()} activé`); } catch (err) { toast(err.message); } }
+  if (v === 'bio-del') { await vault.removeBiometric(); toast('Déverrouillage biométrique retiré'); }
   if (v === 'pk-add') { try { await vault.addPasskey(); toast('Face ID / Touch ID activé'); } catch (err) { toast(err.name === 'NotAllowedError' ? 'Opération annulée' : err.message); } }
   if (v === 'pk-del') vault.removePasskey();
   if (v === 'off') {

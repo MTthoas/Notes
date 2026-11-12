@@ -85,12 +85,43 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
             Notifier.shared.post(title: String(title.prefix(200)), body: String((body["body"] as? String ?? "").prefix(500)), url: body["url"] as? String)
         }
         if type == "badge", let n = body["count"] as? Int { Notifier.shared.badge(max(0, n)) }
+        if type == "bio", let action = body["action"] as? String, let id = body["id"] as? Int { biometric(action, id: id, body: body) }
         if type == "voice", let action = body["action"] as? String {
             Dictation.shared.send = { [weak self] payload in
                 guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
                 DispatchQueue.main.async { self?.web?.evaluateJavaScript("window.carnet && window.carnet.voice && window.carnet.voice(\(json))", completionHandler: nil) }
             }
             if action == "start" { Dictation.shared.start(locale: "fr-FR") } else { Dictation.shared.stop(cancel: action == "cancel") }
+        }
+    }
+
+    // Réponse à la page : window.carnet.bio({ id, ok, ... })
+    private func reply(_ payload: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
+        DispatchQueue.main.async { self.web?.evaluateJavaScript("window.carnet && window.carnet.bio && window.carnet.bio(\(json))", completionHandler: nil) }
+    }
+
+    private func biometric(_ action: String, id: Int, body: [String: Any]) {
+        let bio = Biometrics.shared
+        let fail: (Biometrics.Failure) -> Void = { self.reply(["id": id, "ok": false, "error": $0.code, "message": $0.message]) }
+        switch action {
+        case "status":
+            var r = bio.status(); r["id"] = id; reply(r)
+        case "enable":
+            guard let b64 = body["secret"] as? String, let secret = Data(base64Encoded: b64), secret.count == 32 else { return fail(.init(code: "invalid", message: "Secret invalide.")) }
+            do { try bio.store(secret); reply(["id": id, "ok": true]) } catch let e as Biometrics.Failure { fail(e) } catch { fail(.init(code: "keychain", message: error.localizedDescription)) }
+        case "unlock":
+            let why = String((body["reason"] as? String ?? "Ouvrir Studio").prefix(120))
+            bio.unlock(reason: why) { result in
+                switch result {
+                case .success(let data): self.reply(["id": id, "ok": true, "secret": data.base64EncodedString()])
+                case .failure(let e): fail(e)
+                }
+            }
+        case "remove":
+            bio.remove(); reply(["id": id, "ok": true])
+        default:
+            fail(.init(code: "invalid", message: "Action inconnue."))
         }
     }
 

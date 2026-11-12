@@ -1,8 +1,10 @@
 // Coffre : une clé maîtresse aléatoire (256 bits) chiffre toute la base et les secrets
 // (clés API, appareils liés). Elle n'est jamais écrite en clair : seulement « emballée »
-// par une clé dérivée du mot de passe et, en option, par une passkey (Face ID / Touch ID, extension PRF).
+// par une clé dérivée du mot de passe et, en option, par une passkey du navigateur (extension PRF)
+// ou, dans l'app native, par un secret du trousseau libéré par Touch ID / Face ID.
 import * as cr from './crypto.js';
 import * as db from './db.js';
+import * as bio from './biometric.js';
 
 const META = 'carnet.vault', SECRETS = 'carnet.secrets';
 let master = null, dbKey = null, secKey = null, secrets = null;
@@ -14,6 +16,8 @@ const writeMeta = m => localStorage.setItem(META, JSON.stringify(m));
 export const enabled = () => !!readMeta();
 export const isOpen = () => !!master;
 export const hasPasskey = () => !!readMeta()?.pk;
+export const hasBiometric = () => !!readMeta()?.bio && bio.supported();
+export const biometricKind = () => readMeta()?.bio?.kind || 'biométrie';
 export const settings = () => ({ autolock: 15, ...(readMeta()?.settings || {}) });
 export const onChange = f => listeners.add(f);
 const emit = () => listeners.forEach(f => f());
@@ -112,6 +116,39 @@ export async function unlockPasskey() {
   const out = await prf([cr.unb64(m.pk.id)], cr.unb64(m.pk.salt));
   const raw = await cr.decryptBytes(await cr.hkdfKey(out, 'carnet/passkey'), m.pk);
   await openWith(raw);
+}
+
+// ---------- Biométrie de l'app native (Touch ID / Face ID) ----------
+// Un secret aléatoire vit dans le trousseau du système ; il n'en sort qu'après une vérification biométrique
+// et emballe la clé maîtresse, exactement comme la passkey. Le mot de passe reste toujours valable.
+export const biometricPossibleSync = () => bio.supported();
+export const biometricPossible = async () => bio.supported() ? await bio.status() : { available: false, kind: '' };
+
+export async function addBiometric() {
+  if (!master) throw new Error('Ouvre d’abord le coffre.');
+  const st = await bio.status();
+  if (!st.available) throw new Error(st.reason || 'La biométrie n’est pas disponible sur cet appareil.');
+  const secret = cr.random(32);
+  const r = await bio.store(secret);
+  if (!r.ok) throw new Error(r.message || 'Impossible d’enregistrer le secret.');
+  const m = readMeta();
+  m.bio = { kind: st.kind, ...(await cr.encrypt(await cr.hkdfKey(secret, 'carnet/biometric'), master)) };
+  writeMeta(m); emit();
+}
+
+export async function unlockBiometric() {
+  const m = readMeta();
+  const r = await bio.unlock('Ouvrir Studio');
+  if (!r.ok) { const e = new Error(r.message || 'Déverrouillage biométrique impossible.'); e.code = r.error; throw e; }
+  let raw;
+  try { raw = await cr.decryptBytes(await cr.hkdfKey(r.secret, 'carnet/biometric'), m.bio); }
+  catch { const e = new Error('Le déverrouillage biométrique ne correspond plus. Utilise le mot de passe, puis réactive-le dans Réglages → Sécurité.'); e.code = 'stale'; throw e; }
+  await openWith(raw);
+}
+
+export async function removeBiometric() {
+  await bio.remove();
+  const m = readMeta(); delete m.bio; writeMeta(m); emit();
 }
 
 export function removePasskey() { const m = readMeta(); delete m.pk; writeMeta(m); emit(); }

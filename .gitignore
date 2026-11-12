@@ -1,3 +1,5 @@
+# Fichiers générés : builds et projets Xcode (recréés par XcodeGen depuis native/project.yml)
 native/build/
-native/Studio.xcodeproj/
+native/*.xcodeproj/
+xcuserdata/
 .DS_Store

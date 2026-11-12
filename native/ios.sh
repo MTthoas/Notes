@@ -12,6 +12,10 @@ if ! xcodebuild -version >/dev/null 2>&1; then
   echo "  2. Puis : sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
   exit 1
 fi
+if ! xcrun simctl list runtimes >/dev/null 2>&1 || ! xcodebuild -showsdks 2>/dev/null | grep -q "iphoneos"; then
+  echo "✗ Le SDK iOS manque : Xcode → Settings → Components → iOS → Get."
+  exit 1
+fi
 if ! command -v xcodegen >/dev/null 2>&1; then
   echo "→ Installation de XcodeGen (génère le projet Xcode)"
   # Un terminal lancé sous Rosetta (x86_64) sur un Mac Apple Silicon : Homebrew doit tourner en ARM.
@@ -24,9 +28,7 @@ if ! command -v xcodegen >/dev/null 2>&1; then
 fi
 
 echo "→ Fichiers de l'application"
-[ -d "$NATIVE/build/web" ] && rm -r "$NATIVE/build/web"
-mkdir -p "$NATIVE/build/web"
-cp -R "$ROOT/index.html" "$ROOT/manifest.webmanifest" "$ROOT/css" "$ROOT/js" "$ROOT/fonts" "$ROOT/icons" "$NATIVE/build/web/"
+"$NATIVE/copy-web.sh" "$NATIVE/build/web"
 
 echo "→ Projet Xcode"
 cd "$NATIVE"

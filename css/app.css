@@ -875,3 +875,11 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
   .lv-row em { display: none; }
   .modal.ticket { padding: 18px; }
 }
+
+/* ---------- Curseur d'écriture ---------- */
+.pane-edit { position: relative; }
+.body.own-caret { caret-color: transparent; }
+.caret { position: absolute; left: 0; top: 0; width: 2px; border-radius: 1px; background: var(--text); pointer-events: none; will-change: transform; }
+.caret.blink { animation: caret-blink 1.1s steps(1) .5s infinite; }
+@keyframes caret-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .caret.blink { animation: none; } }

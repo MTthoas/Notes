@@ -14,6 +14,8 @@ import * as github from './integrations/github/api.js';
 import * as githubPage from './integrations/github/page.js';
 import * as voice from './features/voice.js';
 import * as home from './features/home.js';
+import * as caret from './ui/caret.js';
+import * as biometric from './core/biometric.js';
 import * as linear from './integrations/linear/api.js';
 import * as vault from './core/vault.js';
 import * as link from './integrations/link.js';
@@ -168,7 +170,7 @@ function workspaceMenu(anchor) {
     '-',
     { label: 'Importer des fichiers…', icon: 'upload', run: () => $('#file').click() },
     { label: 'Exporter une sauvegarde', icon: 'download', run: exportJSON },
-    ...(vault.isOpen() ? ['-', { label: 'Verrouiller Studio', icon: 'lock', run: async () => { await flushAll(); vault.lock(); } }] : []),
+    ...(vault.isOpen() ? ['-', { label: 'Verrouiller Studio', icon: 'lock', run: async () => { await flushAll(); try { sessionStorage.setItem('studio.manualLock', '1'); } catch { /* ignoré */ } vault.lock(); } }] : []),
   ]);
 }
 
@@ -259,6 +261,7 @@ function mountNote(main, n, keep) {
     <footer class="status"><span class="save-state"><i></i><span>Enregistré sur cet appareil</span></span><span class="status-right"></span></footer>`;
 
   ed = { note: n, title: $('.title', main), ta: $('.body', main), preview: $('.md', main), read: $('.pane-read', main), sorts: new Map(), titleAtFocus: n.title };
+  caret.attach(ed.ta);
   ed.title.addEventListener('focus', () => { ed.titleAtFocus = n.title; });
   ed.title.addEventListener('input', () => { store.touch(n); n.title = ed.title.value; n.updated = Date.now(); scheduleSave(n); const c = $('.crumb-cur', main); if (c) c.textContent = titleOf(n); });
   ed.title.addEventListener('blur', async () => {
@@ -701,7 +704,7 @@ function commands() {
     c('Réglages : Linear', 'linear', () => hub.openConnections('linear'), '', 'issues tickets'),
     c('Lier un téléphone ou un ordinateur', 'phone', () => hub.openConnections('appareils'), '', 'appareils synchronisation iphone mac qr'),
     c('Synchroniser maintenant', 'refresh', () => { link.syncNow(); toast('Recherche des appareils…'); }, '', 'appareils sync'),
-    ...(vault.isOpen() ? [c('Verrouiller le coffre', 'lock', async () => { await flushAll(); vault.lock(); }, '', 'sécurité fermer')] : []),
+    ...(vault.isOpen() ? [c('Verrouiller le coffre', 'lock', async () => { await flushAll(); try { sessionStorage.setItem('studio.manualLock', '1'); } catch { /* ignoré */ } vault.lock(); }, '', 'sécurité fermer')] : []),
     c('Graphe des notes', 'graph', () => setView({ type: 'graph' }), SC.graph, 'liens carte'),
     c('Corbeille', 'trash', () => setView({ type: 'trash' }), '', 'supprimées'),
     ...(open ? [
@@ -1065,7 +1068,7 @@ Les notes chiffrées et celles taguées \`#privé\` ne sont jamais envoyées à 
 ];
 
 // Points d'entrée pour l'app native (menu Réglages, enregistrement avant de quitter).
-window.carnet = { flush: () => flushAll(), settings: () => hub.openConnections('coffre'), voice: p => voice.onNative(p) };
+window.carnet = { flush: () => flushAll(), settings: () => hub.openConnections('coffre'), voice: p => voice.onNative(p), bio: p => biometric.onNative(p) };
 
 async function start() {
   applyTheme();

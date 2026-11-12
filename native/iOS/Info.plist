@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>fr</string>
 	<key>CFBundleDisplayName</key>
-	<string>Carnet</string>
+	<string>Studio</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,8 +25,14 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Studio utilise Face ID pour ouvrir ton coffre chiffré.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Carnet se connecte directement à vos autres appareils sur le même réseau pour synchroniser vos notes.</string>
+	<string>Studio se connecte directement à vos autres appareils sur le même réseau pour synchroniser vos notes.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Studio utilise le micro pour tes notes vocales. La transcription est faite sur cet appareil.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Studio transcrit tes notes vocales sur cet appareil, sans rien envoyer en ligne.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchScreen</key>
