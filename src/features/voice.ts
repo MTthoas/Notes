@@ -1,6 +1,7 @@
 // Notes vocales : l'app native transcrit la voix sur l'appareil (rien n'est envoyé en ligne),
 // et le texte devient une note, synchronisée ensuite comme les autres.
 import * as store from '../core/store.ts';
+import * as events from '../core/events.ts';
 import { $, icon, toast, modal, need } from '../ui/kit.ts';
 import type { AppShell } from '../types.ts';
 
@@ -32,6 +33,7 @@ async function save(text: string): Promise<void> {
   const d = new Date();
   const title = `Note vocale · ${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} ${d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
   const n = await store.createNote({ title, body: `${text}\n\n#vocal`, inbox: true });
+  events.emit('capture', `${title}\n\n${text}`);
   toast('Note vocale enregistrée', { label: 'Ouvrir', run: () => app.openNote(n.id) });
 }
 

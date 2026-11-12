@@ -1,5 +1,6 @@
 // Studio — interface. Tout est pilotable au clavier ; la palette (⌘K) donne accès à chaque action.
 import * as store from './core/store.ts';
+import * as events from './core/events.ts';
 import * as cr from './core/crypto.ts';
 import { renderMarkdown, esc, plain, LINK_RE } from './lib/markdown.ts';
 import { fuzzy, fold } from './lib/fuzzy.ts';
@@ -14,6 +15,9 @@ import * as github from './integrations/github/api.ts';
 import * as githubPage from './integrations/github/page.ts';
 import * as voice from './features/voice.ts';
 import * as home from './features/home.ts';
+import * as automations from './features/automations.ts';
+import * as help from './features/help.ts';
+import * as onboarding from './features/onboarding.ts';
 import * as caret from './ui/caret.ts';
 import * as biometric from './core/biometric.ts';
 import * as linear from './integrations/linear/api.ts';
@@ -61,15 +65,15 @@ const SC = {
   sidebar: isMac ? 'ctrl+mod+s' : 'mod+alt+s', task: 'mod+enter', bold: 'mod+b', italic: 'mod+i',
 };
 const VIEWS: Record<string, { label: string; icon: string }> = {
-  home: { label: 'Accueil', icon: 'home' }, agents: { label: 'Agents', icon: 'bot' }, settings: { label: 'Réglages', icon: 'gear' },
+  home: { label: 'Accueil', icon: 'home' }, agents: { label: 'Automatisations', icon: 'bot' }, help: { label: 'Aide', icon: 'help' }, settings: { label: 'Réglages', icon: 'gear' },
   today: { label: 'Aujourd’hui', icon: 'today' }, tasks: { label: 'Tâches', icon: 'check' }, linear: { label: 'Linear', icon: 'linear' }, github: { label: 'GitHub', icon: 'github' }, all: { label: 'Toutes les notes', icon: 'notes' },
   inbox: { label: 'Boîte de réception', icon: 'inbox' }, ephemeral: { label: 'Éphémères', icon: 'hourglass' },
   graph: { label: 'Graphe', icon: 'graph' }, trash: { label: 'Corbeille', icon: 'trash' },
 };
 /** Teinte de l'icône de chaque section dans la barre latérale. */
-const SIDE_HUE: Record<string, string> = { home: 'gray', inbox: 'blue', today: 'amber', all: 'gray', ephemeral: 'orange', tasks: 'green', agents: 'violet', linear: 'indigo', github: 'gray', graph: 'teal', trash: 'gray' };
+const SIDE_HUE: Record<string, string> = { home: 'gray', inbox: 'blue', today: 'amber', all: 'gray', ephemeral: 'orange', tasks: 'green', agents: 'violet', help: 'blue', linear: 'indigo', github: 'gray', graph: 'teal', trash: 'gray' };
 const titleOf = (n: Note) => n.title.trim() || 'Sans titre';
-const WIDE = new Set(['graph', 'home', 'settings', 'tasks', 'linear', 'github']); // vues sans colonne de liste
+const WIDE = new Set(['graph', 'home', 'settings', 'tasks', 'linear', 'github', 'agents', 'help']); // vues sans colonne de liste
 
 function applyTheme() {
   const dark = ui.theme === 'dark' || (ui.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
@@ -145,6 +149,7 @@ async function openNote(id: string, { edit = false } = {}) {
 }
 
 async function newNote(props: Partial<Note> = {}): Promise<Note> {
+  onboarding.mark('note');
   const v = ui.view;
   const body = v.type === 'tag' && !props.body ? `#${v.tag} ` : props.body || '';
   const n = await store.createNote({ ...props, body, inbox: v.type === 'inbox' });
@@ -182,7 +187,7 @@ function renderSidebar() {
       <div class="side-group">${item('linear')}${item('github')}</div>
       ${tags.length ? `<button class="side-label" data-act="tags" aria-expanded="${ui.tagsOpen}">${icon('chevron')}Tags</button>${ui.tagsOpen ? `<div class="side-group">${tags.map(([t, c]) => `<button class="side-item${v.type === 'tag' && v.tag === t ? ' sel' : ''}" data-tag="${esc(t)}"><i class="tag-dot" style="--c:var(--c-${hue(t)})"></i><span>${esc(t)}</span><span class="side-count">${c}</span></button>`).join('')}</div>` : ''}` : ''}
       <div class="side-label">Explorer</div>
-      <div class="side-group">${item('graph')}${item('trash')}</div>
+      <div class="side-group">${item('graph')}${item('trash')}${item('help')}</div>
     </div>
     <button class="side-foot" data-open-conn="${vault.enabled() ? 'appareils' : 'coffre'}" title="Réglages (${keys(SC.settings)})">${icon(vault.isOpen() ? 'shield' : 'unlock')}<span>${vault.isOpen() ? 'Chiffré de bout en bout' : 'Non chiffré'}</span>${devs ? `<span class="side-count">${icon('devices')}${devs}</span>` : ''}</button>`;
 }
@@ -190,7 +195,7 @@ function renderSidebar() {
 function workspaceMenu(anchor: HTMLElement) {
   menu(anchor, [
     { label: 'Réglages', icon: 'gear', keys: SC.settings, run: () => hub.openConnections('coffre') },
-    { label: 'Raccourcis clavier', icon: 'keyboard', run: openHelp },
+    { label: 'Aide et raccourcis', icon: 'help', run: openHelp },
     '-',
     { label: 'Thème' },
     { label: 'Automatique', checked: ui.theme === 'auto', run: () => setTheme('auto') },
@@ -231,7 +236,7 @@ function renderList() {
   } else {
     const list = viewNotes();
     sub = `${list.length} note${list.length > 1 ? 's' : ''}`;
-    const empty = { agents: 'Aucun agent. Palette → « Nouvel agent ».', inbox: 'Les captures rapides sans tag arrivent ici.', ephemeral: 'Aucune note éphémère.', trash: 'La corbeille est vide.', tag: 'Aucune note avec ce tag.', all: 'Aucune note pour l’instant.' }[v.type];
+    const empty = ({ inbox: `Rien à ranger.<br>Note une idée avec ${kbd(SC.capture)} : sans tag, elle arrive ici en attendant d’être rangée.`, ephemeral: 'Aucune note éphémère.<br>Menu ⋯ d’une note → « Rendre éphémère » : elle s’effacera seule à la date choisie.', trash: 'La corbeille est vide.<br>Les notes supprimées y restent 30 jours.', tag: 'Aucune note avec ce tag.<br>Écris #' + esc(v.tag ?? '') + ' dans une note pour l’y ranger.', all: `Aucune note pour l’instant.<br>${kbd(SC.newNote)} pour en écrire une, ou <button class="link-btn" data-view="help">découvre comment faire</button>.` } as Record<string, string>)[v.type];
     body = list.length ? list.map(noteItem).join('') : `<div class="list-empty">${empty}</div>`;
     if (v.type === 'trash' && list.length) body = `<div class="list-note">Suppression définitive après 30 jours.</div>` + body;
   }
@@ -253,6 +258,8 @@ function renderMain() {
   if (ui.view.type === 'home') return home.mount(main);
   if (ui.view.type === 'settings') return hub.mountSettings(main, ui.view.tab || 'coffre');
   if (ui.view.type === 'tasks') return todo.mount(main);
+  if (ui.view.type === 'agents') return automations.mount(main);
+  if (ui.view.type === 'help') return help.mount(main);
   if (ui.view.type === 'linear') return linearView.mount(main);
   if (ui.view.type === 'github') return githubPage.mount(main);
   const n = store.get(ui.id);
@@ -330,6 +337,7 @@ function mountNote(main: HTMLElement, n: Note, keep: Keep | null): void {
 
 function onBodyInput(): void {
   const E = editing(); if (!E) return;
+  if (E.ta.value.includes(']]')) onboarding.mark('link');
   const n = E.note;
   store.touch(n); store.setBody(n, E.ta.value); n.updated = Date.now();
   scheduleSave(n); schedulePreview(); updateAc();
@@ -550,10 +558,17 @@ async function captureTodo(text: string) {
   if (r) toast(`Ajoutée aux tâches${r.due ? ' · échéance enregistrée' : ''}`, { label: 'Voir', run: () => setView({ type: 'tasks' }) });
   return r;
 }
+// Une capture déclenche les automatisations « déclencheur: capture » (sauf note privée).
+function announceCapture(n: Note): void {
+  onboarding.mark('note');
+  if (!n.enc && !store.meta(n).tags.some(t => /^priv[ée]/.test(t))) events.emit('capture', `${n.title}\n\n${store.getBody(n) ?? ''}`);
+}
 async function quickCapture(text: string) {
+  onboarding.mark('note');
   const c = parseCapture(text);
   if (c.isTodo && !text.trim().includes('\n')) return captureTodo(text);
   const n = await store.createNote({ title: c.title, body: c.body, inbox: !c.tags.length });
+  announceCapture(n);
   toast(c.tags.length ? `Rangée dans ${c.tags.map(t => '#' + t).join(' ')}` : 'Ajoutée à la boîte de réception', { label: 'Ouvrir', run: () => openNote(n.id) });
   return n;
 }
@@ -717,6 +732,7 @@ function openCapture(): void {
     const open = e.metaKey || e.ctrlKey, c = parseCapture(ta.value);
     if (c.isTodo && !ta.value.trim().includes('\n')) { m.close(); await captureTodo(ta.value); if (open) void setView({ type: 'tasks' }); return; }
     const n = await store.createNote({ title: c.title, body: c.body, inbox: !c.tags.length });
+  announceCapture(n);
     m.close();
     if (open) openNote(n.id);
     else toast(c.tags.length ? `Rangée dans ${c.tags.map(t => '#' + t).join(' ')}` : 'Ajoutée à la boîte de réception', { label: 'Ouvrir', run: () => openNote(n.id) });
@@ -742,8 +758,8 @@ function commands() {
     c('Boîte de réception', 'inbox', () => setView({ type: 'inbox' }), '', 'inbox'),
     c('Accueil', 'home', () => setView({ type: 'home' }), '', 'widgets tableau de bord dashboard'),
     c('Demander à l’IA', 'sparkle', () => hub.askAI(), SC.ask, 'claude chatgpt openai assistant question'),
-    c('Agents', 'bot', () => setView({ type: 'agents' }), '', 'automatisation ordonnanceur'),
-    c('Nouvel agent', 'bot', hub.newAgentNote, '', 'créer automatisation planifier'),
+    c('Automatisations', 'bot', () => setView({ type: 'agents' }), '', 'agents ia automatiser routine planifier déclencheur'),
+    c('Nouvelle automatisation', 'bot', () => setView({ type: 'agents' }), '', 'créer agent modèle planifier'),
     c('Réglages : sécurité et chiffrement', 'shield', () => hub.openConnections('coffre'), '', 'sécurité mot de passe face id touch id passkey'),
     c('Réglages : intelligence artificielle', 'sparkle', () => hub.openConnections('ia'), '', 'clé api anthropic chatgpt ollama'),
     c('Réglages : Linear', 'linear', () => hub.openConnections('linear'), '', 'issues tickets'),
@@ -779,7 +795,7 @@ function commands() {
     c('Thème : clair', 'today', () => setTheme('light'), '', 'apparence light'),
     c('Thème : sombre', 'moon', () => setTheme('dark'), '', 'apparence dark nuit'),
     c('Afficher ou masquer la barre latérale', 'sidebar', toggleSidebar, SC.sidebar, 'sidebar'),
-    c('Raccourcis clavier', 'keyboard', openHelp, '', 'aide help'),
+    c('Aide et raccourcis', 'help', openHelp, '?', 'aide help prise en main débuter comment'),
     c('Réglages', 'gear', () => hub.openConnections('coffre'), SC.settings, 'préférences paramètres options'),
   ];
 }
@@ -825,6 +841,7 @@ function paletteResults(raw: string): PaletteSection[] {
 }
 
 function openPalette(prefill = ''): void {
+  onboarding.mark('palette');
   if ($('.palette')) { closeTop(); return; }
   const m = modal({ cls: 'palette', html: `<div class="pal-input">${icon('search')}<input type="text" placeholder="Rechercher une note, lancer une commande…" aria-label="Palette de commandes" autocomplete="off" spellcheck="false" autofocus></div><div class="pal-list" role="listbox"></div><div class="pal-foot"><span>${kbd('enter')} ouvrir</span><span><kbd>↑</kbd><kbd>↓</kbd> naviguer</span><span><kbd>&gt;</kbd> commandes</span><span><kbd>#</kbd> tags</span><span>${kbd('esc')} fermer</span></div>` });
   const input = need<HTMLInputElement>('input', m.node), list = need('.pal-list', m.node);
@@ -847,12 +864,11 @@ function openPalette(prefill = ''): void {
   list.addEventListener('click', e => { const b = target(e).closest('.pal-item'); if (b) run(num(b, 'i')); });
 }
 
-function openHelp() {
-  const rows = [['Palette de commandes', SC.palette], ['Capture rapide', SC.capture], ['Nouvelle note', SC.newNote], ['Aujourd’hui', SC.today], ['Changer de mode (écrire, côte à côte, lire)', SC.mode], ['Mode focus', SC.focus], ['Graphe', SC.graph], ['Historique', SC.history], ['Verrouiller la note chiffrée', SC.lock], ['Barre latérale', SC.sidebar], ['Réglages', SC.settings], ['Tâches', SC.tasks], ['Linear', SC.notifs], ['Demander à l’IA', SC.ask], ['Créer ou cocher une tâche', SC.task], ['Gras / italique', SC.bold], ['Indenter / désindenter', 'tab']];
-  const syntax = [['[[Titre]]', 'lien vers une note (créée au clic si absente)'], ['#tag', 'range la note sous ce tag'], ['- [ ] tâche', 'case à cocher, reprise dans Tâches'], ['Appeler Paul demain', 'tâche avec échéance (page Tâches)'], ['`= 12 * 4`', 'calcul affiché avec son résultat'], ['[timer 25m]', 'minuteur (25m, 1h30m, 90s, 5:00)'], ['| a | b |', 'tableau : clic sur l’en-tête pour trier'], ['```schema / ```sql', 'diagramme de base de données'], ['```agent', 'agent IA lançable ou planifié'], ['```linear', 'liste d’issues Linear']];
-  const m = modal({ title: 'Raccourcis et syntaxe', cls: 'help', html: `<div class="help-grid"><div><h4>Clavier</h4>${rows.map(([l, k]) => `<div class="help-row"><span>${l}</span>${kbd(k)}</div>`).join('')}</div><div><h4>Dans une note</h4>${syntax.map(([s, l]) => `<div class="help-row"><code>${esc(s)}</code><span>${l}</span></div>`).join('')}</div></div><div class="modal-actions"><button class="btn btn-primary" autofocus>Fermer</button></div>` });
-  need('.btn', m.node).onclick = m.close;
+/** Tous les raccourcis, pour la page d'aide. */
+function shortcutRows(): [string, string][] {
+  return [['Palette de commandes', SC.palette], ['Capture rapide', SC.capture], ['Nouvelle note', SC.newNote], ['Aujourd’hui', SC.today], ['Changer de mode (écrire, côte à côte, lire)', SC.mode], ['Mode focus', SC.focus], ['Graphe', SC.graph], ['Historique', SC.history], ['Verrouiller la note chiffrée', SC.lock], ['Barre latérale', SC.sidebar], ['Réglages', SC.settings], ['Tâches', SC.tasks], ['Linear', SC.notifs], ['Demander à l’IA', SC.ask], ['Créer ou cocher une tâche', SC.task], ['Gras / italique', SC.bold], ['Indenter / désindenter', 'tab'], ['Aide et raccourcis', '?']];
 }
+function openHelp(): void { void setView({ type: 'help' }); }
 
 // ---------- Import / export ----------
 const stamp = () => store.dayKey();
@@ -998,6 +1014,7 @@ document.addEventListener('keydown', e => {
   if (matches(e, SC.tasks)) { e.preventDefault(); return setView({ type: 'tasks' }); }
   if (matches(e, SC.notifs)) { e.preventDefault(); return setView({ type: 'linear' }); }
   if (topLayer()) return;
+  if (e.key === '?' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target instanceof HTMLElement && e.target.isContentEditable))) { e.preventDefault(); openHelp(); return; }
   const n = store.get(ui.id), open = n && !n.deletedAt && !store.isLocked(n);
   const on = (combo: string, fn: () => unknown): boolean => { if (!matches(e, combo)) return false; e.preventDefault(); void fn(); return true; };
   on(SC.newNote, () => newNote()) || on(SC.today, () => setView({ type: 'today' })) || on(SC.graph, () => setView({ type: 'graph' }))
@@ -1126,7 +1143,7 @@ async function start() {
   todo.init({ flush, refreshNote, toggleTask, tbLeft, crumb });
   const shared = { setView, openNote, capture: quickCapture, view: () => ui.view.type, viewState: () => ui.view, renderSidebar, tbLeft, crumb,
     onCount: () => { renderSidebar(); linearView.refreshCount(); if (ui.view.type === 'home' && !topLayer() && !need('#main').contains(document.activeElement)) renderMain(); } };
-  home.init(shared); voice.init(shared); linearView.init(shared); githubPage.init(shared);
+  home.init(shared); automations.init(shared); help.init({ ...shared, shortcuts: shortcutRows }); voice.init(shared); linearView.init(shared); githubPage.init(shared);
 
   hub.init({
     openNote, setView, renderMain, flush, flushAll, refreshNote, capture: quickCapture, crumb,

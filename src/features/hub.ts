@@ -10,6 +10,8 @@ import * as github from '../integrations/github/api.ts';
 import * as link from '../integrations/link.ts';
 import * as schema from '../lib/schema.ts';
 import * as qr from '../lib/qr.ts';
+import * as events from '../core/events.ts';
+import type { AppEvent } from '../core/events.ts';
 import { renderMarkdown, esc, plain } from '../lib/markdown.ts';
 import { fold } from '../lib/fuzzy.ts';
 import { $, $$, el, icon, kbd, rel, modal, confirmBox, toast, download, need, target, errMsg, num } from '../ui/kit.ts';
@@ -60,6 +62,7 @@ export function init(api: HubApi) {
     if (e.type === 'status' || e.type === 'devices') { refreshConnections(); if (app.view() === 'home') app.renderMain(); }
   });
   vault.onChange(refreshConnections);
+  events.on(onEvent);
   document.addEventListener('pointerdown', erDrag);
   setTimeout(tick, 5000); setInterval(tick, 60e3);
   if (vault.isOpen()) startVaultServices();
@@ -227,7 +230,7 @@ function agentBlock(note: Note, code: string, idx: number): string {
     : st.last ? `<span class="${st.ok ? 'ag-ok' : 'ag-err'}">${st.ok ? '✓' : '⚠'} ${esc(rel(st.last))}</span>${st.error ? ` <span class="ag-errmsg">${esc(st.error)}</span>` : ''}` : 'Jamais lancé';
   return `<div class="agent-card" data-agent="${idx}"><div class="ag-head">${icon('bot')}<strong>${esc(s.nom)}</strong><span class="ag-prov">${esc(prov)}</span></div>
     <p class="ag-prompt">${esc(s.consigne.slice(0, 220) || 'Pas encore de consigne : écris-la sous la ligne ---')}${s.consigne.length > 220 ? '…' : ''}</p>
-    <div class="ag-meta">${s.outils.map(t => `<span class="ag-chip">${esc(t)}</span>`).join('')}${s.planning ? `<span class="ag-chip">${icon('history')}${esc(s.planning)}</span>` : ''}<span class="ag-chip">→ ${esc(s.sortie)}</span></div>
+    <div class="ag-meta">${s.outils.map(t => `<span class="ag-chip">${esc(t)}</span>`).join('')}${s.planning ? `<span class="ag-chip">${icon('history')}${esc(s.planning)}</span>` : ''}${s.declencheur ? `<span class="ag-chip">${icon('bolt')}${esc(events.TRIGGERS[s.declencheur])}</span>` : ''}<span class="ag-chip">→ ${esc(s.sortie)}</span></div>
     <div class="ag-foot"><span class="ag-last">${last}</span><button class="btn btn-primary" data-agent-run="${idx}" ${running.has(key) ? 'disabled' : ''}>${icon('play')}Lancer</button></div></div>`;
 }
 
@@ -276,21 +279,52 @@ async function writeOutput(spec: ai.AgentSpec, note: Note, text: string) {
   return target;
 }
 
-export async function runAgent(spec: ai.AgentSpec, note: Note, auto = false) {
-  const key = `${note.id}:${spec.nom}`;
+/** Comment une automatisation a été lancée. */
+export type RunHow = 'manuel' | 'planifié' | 'déclenché';
+/** Journal des exécutions : métadonnées seulement (le résultat, lui, est écrit dans la note de sortie). */
+export interface LogEntry { ts: number; name: string; noteId: string; how: RunHow; ok: boolean; error?: string }
+const LOG = 'carnet.agents.log', PAUSED = 'carnet.agents.paused';
+export const runLog = (): LogEntry[] => read<LogEntry[]>(LOG, []);
+const keyOf = (spec: ai.AgentSpec, note: Note) => `${note.id}:${spec.nom}`;
+export const isPaused = (spec: ai.AgentSpec, note: Note): boolean => read<string[]>(PAUSED, []).includes(keyOf(spec, note));
+export function setPaused(spec: ai.AgentSpec, note: Note, paused: boolean): void {
+  const k = keyOf(spec, note), list = read<string[]>(PAUSED, []).filter(x => x !== k);
+  write(PAUSED, paused ? [...list, k] : list);
+}
+const listeners = new Set<() => void>();
+/** Les pages (accueil, automatisations) se redessinent quand une exécution commence ou finit. */
+export const onRunsChange = (f: () => void): void => { listeners.add(f); };
+const changed = () => { app.refreshPreview(); if (app.view() === 'home') app.renderMain(); listeners.forEach(f => f()); };
+
+export async function runAgent(spec: ai.AgentSpec, note: Note, how: RunHow = 'manuel', event?: AppEvent): Promise<void> {
+  const key = keyOf(spec, note);
   if (running.has(key)) return;
-  running.add(key); app.refreshPreview();
-  const r = runEntry(spec.nom + (auto ? ' · planifié' : ''));
+  running.add(key); changed();
+  const r = runEntry(spec.nom + (how === 'manuel' ? '' : ` · ${how}`));
+  const log = (ok: boolean, error?: string) => write(LOG, [{ ts: Date.now(), name: spec.nom, noteId: note.id, how, ok, ...(error ? { error } : {}) }, ...runLog()].slice(0, 40));
   try {
-    const out = await ai.runAgent(spec, { approve, onStep: r.step, onWrite: app.refreshNote, signal: r.signal });
+    const out = await ai.runAgent(spec, { approve, onStep: r.step, onWrite: app.refreshNote, signal: r.signal, ...(event ? { event } : {}) });
     const target = await writeOutput(spec, note, out.text);
-    setRun(key, { last: Date.now(), ok: true, error: null });
+    setRun(key, { last: Date.now(), ok: true, error: null }); log(true);
     r.done(out.text || '(réponse vide)', target);
   } catch (e) {
-    const aborted = e instanceof Error && e.name === 'AbortError';
-    setRun(key, { last: Date.now(), ok: false, error: aborted ? 'Interrompu' : errMsg(e).slice(0, 160) });
+    const aborted = e instanceof Error && e.name === 'AbortError', msg = aborted ? 'Interrompu' : errMsg(e).slice(0, 160);
+    setRun(key, { last: Date.now(), ok: false, error: msg }); log(false, msg);
     r.fail(aborted ? 'Interrompu.' : errMsg(e));
-  } finally { running.delete(key); app.refreshPreview(); if (app.view() === 'home') app.renderMain(); }
+  } finally { running.delete(key); changed(); }
+}
+
+// Déclencheurs : une automatisation « déclencheur: … » se lance à l'événement, au plus une fois par minute.
+const lastTrigger = new Map<string, number>();
+function onEvent(e: AppEvent): void {
+  if (vault.enabled() && !vault.isOpen()) return;
+  for (const { note, spec } of ai.findAgents()) {
+    if (spec.declencheur !== e.kind || isPaused(spec, note) || !ai.ready(spec.modele || ai.config().provider)) continue;
+    const k = keyOf(spec, note);
+    if (running.has(k) || Date.now() - (lastTrigger.get(k) ?? 0) < 60e3) continue;
+    lastTrigger.set(k, Date.now());
+    void runAgent(spec, note, 'déclenché', e);
+  }
 }
 
 // Planification : un agent planifié se lance quand son créneau est passé, si l'app est ouverte
@@ -303,7 +337,7 @@ function tick(): void {
     const key = `${note.id}:${spec.nom}`, st = all[key] ||= {};
     if (!st.seen) { st.seen = Date.now(); dirty = true; continue; }
     const slot = ai.lastSlot(spec.planning);
-    if (slot && +slot > Math.max(st.last || 0, st.seen) && !running.has(key) && ai.ready(spec.modele || ai.config().provider)) void runAgent(spec, note, true);
+    if (slot && +slot > Math.max(st.last || 0, st.seen) && !running.has(key) && !isPaused(spec, note) && ai.ready(spec.modele || ai.config().provider)) void runAgent(spec, note, 'planifié');
   }
   if (dirty) write(RUNS, all);
 }
@@ -363,9 +397,9 @@ export async function issueFromSelection(): Promise<void> {
 // ---------- Accueil ----------
 // Peu de cartes, chacune utile : ce qu'il y a à faire, les agents, les notes récentes, les appareils.
 // État des agents pour l'accueil et la page Agents.
-export function agentList(): { note: Note; spec: ai.AgentSpec; index: number; live: boolean; last?: number | undefined; ok?: boolean | undefined }[] {
+export function agentList(): { note: Note; spec: ai.AgentSpec; index: number; live: boolean; last?: number | undefined; ok?: boolean | undefined; paused: boolean }[] {
   const runs = read<Runs>(RUNS, {});
-  return ai.findAgents().map(({ note, spec }, index) => { const key = `${note.id}:${spec.nom}`, st = runs[key] || {}; return { note, spec, index, live: running.has(key), last: st.last, ok: st.ok }; });
+  return ai.findAgents().map(({ note, spec }, index) => { const key = `${note.id}:${spec.nom}`, st = runs[key] || {}; return { note, spec, index, live: running.has(key), last: st.last, ok: st.ok, paused: isPaused(spec, note) }; });
 }
 
 // ---------- Clics délégués (renvoie true si traité) ----------
@@ -389,7 +423,7 @@ export async function click(e: MouseEvent): Promise<boolean> {
   return false;
 }
 
-export const AGENT_TEMPLATE = '```agent\nnom: Mon agent\noutils: notes\nsortie: journal\nplanning:\n---\nDécris ici, en langage naturel, ce que l’agent doit faire.\n```\n';
+export const AGENT_TEMPLATE = '```agent\nnom: Mon automatisation\noutils: notes, linear, github\nplanning:\ndéclencheur:\nsortie: journal\n---\nDécris ici, comme à un assistant, ce que Studio doit faire. Exemple : « Chaque matin, liste mes tâches en retard et crée une note avec mes trois priorités. »\n```\n';
 export const SCHEMA_TEMPLATE = '```schema\nusers\n  id uuid pk\n  email text unique\n  name text?\n\nposts\n  id uuid pk\n  author_id uuid > users.id\n  title text\n  published_at timestamptz?\n```\n';
 export async function newAgentNote(): Promise<void> {
   const n = await store.createNote({ title: 'Nouvel agent', body: `${AGENT_TEMPLATE}\n#agents` });

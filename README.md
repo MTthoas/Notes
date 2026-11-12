@@ -66,6 +66,16 @@ Elle s'affiche en **liste** ou en **Kanban** (À faire, En cours, Terminées : g
 
 Les agents planifiés tournent tant que l'application est ouverte (rattrapage unique au retour).
 
+## Automatisations
+
+Studio est pensé autour de l'automatisation : une **automatisation** est une consigne en langage naturel, écrite dans une note (bloc ` ```agent `), que l'IA exécute avec des outils — lire et ranger les notes, créer des tâches, lire l'activité Linear et GitHub, ouvrir des tickets.
+
+- **Quand** : à la demande, à heure fixe (`planning: jours ouvrés 9h`), ou à chaque événement (`déclencheur: capture`, `linear`, `github`, `tâche`).
+- **Sûreté** : toute écriture est soumise à ton accord ; le contenu des notes et des événements est transmis comme donnée, jamais comme consigne ; une note `#privé` n'est jamais envoyée.
+- **Page Automatisations** : modèles prêts à l'emploi (revue du matin, tri des captures, notifications Linear changées en tâches, veille GitHub, bilan de la semaine), pause, et journal des exécutions.
+
+La page **Aide** (touche `?`) explique la prise en main en cartes courtes ; l'accueil propose des **premiers pas** qui se cochent d'eux-mêmes.
+
 ## Organisation
 
 ```
