@@ -6,7 +6,7 @@ import * as bridge from '../../integrations/remote.ts';
 import * as usage from '../../integrations/usage.ts';
 import * as ai from '../../integrations/ai.ts';
 import * as github from '../../integrations/github/api.ts';
-import { esc } from '../../lib/markdown.ts';
+import { esc, renderMarkdown } from '../../lib/markdown.ts';
 import { icon, rel, modal, need, toast, confirmBox, errMsg, $ } from '../../ui/kit.ts';
 import * as review from './review.ts';
 import * as store from '../../core/store.ts';
@@ -61,7 +61,7 @@ function withNotes(prompt: string, ids: string[]): { text: string; refused: stri
 // ---------- Consigne ----------
 export function composerHTML(p: Project, { session = '', compact = false, machine = '' } = {}): string {
   const models = ai.CC_MODELS.map(([v, l]) => `<option value="${v}">${v ? l : 'Modèle par défaut'}</option>`).join('');
-  if (session) return `<form class="ag-compose ag-continue" data-session="${esc(session)}"${machine ? ` data-machine="${esc(machine)}"` : ''}><textarea name="prompt" rows="2" placeholder="Continuer cette session : précise, corrige, demande la suite…" aria-label="Continuer la session"></textarea>
+  if (session) return `<form class="ag-compose ag-continue" data-session="${esc(session)}"${machine ? ` data-machine="${esc(machine)}"` : ''}><textarea name="prompt" rows="2" placeholder="Réponds à Claude : précise, corrige, tranche, demande la suite…" aria-label="Répondre dans la session"></textarea>
     <div class="ag-opts"><span class="ag-hint">${icon('history')}Reprend la session là où elle s’est arrêtée, dans le même dossier.</span><button class="btn btn-primary">${icon('play')}Envoyer<kbd>⌘↩</kbd></button></div></form>`;
   const pre = pending?.project === p.id ? pending : null; if (pre && !compact) pending = null;
   const notes = pre && !compact ? pre.notes : [];
@@ -163,19 +163,111 @@ function listHTML(list: Session[], quota: Quota | null): string {
     }).join('') || '<p class="hm-empty">Aucune session Claude Code dans ce dossier pour l’instant. Donne une consigne ci-dessus pour lancer la première.</p>'}</div>`;
 }
 
-function detailHTML(raw: Partial<Session> & { actions?: Action[] }, root: string | null): string {
-  // Une session qui vient de démarrer peut ne pas avoir encore toutes ses informations.
-  const s: Session & { actions: Action[] } = { id: '', title: 'Session qui démarre…', branch: '', worktree: '', started: '', updated: '', live: true, models: [], prompts: 0, lastPrompt: '', files: [], tools: {}, ...raw, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, ...raw.tokens }, actions: raw.actions ?? [] };
+// ---------- Fil d'une session ----------
+type Detail = Session & { actions: Action[] };
+interface Block { key: string; html: string }
+const FEED_MAX = 80; // nombre d'étapes renvoyées par le Mac (voir Sessions.swift)
+
+/** Heure d'une étape ; avec la date si ce n'est pas aujourd'hui. */
+function clock(iso: string): string {
+  const t = ms(iso); if (!t) return '';
+  const d = new Date(t), today = d.toDateString() === new Date().toDateString();
+  return d.toLocaleString('fr-FR', today ? { hour: '2-digit', minute: '2-digit' } : { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Markdown d'une réponse de Claude, sans les blocs propres aux notes (tags, liens entre notes, cases cochables). */
+const answerHTML = (text: string): string => renderMarkdown(text)
+  .replace(/<a class="(?:tag|wikilink)[^>]*>(.*?)<\/a>/g, '$1')
+  .replace(/<input type="checkbox"/g, '<input type="checkbox" disabled');
+
+/** Découpe les étapes en blocs de conversation : demandes, réponses, et outils consécutifs regroupés. */
+function feedBlocks(actions: Action[], root: string | null, working: boolean): Block[] {
+  const out: Block[] = [], seen = new Map<string, number>();
+  const key = (a: Action, c: string) => { const k = `${c}|${a.at}`, n = seen.get(k) ?? 0; seen.set(k, n + 1); return n ? `${k}|${n}` : k; };
+  const toolRow = (a: Action) => `<li><b>${esc(a.kind.slice(5))}</b><span>${esc(short(a.text, root))}</span></li>`;
+  let group: Action[] = [];
+  const flush = (last: boolean) => {
+    const first = group[0], latest = group[group.length - 1]; if (!first || !latest) return;
+    const k = key(first, 'tools');
+    if (group.length === 1) out.push({ key: k, html: `<div class="ss-tools"><ul>${toolRow(first)}</ul></div>` });
+    else {
+      const counts = new Map<string, number>();
+      for (const a of group) counts.set(a.kind.slice(5), (counts.get(a.kind.slice(5)) ?? 0) + 1);
+      const top = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([n, c]) => `${esc(n)} ${c}`).join(' · ');
+      const now = last && working ? `<em>${esc(`${latest.kind.slice(5)} ${short(latest.text, root)}`)}</em>` : '';
+      out.push({ key: k, html: `<details class="ss-tools"><summary>${icon('bolt')}<strong>${group.length} actions</strong><span>${top}</span>${now}${icon('chevron')}</summary><ul>${group.map(toolRow).join('')}</ul></details>` });
+    }
+    group = [];
+  };
+  if (actions.length >= FEED_MAX) out.push({ key: 'cut', html: '<p class="ss-cut">Début de la session masqué : seules les dernières étapes sont affichées.</p>' });
+  for (const a of actions) {
+    if (a.kind.startsWith('tool:')) { group.push(a); continue; }
+    flush(false);
+    if (a.kind === 'prompt') out.push({ key: key(a, 'user'), html: `<div class="ss-msg user"><header><strong>Toi</strong><time>${esc(clock(a.at))}</time></header><p>${esc(a.text)}</p></div>` });
+    else out.push({ key: key(a, 'ai'), html: `<div class="ss-msg ai"><header><strong>Claude</strong><time>${esc(clock(a.at))}</time><button class="icon-btn ss-copy" data-ag="copy" title="Copier la réponse" aria-label="Copier la réponse">${icon('copy')}</button></header><div class="md">${answerHTML(a.text)}</div></div>` });
+  }
+  flush(true);
+  if (!actions.length) out.push({ key: 'empty', html: `<p class="ss-cut">${working ? 'La session démarre…' : 'Aucune étape dans cette session.'}</p>` });
+  if (working) out.push({ key: 'working', html: '<div class="ss-working"><span class="spin"></span>Claude travaille…</div>' });
+  return out;
+}
+
+/** Met le fil à jour bloc par bloc : ce qui n'a pas changé n'est pas redessiné (sélection, blocs dépliés et défilement conservés). */
+const drawn = new WeakMap<Element, string>();
+function syncFeed(feed: HTMLElement, blocks: Block[]): boolean {
+  const old = new Map<string, HTMLElement>();
+  for (const el of Array.from(feed.children) as HTMLElement[]) old.set(el.dataset.k ?? '', el);
+  let changed = false;
+  blocks.forEach((b, i) => {
+    const prev = old.get(b.key);
+    let el = prev;
+    if (!prev || drawn.get(prev) !== b.html) {
+      const t = document.createElement('template'); t.innerHTML = b.html.trim();
+      el = t.content.firstElementChild as HTMLElement;
+      el.dataset.k = b.key; drawn.set(el, b.html);
+      if (prev?.tagName === 'DETAILS' && el.tagName === 'DETAILS') (el as HTMLDetailsElement).open = (prev as HTMLDetailsElement).open;
+    }
+    if (el && feed.children[i] !== el) { feed.insertBefore(el, feed.children[i] ?? null); changed = true; }
+  });
+  while (feed.children.length > blocks.length) { feed.lastElementChild?.remove(); changed = true; }
+  return changed;
+}
+
+function topHTML(s: Detail, root: string | null, open: boolean): string {
   const dur = ms(s.updated) - ms(s.started), h = Math.floor(dur / 36e5), mn = Math.round(dur % 36e5 / 6e4);
-  const kind = (k: string) => k === 'prompt' ? ['user', 'Toi'] : k === 'text' ? ['ai', 'Claude'] : ['tool', k.slice(5)];
   const run = runs.find(r => r.session === s.id && live(r)), tree = s.worktree ? trees.find(t => t.name === s.worktree) : undefined;
+  const acts = Object.values(s.tools).reduce((a, b) => a + b, 0);
   return `<div class="ss-dhead"><i class="ss-live${s.live || run ? ' on' : ''}"></i><h2>${esc(s.title)}</h2>${run ? `${pill(run.status)}<button class="btn" data-ag="stop" data-run="${esc(run.run)}">${icon('stop')}Arrêter</button>` : ''}</div>
-    <p class="ss-meta">${s.worktree ? `${icon('pencil')}copie isolée <code>${esc(s.worktree)}</code> · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${esc(s.models.map(modelName).join(', '))} · ${h ? `${h} h ` : ''}${mn} min · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}</p>
-    <div class="ss-totals"><div><strong>${usage.fmt(s.tokens.output)}</strong><span>tokens écrits</span></div><div><strong>${usage.fmt(s.tokens.input + s.tokens.cacheWrite)}</strong><span>tokens lus</span></div><div><strong>${usage.fmt(s.tokens.cacheRead)}</strong><span>relus du cache</span></div><div><strong>${Object.values(s.tools).reduce((a, b) => a + b, 0)}</strong><span>actions</span></div></div>
-    ${tree ? `<div class="ag-trees">${treeRow(tree)}</div>` : remote ? '' : `<div class="ss-actions"><button class="btn" data-pj="review-working">${icon('sparkle')}Revue des changements en cours</button><button class="btn" data-pj="vscode">${icon('code')}Ouvrir dans VS Code</button></div>`}
-    ${s.files.length ? `<h3 class="ss-h">Fichiers modifiés <span>${s.files.length}</span></h3><div class="ss-files">${s.files.map(f => `<code>${esc(short(f, root))}</code>`).join('')}</div>` : ''}
-    <h3 class="ss-h">Fil de la session <span>les ${s.actions.length} dernières étapes</span></h3>
-    <div class="ss-feed">${s.actions.map(a => { const [c, who] = kind(a.kind); return `<div class="ss-step ${c}"><span class="ss-who">${c === 'tool' ? icon('bolt') : ''}${esc(who ?? '')}</span><p>${esc(c === 'tool' ? short(a.text, root) : a.text)}</p><time>${esc(rel(ms(a.at)))}</time></div>`; }).join('')}</div>`;
+    <p class="ss-meta">${s.worktree ? `${icon('pencil')}copie isolée <code>${esc(s.worktree)}</code> · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${s.models.length ? `${esc(s.models.map(modelName).join(', '))} · ` : ''}${h ? `${h} h ` : ''}${mn} min · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}</p>
+    ${tree ? `<div class="ag-trees ss-tree">${treeRow(tree)}</div>` : remote ? '' : `<div class="ss-actions"><button class="btn" data-pj="review-working">${icon('sparkle')}Revue des changements en cours</button><button class="btn" data-pj="vscode">${icon('code')}Ouvrir dans VS Code</button></div>`}
+    <details class="ss-more"${open ? ' open' : ''}><summary>${icon('chevron')}Détails<span>${usage.fmt(s.tokens.output)} tokens écrits · ${acts} action${acts > 1 ? 's' : ''}${s.files.length ? ` · ${s.files.length} fichier${s.files.length > 1 ? 's' : ''} modifié${s.files.length > 1 ? 's' : ''}` : ''}</span></summary>
+      <div class="ss-totals"><div><strong>${usage.fmt(s.tokens.output)}</strong><span>tokens écrits</span></div><div><strong>${usage.fmt(s.tokens.input + s.tokens.cacheWrite)}</strong><span>tokens lus</span></div><div><strong>${usage.fmt(s.tokens.cacheRead)}</strong><span>relus du cache</span></div><div><strong>${acts}</strong><span>actions</span></div></div>
+      ${s.files.length ? `<h3 class="ss-h">Fichiers modifiés <span>${s.files.length}</span></h3><div class="ss-files">${s.files.map(f => `<code>${esc(short(f, root))}</code>`).join('')}</div>` : ''}</details>`;
+}
+
+const atEnd = (feed: HTMLElement) => feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
+
+/** Affiche une session dans `zone` ; les appels suivants ne touchent que ce qui a changé. */
+function showDetail(zone: HTMLElement, raw: Partial<Session> & { actions?: Action[] }, root: string | null): void {
+  // Une session qui vient de démarrer peut ne pas avoir encore toutes ses informations.
+  const s: Detail = { id: '', title: 'Session qui démarre…', branch: '', worktree: '', started: '', updated: '', live: true, models: [], prompts: 0, lastPrompt: '', files: [], tools: {}, ...raw, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, ...raw.tokens }, actions: raw.actions ?? [] };
+  let feed = $('.ss-feed', zone);
+  if (!feed || feed.dataset.id !== s.id) {
+    zone.innerHTML = `<div class="ss-top"></div><div class="ss-thread"><div class="ss-feed" role="log" aria-label="Fil de la session" tabindex="0"></div><button class="ss-jump" data-ag="end" hidden>${icon('chevron')}Nouvelles étapes</button></div>`;
+    const f = need('.ss-feed', zone), jump = need('.ss-jump', zone);
+    f.dataset.id = s.id;
+    f.addEventListener('scroll', () => { if (atEnd(f)) jump.hidden = true; }, { passive: true });
+    feed = f;
+  }
+  const top = need('.ss-top', zone), html = topHTML(s, root, !!$<HTMLDetailsElement>('.ss-more', top)?.open);
+  if (drawn.get(top) !== html) { top.innerHTML = html; drawn.set(top, html); }
+  // « En cours » : l'agent lancé depuis Studio tourne encore, ou une session du terminal vient d'agir sans avoir répondu.
+  const own = runs.filter(r => r.session === s.id), last = s.actions[s.actions.length - 1];
+  const working = own.length ? own.some(live) : s.live && !!last && last.kind !== 'text';
+  const first = !feed.children.length, end = atEnd(feed);
+  if (!syncFeed(feed, feedBlocks(s.actions, root, working))) return;
+  if (first || end) feed.scrollTop = feed.scrollHeight;
+  else need('.ss-jump', zone).hidden = false;
 }
 
 // ---------- Actions sur les copies ----------
@@ -350,13 +442,11 @@ async function paint(box: HTMLElement, p: Project): Promise<void> {
       const r = runs.find(x => x.session === selected);
       if (r) {
         const rd = await bridge.call('agent', 'run', { run: r.run }, 10000);
-        if (rd.ok && box.isConnected) { zone.innerHTML = detailHTML({ id: selected, title: r.prompt, worktree: r.worktree, branch: r.host ? `sur ${r.host}` : '', started: r.started, updated: r.finished || new Date().toISOString(), live: live(r), actions: (rd.actions as Action[]) ?? [] }, folderPath); return; }
+        if (rd.ok && box.isConnected) { showDetail(zone, { id: selected, title: r.prompt, worktree: r.worktree, branch: r.host ? `sur ${r.host}` : '', started: r.started, updated: r.finished || new Date(Math.floor(Date.now() / 6e4) * 6e4).toISOString(), live: live(r), actions: (rd.actions as Action[]) ?? [] }, folderPath); return; }
       }
       zone.innerHTML = `<p class="hm-empty">${esc(d.message ?? 'Session introuvable.')}</p>`; return;
     }
-    const feed = $('.ss-feed', zone), atEnd = !feed || feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
-    zone.innerHTML = detailHTML({ ...(d as unknown as Partial<Session> & { actions?: Action[] }), id: selected }, folderPath); // « id » de la réponse = numéro de demande
-    const nf = $('.ss-feed', zone); if (nf && atEnd) nf.scrollTop = nf.scrollHeight;
+    showDetail(zone, { ...(d as unknown as Partial<Session> & { actions?: Action[] }), id: selected }, folderPath); // « id » de la réponse = numéro de demande
     return;
   }
   const r = await bridge.call('project', 'sessions', { project: p.id }, 20000);
@@ -395,6 +485,12 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
     if (row) { selected = row.dataset.ss || null; shell(box, p); void paint(box, p); return; }
     const b = t.closest<HTMLElement>('[data-ag]'); if (!b) return;
     const wt = b.dataset.wt ?? '';
+    if (b.dataset.ag === 'end') { const f = $('.ss-feed', box); f?.scrollTo({ top: f.scrollHeight, behavior: 'smooth' }); b.hidden = true; return; }
+    if (b.dataset.ag === 'copy') {
+      const text = b.closest('.ss-msg')?.querySelector<HTMLElement>('.md')?.innerText ?? '';
+      try { await navigator.clipboard.writeText(text); toast('Réponse copiée'); } catch { toast('Copie impossible.'); }
+      return;
+    }
     if (b.dataset.ag === 'stop') { const r = await bridge.call('agent', 'stop', { run: b.dataset.run }, 10000); toast(r.ok ? 'Agent arrêté' : r.message ?? 'Impossible.'); void paint(box, p); }
     if (b.dataset.ag === 'review') await review.review(p, 'working', wt);
     if (b.dataset.ag === 'vscode') { const r = await native.call('project', 'open', { project: p.id, app: 'vscode', worktree: wt }, 15000); if (!r.ok) toast(r.message ?? 'Impossible d’ouvrir.'); }
