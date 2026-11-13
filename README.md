@@ -88,11 +88,14 @@ ln -sf "$PWD/bin/studio" ~/.local/bin/studio   # une seule fois (un dossier pré
 
 studio           # ouvre l'app Mac (la construit et l'installe si elle manque)
 studio web       # version web en local, reconstruite à chaque modification
-studio update    # reconstruit l'app Mac depuis les sources et la réinstalle
+studio update    # récupère la dernière version de main sur GitHub, reconstruit l'app Mac et la réinstalle
+studio version   # compare l'app installée, le dossier local et GitHub
 studio help      # aide
 ```
 
-**Mises à jour** — la version web se met à jour seule à chaque ouverture. L'app Mac, qui embarque ses fichiers, se met à jour toute seule : elle lit la dernière [Release](https://github.com/MTthoas/Studio/releases/latest) du dépôt (au lancement puis toutes les 6 heures), télécharge `Studio-macOS.zip` en arrière-plan et vérifie le paquet (même identifiant, signature intacte). Une fenêtre propose alors de relancer ; sinon la nouvelle version s'installe quand tu quittes l'app. Les deux automatismes (chercher, installer) se désactivent dans Réglages → **Mises à jour** : rien n'est alors téléchargé ni installé sans ton clic. Après une mise à jour, Studio présente ce qui change, une nouveauté après l'autre (à revoir depuis le menu Studio → **Nouveautés**). L'app n'étant pas signée par un compte développeur Apple, macOS peut redemander certains accords (trousseau, micro) après une mise à jour. `studio update` reste la voie pour installer ce que tu as modifié en local.
+`studio update` avance d'abord la branche `main` du dossier jusqu'à GitHub (avance simple : tes modifications locales sont gardées, rien n'est fusionné ni écrasé), puis construit. Sur une autre branche, ou si l'avance est impossible, il construit ce qui est là et le signale. `studio update --local` construit tel quel, sans rien récupérer. En cas de doute sur ce qui est installé, `studio version` affiche le commit de l'app, celui du dossier et celui de GitHub, et dit quoi faire s'ils diffèrent.
+
+**Mises à jour** — la version web se met à jour seule à chaque ouverture. L'app Mac, qui embarque ses fichiers, se met à jour toute seule : elle lit la dernière [Release](https://github.com/MTthoas/Studio/releases/latest) du dépôt (au lancement puis toutes les 6 heures), télécharge `Studio-macOS.zip` en arrière-plan et vérifie le paquet (même identifiant, signature intacte). Une fenêtre propose alors de relancer ; sinon la nouvelle version s'installe quand tu quittes l'app. Les deux automatismes (chercher, installer) se désactivent dans Réglages → **Mises à jour** : rien n'est alors téléchargé ni installé sans ton clic. Après une mise à jour, Studio présente ce qui change, une nouveauté après l'autre (à revoir depuis le menu Studio → **Nouveautés**). L'app n'étant pas signée par un compte développeur Apple, macOS peut redemander certains accords (trousseau, micro) après une mise à jour. `studio update` reste la voie pour installer ce que tu as modifié en local, et pour rattraper une app installée avant cette fonction : elle n'a pas encore l'entrée **Mises à jour** du menu Studio (le bouton **Studio ▾** de la barre latérale).
 
 ## Fonctionnalités
 
@@ -173,6 +176,8 @@ Si l'agent ne parvient pas à résoudre, la publication s'arrête et te donne la
 
 **Messages en attente** : pendant qu'un agent travaille, tu peux continuer à lui écrire. Tes messages s'affichent « en attente » dans le fil (tu peux en retirer un) et lui sont remis ensemble, en une seule consigne, dès qu'il a fini son tour : dans l'ordre, chacun délimité, avec la règle « le plus récent l'emporte » s'ils se contredisent. Studio ne coupe jamais l'agent en plein travail. S'il s'est arrêté ou a échoué, les messages restent en attente jusqu'à ce que tu cliques sur **Envoyer maintenant** ou que tu répondes.
 
+**Mémoire du dépôt** : chaque agent lit d'abord `contexte.md`, à la racine du dépôt, au lieu de réexplorer le code : où se trouve chaque chose, les conventions, les pièges déjà rencontrés. En mode Modifier, il y ajoute à la fin de son travail ce qu'il a appris de durable, et le crée s'il manque ; le fichier part avec ses changements, dans la même pull request. Les deux consignes se modifient ou se vident dans Réglages → Consignes et contexte.
+
 **Garde-fous** : `--restricted` (fichiers confinés au dossier de travail), `--permission-mode dontAsk` et une liste explicite d'outils (lecture, écriture). Aucune commande ne s'exécute, sauf si tu coches **Tests npm** (`npm test`, `npm run …`). Pas de réglages, hooks ni serveurs MCP de l'utilisateur ; trois agents au plus, 90 minutes au plus.
 
 ### Serveurs et pilotage à distance
@@ -215,7 +220,7 @@ Studio se branche sur **Claude**, **OpenAI** ou un **modèle local** : les appel
 
 **Consignes et contexte** — Réglages → Consignes et contexte réunit tout ce que Studio envoie à l'IA en plus de ta demande, avec une estimation en tokens :
 
-- **Agents Claude Code** : les blocs ajoutés à leur consigne (cadre, mode Modifier ou Analyser, économie de contexte, façon de travailler, tes propres consignes), le seuil à partir duquel le contexte est résumé, et les appels accessoires. Gardés sur le Mac, ils valent pour tous les agents, y compris ceux lancés depuis un appareil lié.
+- **Agents Claude Code** : les blocs ajoutés à leur consigne (cadre, mode Modifier ou Analyser, mémoire du dépôt, économie de contexte, façon de travailler, tes propres consignes), le seuil à partir duquel le contexte est résumé, et les appels accessoires. Gardés sur le Mac, ils valent pour tous les agents, y compris ceux lancés depuis un appareil lié.
 - **Automatisations** : les blocs de la consigne système (rôle, compte rendu, sous-agent, règles), le nombre d'étapes au plus, la taille du résultat d'un sous-agent, le cache de prompt.
 - **Tâches de fond** : le modèle léger des noms de conversation, messages de commit et résumés du journal, leurs consignes, celle de la revue de code.
 - **Contexte envoyé** : la taille maximale des notes jointes, du diff, des demandes d'une journée.
@@ -321,6 +326,7 @@ native/             apps Mac et iPhone (Swift) et leurs scripts de build
   macOS/, iOS/        points d'entrée de chaque plateforme
 scripts/            build.ts (esbuild) et check.ts, exécutés directement par Node
 bin/studio          commande de lancement
+contexte.md         mémoire du dépôt pour les agents : lue en premier, tenue à jour par eux
 ```
 
 **Règles**

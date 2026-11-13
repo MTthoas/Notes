@@ -38,6 +38,11 @@ interface Item {
 
 // Les plus récentes d'abord.
 const NEWS: Item[] = [
+  { id: 'repo-memory', date: '2026-11-14', mac: true, icon: 'notes', hue: 'teal',
+    title: 'Les agents se souviennent du dépôt',
+    text: 'Chaque agent Claude Code lit d’abord contexte.md, à la racine du dépôt, au lieu de réexplorer le code. Il y note ce qu’il a appris de durable : le suivant démarre plus vite.',
+    points: ['Lu en premier', 'Tenu à jour', 'Réglable'],
+    go: { label: 'Voir les consignes', view: { type: 'settings', tab: 'consignes' } } },
   { id: 'auto-update', date: '2026-11-14', mac: true, icon: 'download', hue: 'blue',
     title: 'Studio se met à jour tout seul',
     text: 'Une nouvelle version est téléchargée et vérifiée en arrière-plan. Elle s’installe quand tu relances Studio, ou toute seule quand tu le quittes : tu n’as plus rien à faire.',

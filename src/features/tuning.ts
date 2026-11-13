@@ -19,6 +19,8 @@ const AGENT_ITEMS: Omit<Field, 'value' | 'changed'>[] = [
   { key: 'intro', kind: 'text', label: 'Cadre', hint: 'Où l’agent se trouve et comment tu lui parles.' },
   { key: 'edit', kind: 'text', label: 'Mode « Modifier »', hint: 'Règles de la copie isolée. Contient la ligne « Commit: … » que Studio relit pour proposer le message de commit : garde-la.' },
   { key: 'read', kind: 'text', label: 'Mode « Analyser »', hint: 'Remplace les règles de modification quand l’agent est en lecture seule.' },
+  { key: 'context', kind: 'text', label: 'Mémoire du dépôt · lire contexte.md', hint: 'Chaque agent lit contexte.md en premier, à la racine du dépôt, au lieu de réexplorer le code. Vide : il ne le lit plus.' },
+  { key: 'contextEdit', kind: 'text', label: 'Mémoire du dépôt · tenir contexte.md à jour', hint: 'Mode « Modifier » seulement : l’agent y ajoute ce qu’il a appris de durable, et le crée s’il manque. Le fichier part avec ses changements, dans la même pull request. Vide : il n’y touche pas.' },
   { key: 'economy', kind: 'text', label: 'Économie de contexte', hint: 'Un agent relit tout son contexte à chaque appel d’outil : ce qu’il y fait entrer se paie à chaque tour suivant. Vide : aucune consigne d’économie.' },
   { key: 'tests', kind: 'text', label: 'Avec les tests npm', hint: 'Ajouté seulement quand « Tests npm » est coché.' },
   { key: 'behavior', kind: 'text', label: 'Façon de travailler', hint: 'Quand agir seul, quand discuter, et la forme du compte rendu.' },
@@ -26,7 +28,7 @@ const AGENT_ITEMS: Omit<Field, 'value' | 'changed'>[] = [
   { key: 'compactWindow', kind: 'num', label: 'Résumer le contexte à partir de', hint: 'Au-delà, Claude Code résume la conversation au lieu de tout relire à chaque appel d’outil, même avec un modèle qui accepte un million de tokens. 0 : laisser Claude Code décider.', min: 0, max: 2000000, step: 50000, unit: 'tokens' },
   { key: 'lean', kind: 'bool', label: 'Pas d’appels accessoires au modèle', hint: 'Coupe les appels de confort de Claude Code (textes d’attente, suggestions).' },
 ];
-const AGENT_PROMPT = ['intro', 'edit', 'economy', 'behavior', 'extra'];
+const AGENT_PROMPT = ['intro', 'edit', 'context', 'contextEdit', 'economy', 'behavior', 'extra'];
 const agentText = (k: string): string => { const v = agent?.values[k]; return typeof v === 'string' ? v : ''; };
 
 async function agentCall(body: Record<string, unknown> = {}): Promise<boolean> {
