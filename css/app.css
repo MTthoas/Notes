@@ -1457,3 +1457,22 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .pj-cc:hover { background: var(--hover); color: var(--text); }
 .pj-row:hover .pj-cc, .pj-cc:focus-visible { opacity: 1; }
 @media (hover: none) { .pj-cc { opacity: 1; } }
+
+/* ---------- Publier : message de commit et repli PR ---------- */
+.ag-pub .pj-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; color: var(--text-2); font-size: var(--t-1); font-weight: 500; }
+.ag-msg-h { display: flex; align-items: center; gap: 8px; }
+.ag-sug { display: inline-flex; align-items: center; gap: 4px; font-style: normal; font-weight: 500; color: var(--c-violet); }
+.ag-sug .ic { width: 12px; height: 12px; }
+.ag-msg { min-height: 76px; resize: vertical; font: 13px/1.5 var(--mono); padding: 10px 12px; }
+.ag-sug-row { display: flex; align-items: center; gap: 10px; margin: -6px 0 14px; color: var(--text-3); font-size: var(--t-1); }
+.ag-sug-st { flex: 1; min-width: 0; display: inline-flex; align-items: center; }
+.ag-sug-row .link-btn { display: inline-flex; align-items: center; gap: 4px; }
+.ag-sug-row .link-btn .ic { width: 12px; height: 12px; }
+.ag-prfail { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding: 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); font-size: var(--t-2); }
+.ag-prfail p { display: flex; align-items: center; gap: 6px; margin: 0; line-height: 1.5; }
+.ag-prfail p .ic { width: 14px; height: 14px; color: var(--c-green); flex: none; }
+.ag-prfail-act { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.ag-prfail-act a.btn { text-decoration: none; }
+.ag-prfail p { display: block; }
+.ag-prfail p .ic { display: inline-block; vertical-align: -2px; margin-right: 6px; }
+.ag-prfail code { word-break: break-all; font: 12px var(--mono); }

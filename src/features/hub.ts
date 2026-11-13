@@ -578,7 +578,7 @@ function biometricSection() {
 function tabGithub() {
   if (!vault.enabled()) return needVault('Le jeton GitHub');
   return `<section class="cx-sec"><h4>${icon('github')}GitHub</h4>${keyField('github', 'Jeton GitHub', 'github_pat_…')}${github.connected() ? '<p class="cx-who" data-gh-who>Vérification…</p>' : ''}
-    <p class="modal-hint">GitHub → Settings → Developer settings → Personal access tokens → <strong>Fine-grained tokens</strong>. Choisis les dépôts à suivre et donne uniquement des droits en <strong>lecture</strong> : Metadata, Contents, Issues, Pull requests. Studio n’écrit jamais sur GitHub, et le jeton ne part que vers <code>api.github.com</code>.</p></section>
+    <p class="modal-hint">GitHub → Settings → Developer settings → Personal access tokens → <strong>Fine-grained tokens</strong>. Choisis les dépôts à suivre et donne des droits en <strong>lecture</strong> : Metadata, Contents, Issues, Pull requests. Pour que Studio ouvre les pull requests des agents Claude Code, passe <strong>Pull requests</strong> en <strong>lecture et écriture</strong> ; c’est la seule écriture que fait Studio, et seulement quand tu cliques sur Publier. Sans ce droit, Studio t’ouvre la page de la PR sur GitHub, déjà remplie. Le jeton ne part que vers <code>api.github.com</code>.</p></section>
     <section class="cx-sec"><h4>Ce que tu verras</h4><p class="modal-hint">La page <button class="link-btn" data-view="github">GitHub</button> réunit l’activité de tes ${12} dépôts les plus récemment actifs : commits poussés, pull requests, issues, commentaires, versions. Elle se met à jour toutes les 5 minutes tant que Studio est ouverte.</p></section>`;
 }
 
