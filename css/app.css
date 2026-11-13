@@ -118,6 +118,38 @@ button.side-label:hover { color: var(--text-2); }
 .side-foot span:first-of-type { flex: 1; }
 .side-foot .ic { width: 14px; height: 14px; }
 .side-foot:hover { background: var(--hover); color: var(--text-2); }
+/* Bloc des plugins dans la barre latérale (lecture Spotify en cours…). */
+.plug-np { margin: 0 8px 4px 10px; padding: 3px 2px 3px 8px; display: flex; align-items: center; gap: 2px; border-radius: var(--r); color: var(--text-2); font-size: var(--t-1); }
+.plug-np > a, .plug-np > div { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; }
+.plug-np > a > .ic, .plug-np > div > .ic { width: 14px; height: 14px; flex: none; color: var(--c-green); }
+.plug-np span { min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.plug-np strong, .plug-np em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plug-np strong { font-weight: 500; }
+.plug-np em { font-style: normal; color: var(--text-3); }
+.plug-np .icon-btn { width: 24px; height: 24px; }
+.plug-np .icon-btn .ic, .plug-vol .icon-btn .ic { width: 13px; height: 13px; }
+.plug-vol { margin: -2px 8px 4px 10px; padding: 0 8px 0 2px; display: flex; align-items: center; gap: 6px; color: var(--text-2); }
+.plug-vol .icon-btn { width: 24px; height: 24px; flex: none; }
+/* Curseur fin dessiné à la main : le natif de WebKit est trop épais pour la barre latérale. */
+.plug-vol input[type=range] { -webkit-appearance: none; appearance: none; flex: 1; min-width: 0; height: 14px; margin: 0; background: transparent; cursor: pointer; }
+.plug-vol input[type=range]::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: var(--border-2); }
+.plug-vol input[type=range]::-moz-range-track { height: 3px; border-radius: 2px; background: var(--border-2); }
+.plug-vol input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -3.5px; border: 0; border-radius: 50%; background: var(--c-green); }
+.plug-vol input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border: 0; border-radius: 50%; background: var(--c-green); }
+.plug-vol input[type=range]:focus-visible { outline: none; }
+.plug-vol input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--hover), 0 0 0 1px var(--c-green); }
+/* Réglages → Extensions. */
+.px-head { display: flex; align-items: flex-start; gap: 10px; }
+.px-head > .ic { width: 18px; height: 18px; margin-top: 1px; flex: none; color: var(--text-3); }
+.px-head > div { flex: 1; }
+.px-head p { margin: 0; }
+.px-head .cx-check { margin: 0; flex: none; }
+.px.on .px-head { margin-bottom: 8px; }
+.cx-sec .px-hosts { margin: 6px 0 0; color: var(--text-3); font-size: var(--t-1); }
+.px.on .px-hosts { margin-bottom: 12px; }
+.px-label { display: block; margin: 10px 0 4px; font-size: var(--t-1); font-weight: 500; color: var(--text-2); }
+.px .cx-key, .px .cx-row { margin-bottom: 10px; }
+a.btn { text-decoration: none; }
 .side-update { color: var(--c-blue); font-weight: 500; background: color-mix(in srgb, var(--c-blue) 9%, transparent); }
 .side-update:hover { color: var(--c-blue); background: color-mix(in srgb, var(--c-blue) 15%, transparent); }
 /* Réglages → Mises à jour */
@@ -1116,6 +1148,10 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .pj-title { display: flex; align-items: center; gap: 12px; }
 .pj-title h1 { flex: 1; margin: 0; font-size: var(--t-6); font-weight: 600; letter-spacing: -.02em; }
 .pj-title .pj-dot { width: 14px; height: 14px; border-radius: 4px; }
+/* Bouton « Note du projet », teinté de la couleur du projet (--c) pour ressortir à côté du titre. */
+.pj-note { flex: none; background: color-mix(in srgb, var(--c, var(--text)) 12%, transparent); color: color-mix(in srgb, var(--c, var(--text)) 70%, var(--text)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c, var(--text)) 30%, transparent); }
+.pj-note:hover { background: color-mix(in srgb, var(--c, var(--text)) 20%, transparent); }
+.pj-note:active { background: color-mix(in srgb, var(--c, var(--text)) 26%, transparent); }
 .pj-links { display: flex; flex-wrap: wrap; gap: 6px; }
 .pj-links a { text-decoration: none; }
 .pj-folder { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); font-size: var(--t-2); }
