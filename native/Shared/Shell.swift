@@ -158,6 +158,7 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         case "list": send(Agents.shared.list(project: pid))
         case "stop": send(Agents.shared.stop(body["run"] as? String ?? ""))
         case "worktrees": bg { folders.worktrees(pid) }
+        case "pushcheck": bg { folders.pushCheck(pid) }
         case "push": bg { folders.commitPush(pid, name: body["worktree"] as? String ?? "", message: body["message"] as? String ?? "") }
         case "discard": bg { folders.removeWorktree(pid, name: body["worktree"] as? String ?? "") }
         case "commits": bg { folders.commits(pid, days: body["days"] as? Int ?? 30) }

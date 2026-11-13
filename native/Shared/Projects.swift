@@ -40,35 +40,62 @@ final class ProjectFolders {
 
     func forget(_ id: String) { var f = folders; f.removeValue(forKey: id); folders = f }
 
-    /// Lance git en lecture seule, sans shell, avec un délai et une taille de sortie maximaux.
-    /// La sortie est lue pendant l'exécution : une sortie volumineuse ne peut pas bloquer le processus.
-    func git(_ args: [String], in dir: String, timeout: TimeInterval = 5, maxBytes: Int = 400_000) -> String? {
+    /// Git de l'utilisateur : celui de Homebrew s'il existe (même configuration et mêmes identifiants que dans
+    /// le Terminal), sinon celui d'Apple. Emplacements fixes, jamais le PATH.
+    static let gitPath: String = ["/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git"].first { FileManager.default.isExecutableFile(atPath: $0) } ?? "/usr/bin/git"
+
+    /// Lance git sans shell, avec un délai et une taille de sortie maximaux ; renvoie aussi le message d'erreur.
+    /// Les deux sorties sont lues pendant l'exécution : une sortie volumineuse ne peut pas bloquer le processus.
+    func gitRun(_ args: [String], in dir: String, timeout: TimeInterval = 5, maxBytes: Int = 400_000) -> (ok: Bool, out: String, err: String) {
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        p.executableURL = URL(fileURLWithPath: Self.gitPath)
         p.arguments = ["-C", dir, "--no-pager"] + args
         // HOME : configuration Git de l'utilisateur (identité, gestionnaire d'identifiants) ; agent SSH s'il existe.
-        var env = ["GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory()]
+        let binDir = (Self.gitPath as NSString).deletingLastPathComponent
+        var env = ["GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "PATH": "\(binDir):/usr/bin:/bin", "HOME": NSHomeDirectory()]
         if let sock = ProcessInfo.processInfo.environment["SSH_AUTH_SOCK"] { env["SSH_AUTH_SOCK"] = sock }
         p.environment = env
-        let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
-        var data = Data(); let lock = NSLock(); let reading = DispatchGroup()
-        reading.enter()
-        DispatchQueue.global(qos: .utility).async {
-            while true {
-                let chunk = out.fileHandleForReading.availableData
-                if chunk.isEmpty { break }
-                lock.lock(); if data.count < maxBytes { data.append(chunk) }; lock.unlock()
+        let out = Pipe(), err = Pipe(); p.standardOutput = out; p.standardError = err
+        var data = Data(), edata = Data(); let lock = NSLock(); let reading = DispatchGroup()
+        for (pipe, isErr) in [(out, false), (err, true)] {
+            reading.enter()
+            DispatchQueue.global(qos: .utility).async {
+                while true {
+                    let chunk = pipe.fileHandleForReading.availableData
+                    if chunk.isEmpty { break }
+                    lock.lock()
+                    if isErr { if edata.count < 20_000 { edata.append(chunk) } } else if data.count < maxBytes { data.append(chunk) }
+                    lock.unlock()
+                }
+                reading.leave()
             }
-            reading.leave()
         }
-        do { try p.run() } catch { return nil }
+        do { try p.run() } catch { return (false, "", "Git introuvable.") }
         let deadline = Date().addingTimeInterval(timeout)
         while p.isRunning && Date() < deadline { usleep(20_000) }
-        if p.isRunning { p.terminate(); return nil }
+        let timedOut = p.isRunning
+        if timedOut { p.terminate() }
         _ = reading.wait(timeout: .now() + 2)
-        guard p.terminationStatus == 0 else { return nil }
         lock.lock(); defer { lock.unlock() }
-        return String(decoding: data.prefix(maxBytes), as: UTF8.self)
+        let e = String(decoding: edata, as: UTF8.self)
+        return (!timedOut && p.terminationStatus == 0, String(decoding: data.prefix(maxBytes), as: UTF8.self), timedOut ? "Délai dépassé." : e)
+    }
+    func git(_ args: [String], in dir: String, timeout: TimeInterval = 5, maxBytes: Int = 400_000) -> String? {
+        let r = gitRun(args, in: dir, timeout: timeout, maxBytes: maxBytes)
+        return r.ok ? r.out : nil
+    }
+    /// Dernière ligne utile d'un message d'erreur Git (sans adresse contenant des identifiants).
+    static func gitError(_ e: String) -> String {
+        let lines = e.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && !$0.hasPrefix("hint:") }
+        let line = lines.last(where: { $0.hasPrefix("fatal:") || $0.hasPrefix("error:") || $0.contains("denied") || $0.contains("rejected") }) ?? lines.last ?? ""
+        return String(line.replacingOccurrences(of: #"https://[^@\s]+@"#, with: "https://", options: .regularExpression).prefix(300))
+    }
+
+    /// Vérifie que le push est possible (push à blanc : rien n'est envoyé ni modifié sur le dépôt distant).
+    func pushCheck(_ id: String) -> [String: Any] {
+        guard let dir = path(id) else { return ["ok": false, "message": "Choisis d'abord le dossier du projet."] }
+        let r = gitRun(["push", "--dry-run", "origin", "HEAD"], in: dir, timeout: 60)
+        return r.ok ? ["ok": true, "git": Self.gitPath] : ["ok": false, "git": Self.gitPath, "message": Self.gitError(r.err)]
     }
 
     /// Changements à relire : non commités (par rapport à HEAD) ou ceux de la branche (par rapport à la branche principale).
@@ -156,15 +183,18 @@ final class ProjectFolders {
         let msg = String(message.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2000))
         if !(git(["status", "--porcelain"], in: wt) ?? "").isEmpty {
             guard !msg.isEmpty else { return ["ok": false, "message": "Message de commit vide."] }
-            guard git(["add", "-A"], in: wt, timeout: 30) != nil, git(["commit", "-q", "-m", msg], in: wt, timeout: 30) != nil else {
-                return ["ok": false, "message": "Le commit a échoué (identité Git configurée ?)."]
-            }
+            let add = gitRun(["add", "-A"], in: wt, timeout: 30)
+            let commit = add.ok ? gitRun(["commit", "-q", "-m", msg], in: wt, timeout: 30) : add
+            guard commit.ok else { return ["ok": false, "message": "Le commit a échoué : \(Self.gitError(commit.err))"] }
         }
         guard let branch = git(["rev-parse", "--abbrev-ref", "HEAD"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty, branch != "HEAD" else {
             return ["ok": false, "message": "Branche introuvable."]
         }
-        guard git(["push", "-u", "origin", branch], in: wt, timeout: 90) != nil else {
-            return ["ok": false, "message": "Le push a échoué : vérifie tes identifiants Git pour ce dépôt."]
+        let push = gitRun(["push", "-u", "origin", branch], in: wt, timeout: 90)
+        guard push.ok else {
+            let why = Self.gitError(push.err)
+            let auth = why.lowercased().contains("auth") || why.contains("403") || why.contains("could not read") || why.contains("Permission denied")
+            return ["ok": false, "message": "Le push a échoué" + (why.isEmpty ? "." : " : \(why)") + (auth ? " — dans le Terminal, lance une fois « git push » dans ce dépôt pour enregistrer tes identifiants." : "")]
         }
         return ["ok": true, "branch": branch]
     }

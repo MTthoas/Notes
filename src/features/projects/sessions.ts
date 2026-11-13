@@ -9,6 +9,9 @@ import * as github from '../../integrations/github/api.ts';
 import { esc } from '../../lib/markdown.ts';
 import { icon, rel, modal, need, toast, confirmBox, errMsg, $ } from '../../ui/kit.ts';
 import * as review from './review.ts';
+import * as store from '../../core/store.ts';
+import * as model from './model.ts';
+import { menu } from '../../ui/kit.ts';
 import type { Project } from './model.ts';
 
 interface Tokens { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -28,12 +31,42 @@ const elapsed = (r: AgentRun) => { const s = Math.max(0, Math.round(((r.finished
 const STATUS: Record<string, [string, string]> = { starting: ['amber', 'Démarrage'], running: ['amber', 'En cours'], done: ['green', 'Terminé'], error: ['red', 'Erreur'], stopped: ['gray', 'Arrêté'] };
 const pill = (s: string) => { const [c, l] = STATUS[s] ?? ['gray', s]; return `<span class="ag-pill${s === 'running' || s === 'starting' ? ' live' : ''}" style="--c:var(--c-${c})">${l}</span>`; };
 
+// ---------- Notes jointes ----------
+// Une note du projet peut servir de contexte ou de cahier des charges : son contenu est ajouté à la consigne.
+// Les notes chiffrées ou marquées #privé ne sont jamais envoyées.
+const MAX_NOTE = 20000, MAX_ALL = 60000;
+let pending: { project: string; notes: string[]; prompt: string } | null = null;
+const titleOf = (id: string) => store.get(id)?.title.trim() || 'Sans titre';
+const chip = (id: string) => `<span class="ag-note" data-note-id="${esc(id)}">${icon('notes')}${esc(titleOf(id))}<button type="button" data-ag-unnote="${esc(id)}" aria-label="Retirer la note">×</button></span>`;
+/** Notes du projet qu'on peut joindre (lisibles, ni chiffrées ni privées). */
+function attachable(p: Project): { id: string; title: string }[] {
+  return model.notesOf(p).filter(n => n.id !== p.id && ai.shareable(n) && store.getBody(n) != null).map(n => ({ id: n.id, title: n.title.trim() || 'Sans titre' }));
+}
+/** Ouvre l'onglet Claude Code du projet avec des notes déjà jointes et, éventuellement, une consigne. */
+export function handoff(p: Project, { notes = [] as string[], prompt = '' } = {}): void { pending = { project: p.id, notes, prompt }; selected = null; }
+/** Consigne finale : le texte de l'utilisateur, puis le contenu des notes jointes. */
+function withNotes(prompt: string, ids: string[]): { text: string; refused: string[] } {
+  const parts: string[] = [], refused: string[] = []; let total = 0;
+  for (const id of ids) {
+    const n = store.get(id), body = n ? store.getBody(n) : null;
+    if (!n || body == null || !ai.shareable(n)) { refused.push(titleOf(id)); continue; }
+    const chunk = body.length > MAX_NOTE ? body.slice(0, MAX_NOTE) + '\n…(tronquée)' : body;
+    if (total + chunk.length > MAX_ALL) { refused.push(titleOf(id)); continue; }
+    total += chunk.length; parts.push(`## Note « ${n.title.trim() || 'Sans titre'} »\n\n${chunk}`);
+  }
+  const head = prompt || (parts.length === 1 ? 'Réalise ce que décrit la note jointe.' : 'Réalise ce que décrivent les notes jointes.');
+  return { text: parts.length ? `${head}\n\n---\nNotes du projet jointes par l’utilisateur (contexte et cahier des charges) :\n\n${parts.join('\n\n')}` : head, refused };
+}
+
 // ---------- Consigne ----------
 export function composerHTML(p: Project, { session = '', compact = false, machine = '' } = {}): string {
   const models = ai.CC_MODELS.map(([v, l]) => `<option value="${v}">${v ? l : 'Modèle par défaut'}</option>`).join('');
   if (session) return `<form class="ag-compose ag-continue" data-session="${esc(session)}"${machine ? ` data-machine="${esc(machine)}"` : ''}><textarea name="prompt" rows="2" placeholder="Continuer cette session : précise, corrige, demande la suite…" aria-label="Continuer la session"></textarea>
     <div class="ag-opts"><span class="ag-hint">${icon('history')}Reprend la session là où elle s’est arrêtée, dans le même dossier.</span><button class="btn btn-primary">${icon('play')}Envoyer<kbd>⌘↩</kbd></button></div></form>`;
-  return `<form class="ag-compose${compact ? ' compact' : ''}"><textarea name="prompt" rows="${compact ? 1 : 3}" placeholder="Que doit faire Claude Code dans ${esc(p.name)} ? Ex. « Ajoute des tests au parseur de dates »" aria-label="Consigne pour Claude Code"></textarea>
+  const pre = pending?.project === p.id ? pending : null; if (pre && !compact) pending = null;
+  const notes = pre && !compact ? pre.notes : [];
+  return `<form class="ag-compose${compact ? ' compact' : ''}" data-notes="${esc(notes.join(','))}"><textarea name="prompt" rows="${compact ? 1 : 3}" placeholder="Que doit faire Claude Code dans ${esc(p.name)} ? Ex. « Ajoute des tests au parseur de dates »" aria-label="Consigne pour Claude Code">${pre && !compact ? esc(pre.prompt) : ''}</textarea>
+    <div class="ag-ctx">${notes.map(chip).join('')}<button type="button" class="ag-addnote" data-ag-note>${icon('plus')}Joindre une note</button></div>
     <div class="ag-opts">
       <div class="ag-seg" role="radiogroup" aria-label="Mode"><label><input type="radio" name="mode" value="edit" checked><span>${icon('pencil')}Modifier</span></label><label><input type="radio" name="mode" value="read"><span>${icon('search')}Analyser</span></label></div>
       ${bridge.local() && machine !== 'server' ? '<label class="ag-check" title="Autorise npm test et npm run … : le code du projet peut alors s’exécuter"><input type="checkbox" name="tests">Tests npm</label>' : ''}
@@ -53,13 +86,26 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
     if (hint) hint.innerHTML = t.value === 'edit' ? `${icon('shield')}Copie isolée du dépôt : ton dossier reste intact.` : `${icon('eye')}Lecture seule : analyse et propose, sans rien modifier.`;
     if (tests) { tests.disabled = t.value !== 'edit'; if (tests.disabled) tests.checked = false; }
   });
+  root.addEventListener('click', e => {
+    const t = e.target as HTMLElement, f = t.closest<HTMLFormElement>('.ag-compose'); if (!f) return;
+    const ids = () => (f.dataset.notes || '').split(',').filter(Boolean);
+    const un = t.closest<HTMLElement>('[data-ag-unnote]');
+    if (un) { f.dataset.notes = ids().filter(x => x !== un.dataset.agUnnote).join(','); un.closest('.ag-note')?.remove(); return; }
+    const add = t.closest<HTMLElement>('[data-ag-note]'); if (!add) return;
+    const have = new Set(ids()), list = attachable(p).filter(n => !have.has(n.id));
+    menu(add, list.length ? [{ label: 'Joindre une note du projet' }, ...list.map(n => ({ label: n.title, icon: 'notes', run: () => { f.dataset.notes = [...ids(), n.id].join(','); add.insertAdjacentHTML('beforebegin', chip(n.id)); } }))]
+      : [{ label: model.notesOf(p).length > 1 ? 'Toutes les notes lisibles sont déjà jointes' : `Aucune note dans ce projet : ajoute #${p.tag} à une note` }]);
+  });
   root.addEventListener('keydown', e => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (e.target as HTMLElement).closest('.ag-compose')) { e.preventDefault(); (e.target as HTMLElement).closest<HTMLFormElement>('form')?.requestSubmit(); }
   });
   root.addEventListener('submit', async e => {
     const f = (e.target as HTMLElement).closest<HTMLFormElement>('.ag-compose'); if (!f) return;
     e.preventDefault(); e.stopPropagation();
-    const ta = need<HTMLTextAreaElement>('textarea', f), prompt = ta.value.trim(); if (!prompt) { ta.focus(); return; }
+    const ta = need<HTMLTextAreaElement>('textarea', f), noteIds = (f.dataset.notes || '').split(',').filter(Boolean);
+    if (!ta.value.trim() && !noteIds.length) { ta.focus(); return; }
+    const built = withNotes(ta.value.trim(), noteIds), prompt = built.text;
+    if (built.refused.length) toast(`Non jointe${built.refused.length > 1 ? 's' : ''} (verrouillée, privée ou trop longue) : ${built.refused.join(', ')}`);
     const btn = need<HTMLButtonElement>('button.btn-primary', f), label = btn.innerHTML;
     const val = (n: string) => (f.elements.namedItem(n) as HTMLInputElement | null);
     const body: Record<string, unknown> = { project: p.id, prompt };
@@ -69,7 +115,7 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
     const r = await bridge.call('agent', 'start', body, 60000);
     btn.disabled = false; btn.innerHTML = label;
     if (!r.ok) { toast(r.message ?? 'Lancement impossible.'); return; }
-    ta.value = '';
+    ta.value = ''; f.dataset.notes = ''; f.querySelectorAll('.ag-note').forEach(x => x.remove());
     toast(f.dataset.session ? 'Session reprise' : 'Claude Code est au travail');
     onStarted(r as unknown as AgentRun);
   });
