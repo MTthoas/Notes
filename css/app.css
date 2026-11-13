@@ -1439,3 +1439,21 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .sv-facts dd { margin: 3px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sv-box .ss-h { margin: 4px 0 -4px; }
 @media (max-width: 760px) { .sv-grid, .sv-facts { grid-template-columns: minmax(0, 1fr); } .sv-act { margin-left: 0; } }
+
+/* ---------- Notes et tâches confiées à Claude Code ---------- */
+.ag-ctx { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 12px 2px; }
+.ag-note { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px 0 9px; border-radius: 13px; background: color-mix(in srgb, var(--c-orange) 12%, transparent); color: var(--text); font-size: var(--t-1); font-weight: 500; max-width: 280px; }
+.ag-note .ic { flex: none; width: 12px; height: 12px; color: var(--c-orange); }
+.ag-note button { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--text-3); font-size: 14px; line-height: 1; }
+.ag-note button:hover { background: var(--hover); color: var(--text); }
+.ag-addnote { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 13px; border: 1px dashed var(--border-2); color: var(--text-3); font-size: var(--t-1); }
+.ag-addnote .ic { width: 12px; height: 12px; }
+.ag-addnote:hover { color: var(--text); border-color: var(--text-3); }
+.ag-compose.compact .ag-ctx { display: none; }
+.pj-row { display: flex; align-items: center; gap: 8px; }
+.pj-row > :first-child { flex: 1; min-width: 0; }
+.pj-cc { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 6px; color: var(--text-3); font-size: var(--t-1); opacity: 0; transition: opacity .1s; }
+.pj-cc .ic { width: 12px; height: 12px; color: var(--c-orange); }
+.pj-cc:hover { background: var(--hover); color: var(--text); }
+.pj-row:hover .pj-cc, .pj-cc:focus-visible { opacity: 1; }
+@media (hover: none) { .pj-cc { opacity: 1; } }

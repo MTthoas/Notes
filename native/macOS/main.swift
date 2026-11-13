@@ -141,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
           const d = await ask('diff', { scope: 'working' }); r.diff = d.ok ? { lines: String(d.patch || '').split('\\n').length, base: d.base } : d;
           const s = await ask('sessions', {}); r.sessions = s.ok ? { found: s.found, count: (s.sessions || []).length, first: s.sessions && s.sessions[0] ? { title: s.sessions[0].title, live: s.sessions[0].live, output: s.sessions[0].tokens.output } : null, quota: s.quota ? s.quota.status : null } : s;
           if (s.sessions && s.sessions[0]) { const one = await ask('session', { session: s.sessions[0].id }); r.session = one.ok ? { actions: (one.actions || []).length, files: (one.files || []).length } : one; }
+          const pc = await ask('pushcheck', {}, 'agent', 70000); r.pushCheck = { ok: pc.ok, git: pc.git, message: pc.message };
           const hs = await ask('server', { op: 'hosts' }, 'agent'); r.sshHosts = (hs.hosts || []).length;
           const badH = await ask('server', { op: 'set', host: '-oProxyCommand=touch /tmp/x', path: '/srv' }, 'agent'); r.serverRefusesBadHost = !badH.ok;
           const bad2 = await ask('server', { op: 'set', host: 'vps', path: '/srv/$(id)' }, 'agent'); r.serverRefusesBadPath = !bad2.ok;

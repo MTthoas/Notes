@@ -121,6 +121,7 @@ Chaque projet a un onglet **Claude Code** : tu écris une consigne, Claude Code 
 
 - **Modifier** : Claude Code travaille dans une **copie isolée** du dépôt (worktree Git dans `.claude/worktrees/`, exclue de `git status`). Ton dossier n'est jamais touché. Ensuite : **Revue** IA, **VS Code**, **Publier** (commit, push, pull request en un clic) ou **Supprimer**.
 - **Analyser** : lecture seule, Claude Code explore et propose.
+- **Notes et tâches** : joins des notes du projet à une consigne (« Joindre une note »), ou confie directement une note (bouton **Claude Code** de l'éditeur, onglet Notes) ou une tâche (onglet Tâches). Le contenu des notes jointes accompagne la consigne ; les notes chiffrées ou `#privé` ne sont jamais envoyées.
 - **Garde-fous** : `--restricted` (fichiers confinés au dossier de travail), `--permission-mode dontAsk` et une liste explicite d'outils (lecture, écriture). Aucune commande ne s'exécute, sauf si tu coches **Tests npm** (`npm test`, `npm run …`). Pas de réglages, hooks ni serveurs MCP de l'utilisateur ; trois agents au plus, 90 minutes au plus.
 - **Sessions** : toutes les sessions Claude Code du projet (y compris celles lancées hors de Studio), avec leur fil, les fichiers touchés, les tokens, la limite d'utilisation ; chacune peut être **reprise**.
 - **Vue d'ensemble** : graphiques (commits par jour, tokens Claude Code par jour, santé de la CI, avancement des tâches), barre de consigne rapide et agents en cours.
