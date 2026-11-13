@@ -42,11 +42,14 @@ final class ProjectFolders {
 
     /// Lance git en lecture seule, sans shell, avec un délai et une taille de sortie maximaux.
     /// La sortie est lue pendant l'exécution : une sortie volumineuse ne peut pas bloquer le processus.
-    private func git(_ args: [String], in dir: String, timeout: TimeInterval = 5, maxBytes: Int = 400_000) -> String? {
+    func git(_ args: [String], in dir: String, timeout: TimeInterval = 5, maxBytes: Int = 400_000) -> String? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         p.arguments = ["-C", dir, "--no-pager"] + args
-        p.environment = ["GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "PATH": "/usr/bin:/bin"]
+        // HOME : configuration Git de l'utilisateur (identité, gestionnaire d'identifiants) ; agent SSH s'il existe.
+        var env = ["GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory()]
+        if let sock = ProcessInfo.processInfo.environment["SSH_AUTH_SOCK"] { env["SSH_AUTH_SOCK"] = sock }
+        p.environment = env
         let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
         var data = Data(); let lock = NSLock(); let reading = DispatchGroup()
         reading.enter()
@@ -69,14 +72,16 @@ final class ProjectFolders {
     }
 
     /// Changements à relire : non commités (par rapport à HEAD) ou ceux de la branche (par rapport à la branche principale).
-    func diff(_ id: String, scope: String) -> [String: Any] {
-        guard let dir = path(id) else { return ["ok": false, "message": "Choisis d'abord le dossier du projet."] }
+    func diff(_ id: String, scope: String, worktree: String? = nil) -> [String: Any] {
+        guard let dir = worktree.map({ worktreeDir(id, $0) }) ?? path(id) else { return ["ok": false, "message": "Choisis d'abord le dossier du projet."] }
         if scope == "branch" {
             let base = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], in: dir)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "origin/main"
             let stat = git(["diff", "--stat", "\(base)...HEAD"], in: dir, timeout: 15) ?? ""
             let patch = git(["diff", "--unified=3", "\(base)...HEAD"], in: dir, timeout: 15) ?? ""
             return ["ok": true, "base": base, "stat": stat, "patch": patch, "truncated": patch.utf8.count >= 400_000]
         }
+        // Copie d'agent : les fichiers créés sont marqués « à ajouter » pour apparaître dans le diff (index de la copie seulement).
+        if worktree != nil { _ = git(["add", "--intent-to-add", "-A"], in: dir, timeout: 15) }
         let stat = git(["diff", "--stat", "HEAD"], in: dir, timeout: 15) ?? ""
         let patch = git(["diff", "--unified=3", "HEAD"], in: dir, timeout: 15) ?? ""
         let untracked = git(["ls-files", "--others", "--exclude-standard"], in: dir) ?? ""
@@ -96,6 +101,91 @@ final class ProjectFolders {
             out.append(["name": name, "date": f.count > 1 ? f[1] : "", "upstream": f.count > 2 ? f[2] : "", "behind": counts.first ?? 0, "ahead": counts.count > 1 ? counts[1] : 0])
         }
         return ["ok": true, "base": base, "branches": out]
+    }
+
+    // MARK: Copies isolées (worktrees) créées par les agents
+
+    /// Nom de copie isolée accepté : minuscules, chiffres et tirets (jamais un chemin).
+    static func validWorktree(_ name: String) -> Bool {
+        !name.isEmpty && name.count <= 64 && name.first != "-" && name.allSatisfy { ($0.isLowercase && $0.isASCII) || $0.isNumber || $0 == "-" }
+    }
+    func worktreeDir(_ id: String, _ name: String) -> String? {
+        guard Self.validWorktree(name), let dir = path(id) else { return nil }
+        let wt = dir + "/.claude/worktrees/" + name
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: wt, isDirectory: &isDir) && isDir.boolValue ? wt : nil
+    }
+    /// Les copies isolées n'apparaissent pas dans `git status` du dépôt (exclusion locale, jamais commitée).
+    func excludeWorktrees(_ dir: String) {
+        guard let gitDir = git(["rev-parse", "--git-common-dir"], in: dir)?.trimmingCharacters(in: .whitespacesAndNewlines), !gitDir.isEmpty else { return }
+        let base = gitDir.hasPrefix("/") ? gitDir : dir + "/" + gitDir
+        let file = base + "/info/exclude", line = ".claude/worktrees/"
+        let cur = (try? String(contentsOfFile: file, encoding: .utf8)) ?? ""
+        if cur.split(separator: "\n").contains(where: { $0.trimmingCharacters(in: .whitespaces) == line }) { return }
+        try? FileManager.default.createDirectory(atPath: base + "/info", withIntermediateDirectories: true)
+        try? (cur + (cur.isEmpty || cur.hasSuffix("\n") ? "" : "\n") + line + "\n").write(toFile: file, atomically: true, encoding: .utf8)
+    }
+    func isRepo(_ dir: String) -> Bool { git(["rev-parse", "--is-inside-work-tree"], in: dir)?.hasPrefix("true") == true }
+
+    /// Copies isolées du projet : branche, changements, commits d'avance sur la branche principale.
+    func worktrees(_ id: String) -> [String: Any] {
+        guard let dir = path(id) else { return ["ok": true, "worktrees": []] }
+        let raw = git(["worktree", "list", "--porcelain"], in: dir) ?? ""
+        let base = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], in: dir)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "HEAD"
+        var out: [[String: Any]] = []
+        for block in raw.components(separatedBy: "\n\n") {
+            var wtPath = "", branch = ""
+            for l in block.split(separator: "\n") {
+                if l.hasPrefix("worktree ") { wtPath = String(l.dropFirst(9)) }
+                if l.hasPrefix("branch ") { branch = String(l.dropFirst(7)).replacingOccurrences(of: "refs/heads/", with: "") }
+            }
+            guard wtPath.hasPrefix(dir + "/.claude/worktrees/") else { continue }
+            let name = (wtPath as NSString).lastPathComponent
+            guard Self.validWorktree(name) else { continue }
+            let changes = (git(["status", "--porcelain"], in: wtPath) ?? "").split(separator: "\n").count
+            let ahead = Int(git(["rev-list", "--count", "\(base)..HEAD"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+            let upstream = git(["rev-parse", "--abbrev-ref", "@{upstream}"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            out.append(["name": name, "branch": branch, "changes": changes, "ahead": ahead, "pushed": !upstream.isEmpty])
+        }
+        return ["ok": true, "worktrees": out, "base": base]
+    }
+
+    /// Valide les changements d'une copie isolée et pousse sa branche (identifiants Git habituels de l'utilisateur).
+    func commitPush(_ id: String, name: String, message: String) -> [String: Any] {
+        guard let wt = worktreeDir(id, name) else { return ["ok": false, "message": "Copie introuvable."] }
+        let msg = String(message.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2000))
+        if !(git(["status", "--porcelain"], in: wt) ?? "").isEmpty {
+            guard !msg.isEmpty else { return ["ok": false, "message": "Message de commit vide."] }
+            guard git(["add", "-A"], in: wt, timeout: 30) != nil, git(["commit", "-q", "-m", msg], in: wt, timeout: 30) != nil else {
+                return ["ok": false, "message": "Le commit a échoué (identité Git configurée ?)."]
+            }
+        }
+        guard let branch = git(["rev-parse", "--abbrev-ref", "HEAD"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty, branch != "HEAD" else {
+            return ["ok": false, "message": "Branche introuvable."]
+        }
+        guard git(["push", "-u", "origin", branch], in: wt, timeout: 90) != nil else {
+            return ["ok": false, "message": "Le push a échoué : vérifie tes identifiants Git pour ce dépôt."]
+        }
+        return ["ok": true, "branch": branch]
+    }
+
+    /// Supprime une copie isolée et sa branche locale (la branche poussée sur GitHub reste).
+    func removeWorktree(_ id: String, name: String) -> [String: Any] {
+        guard let dir = path(id), let wt = worktreeDir(id, name) else { return ["ok": false, "message": "Copie introuvable."] }
+        let branch = git(["rev-parse", "--abbrev-ref", "HEAD"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        _ = git(["worktree", "unlock", wt], in: dir)
+        guard git(["worktree", "remove", "--force", wt], in: dir, timeout: 30) != nil else { return ["ok": false, "message": "Suppression impossible."] }
+        if branch.hasPrefix("worktree-studio-") { _ = git(["branch", "-D", branch], in: dir) }
+        return ["ok": true]
+    }
+
+    /// Commits par jour sur les `days` derniers jours (toutes branches), pour les graphiques.
+    func commits(_ id: String, days: Int) -> [String: Any] {
+        guard let dir = path(id) else { return ["ok": true, "days": [:], "found": false] }
+        let raw = git(["log", "--all", "--since=\(max(1, min(days, 365))).days", "--format=%cs"], in: dir, timeout: 15) ?? ""
+        var out: [String: Int] = [:]
+        for d in raw.split(separator: "\n") { out[String(d), default: 0] += 1 }
+        return ["ok": true, "days": out, "found": true]
     }
 
     /// État du dépôt : branche, avance/retard, fichiers modifiés, dépôt GitHub d'origine.
@@ -121,8 +211,8 @@ final class ProjectFolders {
     }
 
     /// Ouvre le dossier dans le Finder, VS Code ou le Terminal.
-    func open(_ id: String, with app: String) throws {
-        guard let dir = path(id) else { throw Failure(message: "Choisis d'abord le dossier du projet.") }
+    func open(_ id: String, with app: String, worktree: String? = nil) throws {
+        guard let dir = worktree.map({ worktreeDir(id, $0) }) ?? path(id) else { throw Failure(message: "Choisis d'abord le dossier du projet.") }
         let url = URL(fileURLWithPath: dir, isDirectory: true)
         let ws = NSWorkspace.shared
         switch app {

@@ -14,15 +14,15 @@ Regarde en priorité : bugs et régressions probables, sécurité (secrets, inje
 Pas de compliments ni de résumé du diff. S'il n'y a rien de grave, dis-le en une ligne.
 Termine par les corrections à faire, en cases - [ ].`;
 
-export async function review(p: Project, scope: 'working' | 'branch'): Promise<void> {
+export async function review(p: Project, scope: 'working' | 'branch', worktree = ''): Promise<void> {
   if (!native.available()) { toast('La revue lit les changements du dossier : disponible dans l’app Studio pour Mac.'); return; }
   if (!ai.ready()) { toast('Connecte d’abord une IA (Réglages → Intelligence artificielle).'); return; }
-  const d = await native.call('project', 'diff', { project: p.id, scope }, 30000);
+  const d = await native.call('project', 'diff', { project: p.id, scope, ...(worktree ? { worktree } : {}) }, 30000);
   if (!d.ok) { toast(d.message ?? 'Impossible de lire les changements.'); return; }
   const patch = String(d.patch ?? ''), stat = String(d.stat ?? '').trim(), untracked = String(d.untracked ?? '').trim();
   if (!patch.trim()) { toast(scope === 'working' ? 'Aucun changement non commité à relire.' : `Aucune différence avec ${String(d.base)}.`); return; }
   const lines = patch.split('\n').length, provider = ai.PROVIDERS[ai.config().provider];
-  const m = modal({ cls: 'rv', title: scope === 'working' ? 'Revue des changements non commités' : `Revue de la branche (par rapport à ${String(d.base)})`, html: `
+  const m = modal({ cls: 'rv', title: worktree ? 'Revue du travail de l’agent' : scope === 'working' ? 'Revue des changements non commités' : `Revue de la branche (par rapport à ${String(d.base)})`, html: `
     <pre class="rv-stat">${esc(stat || '(aucune statistique)')}</pre>
     ${untracked ? `<p class="modal-hint">Fichiers nouveaux non suivis (non relus) : ${esc(untracked.split('\n').slice(0, 8).join(', '))}${untracked.split('\n').length > 8 ? '…' : ''}</p>` : ''}
     <p class="modal-hint">${icon('shield')}Le diff (${lines.toLocaleString('fr-FR')} lignes${d.truncated ? ', tronqué' : ''}) sera envoyé à <strong>${esc(provider)}</strong> pour relecture. Vérifie qu’il ne contient pas de secret.</p>

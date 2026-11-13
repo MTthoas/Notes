@@ -87,6 +87,7 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         if type == "badge", let n = body["count"] as? Int { Notifier.shared.badge(max(0, n)) }
         if type == "bio", let action = body["action"] as? String, let id = body["id"] as? Int { biometric(action, id: id, body: body) }
         if type == "project", let action = body["action"] as? String, let id = body["id"] as? Int { project(action, id: id, body: body) }
+        if type == "agent", let action = body["action"] as? String, let id = body["id"] as? Int { agent(action, id: id, body: body) }
         if type == "claude", let action = body["action"] as? String, let id = body["id"] as? Int { claude(action, id: id, body: body) }
         if type == "voice", let action = body["action"] as? String {
             Dictation.shared.send = { [weak self] payload in
@@ -119,14 +120,15 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         case "info":
             DispatchQueue.global(qos: .userInitiated).async { var r = folders.info(pid); r["id"] = id; self.answer(r) }
         case "open":
-            do { try folders.open(pid, with: body["app"] as? String ?? ""); answer(["id": id, "ok": true]) }
+            do { try folders.open(pid, with: body["app"] as? String ?? "", worktree: body["worktree"] as? String); answer(["id": id, "ok": true]) }
             catch let e as ProjectFolders.Failure { answer(["id": id, "ok": false, "message": e.message]) }
             catch { answer(["id": id, "ok": false, "message": error.localizedDescription]) }
         case "forget":
             folders.forget(pid); answer(["id": id, "ok": true])
         case "diff":
             let scope = body["scope"] as? String ?? "working"
-            DispatchQueue.global(qos: .userInitiated).async { var r = folders.diff(pid, scope: scope); r["id"] = id; self.answer(r) }
+            let wt = body["worktree"] as? String
+            DispatchQueue.global(qos: .userInitiated).async { var r = folders.diff(pid, scope: scope, worktree: wt); r["id"] = id; self.answer(r) }
         case "branches":
             DispatchQueue.global(qos: .userInitiated).async { var r = folders.branches(pid); r["id"] = id; self.answer(r) }
         case "site":
@@ -142,6 +144,30 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         }
         #else
         answer(["id": id, "ok": false, "message": "Disponible dans l'app Mac."])
+        #endif
+    }
+
+    /// Agents Claude Code d'un projet (voir Agents.swift) et leurs copies isolées.
+    private func agent(_ action: String, id: Int, body: [String: Any]) {
+        #if os(macOS)
+        let pid = body["project"] as? String ?? "", folders = ProjectFolders.shared
+        let send: ([String: Any]) -> Void = { var r = $0; r["id"] = id; self.answer(r) }
+        let bg: (@escaping () -> [String: Any]) -> Void = { work in DispatchQueue.global(qos: .userInitiated).async { send(work()) } }
+        switch action {
+        case "start": DispatchQueue.global(qos: .userInitiated).async { Agents.shared.start(project: pid, body: body, done: send) }
+        case "list": send(Agents.shared.list(project: pid))
+        case "stop": send(Agents.shared.stop(body["run"] as? String ?? ""))
+        case "worktrees": bg { folders.worktrees(pid) }
+        case "push": bg { folders.commitPush(pid, name: body["worktree"] as? String ?? "", message: body["message"] as? String ?? "") }
+        case "discard": bg { folders.removeWorktree(pid, name: body["worktree"] as? String ?? "") }
+        case "commits": bg { folders.commits(pid, days: body["days"] as? Int ?? 30) }
+        case "daily":
+            guard let dir = folders.path(pid) else { send(["ok": true, "tokens": [:], "sessions": [:]]); return }
+            ClaudeSessions.shared.daily(project: dir, days: body["days"] as? Int ?? 30, done: send)
+        default: send(["ok": false, "message": "Action inconnue."])
+        }
+        #else
+        answer(["id": id, "ok": false, "message": "Les agents tournent sur le Mac."])
         #endif
     }
 

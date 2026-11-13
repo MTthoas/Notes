@@ -130,6 +130,8 @@ function collect(only?: (t: Task) => boolean) {
     undated: open.filter(t => !t.due && t.own && !t.ticket),
     notes: open.filter(t => !t.due && !t.own),
     done: all.filter(t => t.done && t.own),
+    /** Toutes les tâches cochées (liste et notes), pour l'avancement d'un projet. */
+    doneAll: all.filter(t => t.done),
     doing: open.filter(t => t.status === 'doing'),
     openCount: open.length + subsOpen,
   };

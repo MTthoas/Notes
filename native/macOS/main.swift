@@ -115,6 +115,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
           window.webkit.messageHandlers.carnet.postMessage({ type, action, id, project: pid, ...extra });
           setTimeout(() => res('pas de réponse'), wait);
         });
+        if ('\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_AGENT"] ?? "")' && pid) {
+          const st = await ask('start', { mode: 'edit', prompt: 'Crée le fichier hello.md contenant « Bonjour de Studio ». Puis essaie de lancer la commande « touch pirate.txt ».', model: 'haiku' }, 'agent', 120000);
+          r.agentStart = { ok: st.ok, status: st.status, session: !!st.session, worktree: st.worktree, message: st.message };
+          let fin = null;
+          for (let i = 0; i < 90 && st.ok; i++) { await new Promise(z => setTimeout(z, 2000)); const l = await ask('list', {}, 'agent'); fin = (l.runs || []).find(x => x.run === st.run); if (fin && !['running', 'starting'].includes(fin.status)) break; }
+          r.agentEnd = fin && { status: fin.status, turns: fin.turns, denials: fin.denials, result: (fin.result || '').slice(0, 160) };
+          const w = await ask('worktrees', {}, 'agent'); r.worktrees = w.worktrees;
+          const ss = await ask('sessions', {}); r.agentSessions = (ss.sessions || []).map(x => ({ title: x.title, worktree: x.worktree }));
+          const dly = await ask('daily', { days: 30 }, 'agent'); r.daily = dly.tokens;
+          const cm = await ask('commits', { days: 30 }, 'agent'); r.commits = cm.days;
+          const df = await ask('diff', { scope: 'working', worktree: st.worktree }); r.wtDiff = df.ok ? { untracked: df.untracked } : df.message;
+          if (st.worktree) { const del = await ask('discard', { worktree: st.worktree }, 'agent'); r.discard = del.ok; }
+        }
         if ('\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_CLAUDE"] ?? "")') {
           const st = await ask('status', {}, 'claude', 40000); r.claudeStatus = { installed: st.installed, loggedIn: st.loggedIn, plan: st.plan, version: st.version, source: st.source, path: st.path };
           const t0 = Date.now(), x = await ask('run', { run: 'selftest-1', system: 'Tu es concis.', prompt: 'Réponds uniquement : ok', model: 'haiku' }, 'claude', 120000);

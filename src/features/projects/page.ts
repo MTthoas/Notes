@@ -14,6 +14,8 @@ import type { Project } from './model.ts';
 import * as flux from './flux.ts';
 import * as sessions from './sessions.ts';
 import * as review from './review.ts';
+import * as chart from '../../ui/chart.ts';
+import { cc } from '../../integrations/ai.ts';
 
 let app!: AppShell;
 export const init = (shell: AppShell): void => { app = shell; };
@@ -72,7 +74,7 @@ const section = (id: string, title: string, ic: string, body: string, cls = '') 
 
 /** Sous-menus d'un projet (aussi affichés dans la barre latérale). */
 export const TABS: [string, string, string][] = [
-  ['overview', 'Vue d’ensemble', 'home'], ['code', 'Code', 'code'], ['flux', 'Flux', 'pr'], ['sessions', 'Sessions IA', 'bot'],
+  ['overview', 'Vue d’ensemble', 'home'], ['sessions', 'Claude Code', 'terminal'], ['code', 'Code', 'code'], ['flux', 'Flux', 'pr'],
   ['tasks', 'Tâches', 'check'], ['notes', 'Notes', 'notes'], ['site', 'Site', 'link'],
 ];
 const curTab = (): string => { const t = app.viewState().tab; return t && TABS.some(x => x[0] === t) ? t : 'overview'; };
@@ -96,14 +98,69 @@ function tabBody(p: Project, tab: string): string {
   if (tab === 'tasks') return `${section('tasks', 'Tâches', 'check', taskBox(p))}${panelsHTML(p, 'tasks')}`;
   if (tab === 'notes') return section('notes', 'Notes', 'notes', noteRows(p));
   if (tab === 'site') return section('site', 'Site web', 'link', siteHTML(p));
-  const c = todo.ofProject(p.id), notes = model.notesOf(p).length - 1;
-  return `${folderBox}<div class="pj-ovs">
-    ${card('tasks', 'Tâches', 'check', `<b>${c.openCount}</b> ouvertes · ${c.doing.length} en cours${c.late.length ? ` · <span class="err">${c.late.length} en retard</span>` : ''}`)}
-    ${card('code', 'Code', 'code', p.repos.length ? 'Lecture des PR…' : 'Aucun dépôt associé')}
-    ${card('flux', 'Flux', 'pr', p.repos.length ? 'Lecture du flux…' : 'Associe un dépôt pour suivre les branches')}
-    ${card('sessions', 'Sessions IA', 'bot', native.available() ? 'Lecture des sessions…' : 'Visibles dans l’app Mac')}
-    ${card('site', 'Site', 'link', p.site ? esc(p.site.replace(/^https:\/\//, '')) : 'Ajouter le site du projet')}
-    ${card('notes', 'Notes', 'notes', `<b>${notes}</b> note${notes > 1 ? 's' : ''}`)}</div>${panelsHTML(p, 'overview')}`;
+  const notes = model.notesOf(p).length - 1;
+  return `${folderBox}
+    ${cc.onMac() ? `<section class="pj-quick">${sessions.composerHTML(p, { compact: true })}<div data-ov="agents"></div></section>` : ''}
+    <div class="pj-dash">
+      ${chartCard('code', 'Activité du code', 'code', 'commits')}
+      ${chartCard('sessions', 'Claude Code', 'terminal', 'tokens')}
+      ${chartCard('flux', 'Santé de la CI', 'pr', 'ci')}
+      ${chartCard('tasks', 'Avancement des tâches', 'check', 'tasks', tasksChart(p))}
+    </div>
+    <div class="pj-ovs">
+      ${card('code', 'Pull requests', 'github', p.repos.length ? 'Lecture des PR…' : 'Aucun dépôt associé')}
+      ${card('site', 'Site', 'link', p.site ? esc(p.site.replace(/^https:\/\//, '')) : 'Ajouter le site du projet')}
+      ${card('notes', 'Notes', 'notes', `<b>${notes}</b> note${notes > 1 ? 's' : ''}`)}</div>${panelsHTML(p, 'overview')}`;
+}
+
+// ---------- Tableau de bord ----------
+const chartCard = (tab: string, title: string, ic: string, key: string, body = '<div class="pj-skel"></div>') =>
+  `<section class="pj-chart"><header><h3>${icon(ic)}${esc(title)}</h3><button class="pj-more" data-pj-tab="${tab}">Ouvrir${icon('chevronRight')}</button></header><div class="pj-chart-b" data-ch="${key}">${body}</div></section>`;
+const kpi = (n: string, label: string, extra = '') => `<p class="pj-kpi"><strong>${n}</strong><span>${label}</span>${extra}</p>`;
+const muted = (t: string) => `<p class="pj-chart-empty">${t}</p>`;
+function tasksChart(p: Project): string {
+  const c = todo.ofProject(p.id), done = c.doneAll.length, total = done + c.openCount;
+  if (!total) return muted('Aucune tâche dans ce projet pour l’instant.');
+  return `${kpi(`${Math.round(done / total * 100)} %`, `${done} terminée${done > 1 ? 's' : ''} sur ${total}`)}${chart.meter(done, total)}
+    <dl class="pj-facts"><div><dt>Ouvertes</dt><dd>${c.openCount}</dd></div><div><dt>En cours</dt><dd>${c.doing.length}</dd></div><div><dt>En retard</dt><dd${c.late.length ? ' class="err"' : ''}>${c.late.length}</dd></div></dl>`;
+}
+const sum = (o: Record<string, number>) => Object.values(o).reduce((a, b) => a + b, 0);
+async function dashboard(root: HTMLElement, p: Project, f: Folder | null): Promise<void> {
+  const repo = p.repos[0];
+  // Activité : commits par jour (dépôt local sur le Mac, sinon GitHub).
+  void (async () => {
+    let days: Record<string, number> | null = null, src = '';
+    if (f?.path) { const r = await native.call('agent', 'commits', { project: p.id, days: 30 }, 20000); if (r.ok) { days = r.days as Record<string, number>; src = 'toutes branches'; } }
+    if (!days && repo && github.connected()) { try { days = await github.commitsPerDay(repo, 30); src = 'branche principale'; } catch { /* plus bas */ } }
+    if (!days) return fill(root, '[data-ch="commits"]', muted(repo ? 'Connecte GitHub ou choisis le dossier du projet pour voir son activité.' : 'Associe un dépôt ou choisis le dossier du projet.'));
+    const n = sum(days), pts = chart.lastDays(30, days);
+    fill(root, '[data-ch="commits"]', kpi(String(n), `commit${n > 1 ? 's' : ''} sur 30 jours`, `<em>${src}</em>`) + chart.bars(pts, { color: 'blue', unit: 'commit', summary: `${n} commits sur 30 jours` }));
+  })();
+  // Claude Code : tokens écrits par jour.
+  void (async () => {
+    if (!cc.onMac()) return fill(root, '[data-ch="tokens"]', muted('La consommation de Claude Code se lit depuis l’app Mac.'));
+    if (!f?.path) return fill(root, '[data-ch="tokens"]', muted('Choisis le dossier du projet pour suivre Claude Code.'));
+    const r = await native.call('agent', 'daily', { project: p.id, days: 30 }, 30000);
+    const tok = (r.tokens as Record<string, number>) ?? {}, n = sum(tok), ses = sum((r.sessions as Record<string, number>) ?? {});
+    fill(root, '[data-ch="tokens"]', n ? kpi(chart.fmt(n), `tokens écrits sur 30 jours`, `<em>${ses} session${ses > 1 ? 's' : ''}</em>`) + chart.bars(chart.lastDays(30, tok), { color: 'violet', unit: 'token', summary: `${n} tokens écrits par Claude Code sur 30 jours` }) : muted('Aucune session Claude Code ces 30 derniers jours.'));
+  })();
+  // CI : dernières exécutions sur la branche principale.
+  void (async () => {
+    if (!repo || !github.connected()) return fill(root, '[data-ch="ci"]', muted(repo ? 'Connecte GitHub pour suivre la CI.' : 'Associe un dépôt GitHub au projet.'));
+    try {
+      const fl = await github.flow(repo), h = fl.history, done = h.filter(x => x.state !== 'pending'), ok = done.filter(x => x.state === 'success').length;
+      if (!h.length) return fill(root, '[data-ch="ci"]', muted(`Aucune exécution de CI sur ${esc(fl.base)}.`));
+      const last = h[h.length - 1];
+      fill(root, '[data-ch="ci"]', kpi(done.length ? `${Math.round(ok / done.length * 100)} %` : '—', `réussies sur les ${h.length} dernières`, `<em><code>${esc(fl.base)}</code></em>`) + chart.strip(h)
+        + `<p class="pj-chart-foot">Dernière : <span class="${last?.state === 'success' ? 'ok' : last?.state === 'failure' ? 'err' : 'warn'}">${last?.state === 'success' ? '✓ réussie' : last?.state === 'failure' ? '✕ en échec' : '… en cours'}</span>${fl.releases[0] ? ` · version <b>${esc(fl.releases[0].tag)}</b>` : ''}</p>`);
+    } catch (e) { fill(root, '[data-ch="ci"]', muted(esc(errMsg(e)))); }
+  })();
+  chart.bindTips(root);
+}
+async function agentsStrip(root: HTMLElement, p: Project): Promise<void> {
+  const box = $('[data-ov="agents"]', root); if (!box || !cc.onMac()) return;
+  const r = await native.call('agent', 'list', { project: p.id }, 10000), list = ((r.runs as sessions.AgentRun[] | undefined) ?? []).filter(x => x.status === 'running' || x.status === 'starting');
+  box.innerHTML = list.map(x => `<button class="pj-agent" data-pj-agent="${esc(x.session)}"><i class="ss-live on"></i><span>${esc(x.prompt)}</span><em>${esc(x.lastText || 'Démarrage…')}</em>${icon('chevronRight')}</button>`).join('');
 }
 
 function detailHTML(p: Project, tab: string): string {
@@ -129,7 +186,10 @@ async function hydrate(root: HTMLElement, p: Project, tab: string): Promise<void
     fill(root, '[data-sec="branches"] .pj-sec-body', list.length ? list.map(b => `<div class="pj-br"><code>${esc(b.name)}</code>${b.name === f?.branch ? '<em class="pj-badge approved">actuelle</em>' : ''}${b.upstream ? '' : '<em class="pj-badge">locale</em>'}<span>${b.ahead ? `↑${b.ahead} ` : ''}${b.behind ? `↓${b.behind}` : ''}</span><time>${esc(rel(Date.parse(b.date)))}</time></div>`).join('') : '<p class="hm-empty">Choisis le dossier du projet pour voir ses branches.</p>');
   }
   if (tab === 'site' && p.site && native.available()) void checkSite(root, p);
-  if (tab === 'overview') void overview(root, p, f);
+  if (tab === 'overview') {
+    void overview(root, p, f); void dashboard(root, p, f); void agentsStrip(root, p);
+    sessions.bindComposer(root, p, r => { sessions.select(r.session || null); void go(p.id, 'sessions'); });
+  }
 }
 
 async function checkSite(root: HTMLElement, p: Project): Promise<void> {
@@ -147,14 +207,6 @@ async function overview(root: HTMLElement, p: Project, f: Folder | null): Promis
       const failing = pulls.filter(x => x.ci === 'failure').length, ready = pulls.filter(x => x.review === 'approved' && x.ci === 'success').length;
       fill(root, '[data-ov="code"]', `<b>${pulls.length}</b> PR ouverte${pulls.length > 1 ? 's' : ''}${failing ? ` · <span class="err">${failing} CI en échec</span>` : ''}${ready ? ` · <span class="ok">${ready} prête${ready > 1 ? 's' : ''}</span>` : ''}${f?.branch ? ` · sur <code>${esc(f.branch)}</code>` : ''}`);
     }).catch(() => fill(root, '[data-ov="code"]', 'GitHub ne répond pas'));
-    github.flow(repo).then(fl => {
-      const rel0 = fl.releases[0];
-      fill(root, '[data-ov="flux"]', `<code>${esc(fl.base)}</code> ${fl.baseCi === 'success' ? '<span class="ok">CI verte</span>' : fl.baseCi === 'failure' ? '<span class="err">CI en échec</span>' : fl.baseCi === 'pending' ? 'CI en cours' : ''}${rel0 ? ` · dernière version ${esc(rel0.tag)}` : ''}`);
-    }).catch(() => fill(root, '[data-ov="flux"]', 'GitHub ne répond pas'));
-  }
-  if (native.available() && f?.path) {
-    const r = await native.call('project', 'sessions', { project: p.id }, 20000), s = (r.sessions as { title: string; live: boolean; tokens: { output: number }; updated: string }[] | undefined)?.[0];
-    fill(root, '[data-ov="sessions"]', s ? `${s.live ? '<span class="ok">● en cours</span> · ' : ''}${esc(s.title)} · ${esc(rel(Date.parse(s.updated)))}` : 'Aucune session');
   }
   if (p.site && native.available()) {
     const r = await native.call('project', 'site', { url: p.site }, 20000);
@@ -228,6 +280,8 @@ export function mount(main: HTMLElement): void {
     if (open) { await go(open.dataset.pjOpen || null); return; }
     const tb = t.closest('[data-pj-tab]');
     if (tb && p) { await app.setView({ type: 'projets', project: p.id, tab: tb.dataset.pjTab ?? 'overview' }); return; }
+    const ag = t.closest('[data-pj-agent]');
+    if (ag && p) { sessions.select(ag.dataset.pjAgent || null); await go(p.id, 'sessions'); return; }
     const issue = t.closest('.lv-row[data-issue]');
     if (issue) { void import('../../integrations/linear/page.ts').then(m => m.openTicket(issue.dataset.issue ?? '')); return; }
     const b = t.closest('[data-pj]'); if (!b) return;

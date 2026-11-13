@@ -16,17 +16,32 @@ final class ClaudeSessions {
         var tools: [String: Int] = [:]; var files: [String] = []
         var actions: [Action] = []
         var quota: [String: Any]?
+        var cwd = ""
+        /// Tokens écrits par jour (AAAA-MM-JJ), pour les graphiques du projet.
+        var daily: [String: Int] = [:]
     }
     private var states: [String: State] = [:]
     private let queue = DispatchQueue(label: "studio.sessions")
 
-    /// Dossier des sessions de Claude Code pour un dossier de projet.
-    private func dir(for project: String) -> URL? {
+    /// Dossiers des sessions de Claude Code pour un dossier de projet : le dossier lui-même
+    /// et ses copies isolées (worktrees créés par Claude Code dans .claude/worktrees/).
+    private func dirs(for project: String) -> [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects", isDirectory: true)
         let encoded = String(project.map { $0.isLetter || $0.isNumber ? $0 : "-" })
-        let direct = home.appendingPathComponent(encoded, isDirectory: true)
-        if FileManager.default.fileExists(atPath: direct.path) { return direct }
-        return nil
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: home.path)) ?? []
+        return names.filter { $0 == encoded || $0.hasPrefix(encoded + "--claude-worktrees-") }
+            .map { home.appendingPathComponent($0, isDirectory: true) }
+    }
+    private func files(for project: String, maxAge: TimeInterval? = nil) -> [URL] {
+        let limit = maxAge.map { Date().addingTimeInterval(-$0) } ?? .distantPast
+        return dirs(for: project).flatMap { (try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] }
+            .filter { $0.pathExtension == "jsonl" && self.mtime($0) > limit }
+            .sorted { self.mtime($0) > self.mtime($1) }
+    }
+    private func mtime(_ u: URL) -> Date { (try? u.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast }
+    private func file(_ project: String, _ session: String) -> URL? {
+        guard !session.isEmpty, session.count <= 64, session.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }) else { return nil }
+        return dirs(for: project).map { $0.appendingPathComponent(session + ".jsonl") }.first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     private func clip(_ s: String, _ n: Int) -> String { s.count > n ? String(s.prefix(n)) + "…" : s }
@@ -36,6 +51,7 @@ final class ClaudeSessions {
         if !ts.isEmpty { if st.started.isEmpty { st.started = ts }; st.updated = ts }
         if let b = e["gitBranch"] as? String, !b.isEmpty { st.branch = b }
         if let q = e["quotaLimits"] as? [String: Any] { st.quota = q }
+        if st.cwd.isEmpty, let c = e["cwd"] as? String { st.cwd = c }
         switch e["type"] as? String ?? "" {
         case "ai-title": if let t = e["aiTitle"] as? String { st.title = t }
         case "user":
@@ -52,6 +68,7 @@ final class ClaudeSessions {
                 st.seen.insert(id)
                 st.tokIn += u["input_tokens"] as? Int ?? 0; st.tokOut += u["output_tokens"] as? Int ?? 0
                 st.tokCacheRead += u["cache_read_input_tokens"] as? Int ?? 0; st.tokCacheWrite += u["cache_creation_input_tokens"] as? Int ?? 0
+                if ts.count >= 10 { st.daily[String(ts.prefix(10)), default: 0] += u["output_tokens"] as? Int ?? 0 }
             }
             for b in m["content"] as? [[String: Any]] ?? [] {
                 if b["type"] as? String == "text", let t = b["text"] as? String, !t.isEmpty { push(st, Action(at: ts, kind: "text", text: clip(t, 400))) }
@@ -92,8 +109,9 @@ final class ClaudeSessions {
     }
 
     private func summary(_ url: URL, _ st: State) -> [String: Any] {
-        let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-        return ["id": url.deletingPathExtension().lastPathComponent, "title": st.title.isEmpty ? (st.lastPrompt.isEmpty ? "Session" : clip(st.lastPrompt, 80)) : st.title,
+        let mtime = self.mtime(url)
+        let worktree = st.cwd.range(of: "/.claude/worktrees/").map { String(st.cwd[$0.upperBound...]) } ?? ""
+        return ["id": url.deletingPathExtension().lastPathComponent, "worktree": worktree, "title": st.title.isEmpty ? (st.lastPrompt.isEmpty ? "Session" : clip(st.lastPrompt, 80)) : st.title,
                 "branch": st.branch, "started": st.started, "updated": st.updated, "live": Date().timeIntervalSince(mtime) < 45,
                 "models": Array(st.models).sorted(), "prompts": st.prompts, "lastPrompt": st.lastPrompt,
                 "tokens": ["input": st.tokIn, "output": st.tokOut, "cacheRead": st.tokCacheRead, "cacheWrite": st.tokCacheWrite],
@@ -103,11 +121,8 @@ final class ClaudeSessions {
     /// Sessions du dossier, les plus récentes d'abord, et l'état de la limite d'utilisation de Claude Code.
     func list(project folder: String, done: @escaping ([String: Any]) -> Void) {
         queue.async {
-            guard let d = self.dir(for: folder) else { return done(["ok": true, "sessions": [], "found": false]) }
-            let files = ((try? FileManager.default.contentsOfDirectory(at: d, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
-                .filter { $0.pathExtension == "jsonl" }
-                .sorted { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) > ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
-                .prefix(20)
+            let files = self.files(for: folder).prefix(25)
+            if files.isEmpty { return done(["ok": true, "sessions": [], "found": false]) }
             var out: [[String: Any]] = [], quota: [String: Any]? = nil
             for f in files { if let st = self.refresh(f) { out.append(self.summary(f, st)); if quota == nil { quota = st.quota } } }
             done(["ok": true, "found": true, "sessions": out, "quota": quota ?? NSNull()])
@@ -117,13 +132,33 @@ final class ClaudeSessions {
     /// Fil d'une session : ses dernières actions (prompts, réponses, outils).
     func detail(project folder: String, session: String, done: @escaping ([String: Any]) -> Void) {
         queue.async {
-            guard session.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }), let d = self.dir(for: folder) else { return done(["ok": false, "message": "Session introuvable."]) }
-            let f = d.appendingPathComponent(session + ".jsonl")
-            guard let st = self.refresh(f) else { return done(["ok": false, "message": "Session introuvable."]) }
+            guard let f = self.file(folder, session), let st = self.refresh(f) else { return done(["ok": false, "message": "Session introuvable."]) }
             var r = self.summary(f, st)
             r["ok"] = true
             r["actions"] = st.actions.suffix(80).map { ["at": $0.at, "kind": $0.kind, "text": $0.text] }
             done(r)
+        }
+    }
+
+    /// Tokens écrits par jour sur les `days` derniers jours, toutes sessions du projet confondues.
+    func daily(project folder: String, days: Int, done: @escaping ([String: Any]) -> Void) {
+        queue.async {
+            var sum: [String: Int] = [:], sessions: [String: Int] = [:]
+            for f in self.files(for: folder, maxAge: TimeInterval(days + 1) * 86400) {
+                guard let st = self.refresh(f) else { continue }
+                for (d, n) in st.daily { sum[d, default: 0] += n }
+                if let d = st.started.split(separator: "T").first { sessions[String(d), default: 0] += 1 }
+            }
+            done(["ok": true, "tokens": sum, "sessions": sessions])
+        }
+    }
+
+    /// Dossier de travail d'une session (pour la reprendre au même endroit), s'il appartient bien au projet.
+    func cwd(project folder: String, session: String) -> String? {
+        queue.sync {
+            guard let f = self.file(folder, session), let st = self.refresh(f), !st.cwd.isEmpty else { return nil }
+            let real = URL(fileURLWithPath: st.cwd).standardizedFileURL.path
+            return real == folder || real.hasPrefix(folder + "/.claude/worktrees/") ? real : nil
         }
     }
 }
