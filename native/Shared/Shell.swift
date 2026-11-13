@@ -190,6 +190,9 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         case "login": cc.login(done: send)
         case "run": cc.run(body, done: send)
         case "cancel": cc.cancel(body["run"] as? String ?? ""); send(["ok": true])
+        // Utilisation de l'abonnement (voir ClaudeUsage.swift) : tokens des journaux locaux, et limites si l'utilisateur les a activées.
+        case "usage": ClaudeUsage.shared.local(done: send)
+        case "limits": ClaudeUsage.shared.limits(op: body["op"] as? String ?? "", done: send)
         default: send(["ok": false, "message": "Action inconnue."])
         }
         #else

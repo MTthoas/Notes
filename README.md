@@ -105,7 +105,7 @@ Chaque projet a ses **sous-menus**, aussi listés dans la barre latérale :
 
 - **Sessions IA** : l'app Mac lit les journaux locaux de Claude Code (`~/.claude/projects/…`), en lecture seule ; rien ne quitte la machine.
 - **Revue IA** : le diff est lu en local, montré, puis envoyé à l'IA branchée seulement après ton clic ; la revue peut être enregistrée comme note du projet.
-- **Consommation** (Réglages → IA) : tokens du mois par fournisseur et modèle, et ce qu'il reste sur le budget mensuel que tu fixes.
+- **Consommation des clés API** (Réglages → IA) : tokens du mois par fournisseur et modèle, et ce qu'il reste sur le budget mensuel que tu fixes. L'utilisation de l'abonnement Claude est à part, dans la carte Claude Code.
 
 ## Claude Code (ton abonnement, sans clé API)
 
@@ -114,12 +114,13 @@ Sur Mac, Studio peut passer par le **Claude Code** installé sur la machine, con
 - Claude Code tourne **sans ses propres outils** (`--tools ""`), sans serveur MCP, sans tes réglages ni tes hooks, sans session enregistrée, dans un dossier vide propre à Studio. Il ne lance aucune commande et ne lit aucun fichier.
 - Les automatisations gardent leurs outils (ranger une note, créer une tâche…) : Claude Code renvoie les appels sous forme structurée, Studio les exécute, avec ton accord pour toute modification.
 - La consommation passe par les limites de ton abonnement : elle est comptée à part du budget des clés API.
+- **Utilisation de l'abonnement** (dans la carte Claude Code) : les tokens consommés par Claude Code sur ce Mac (5 dernières heures, aujourd'hui, 7 jours, par modèle), lus dans ses journaux locaux, toutes sessions confondues. Sur demande (**Afficher mes limites**), la part utilisée de la session de 5 heures et de la semaine, comme `/usage` : Studio lit alors la connexion de Claude Code dans le trousseau (macOS demande ton accord) et interroge `api.anthropic.com`, en lecture seule. Le jeton ne quitte jamais l'app native et n'est jamais renouvelé par Studio.
 
 ## Piloter ses projets : Claude Code, serveurs, à distance
 
 Chaque projet a un onglet **Claude Code** : tu écris une consigne, Claude Code travaille dans le dépôt du projet, et tu suis tout en direct.
 
-- **Modifier** : Claude Code travaille dans une **copie isolée** du dépôt (worktree Git dans `.claude/worktrees/`, exclue de `git status`). Ton dossier n'est jamais touché. Ensuite : **Revue** IA, **VS Code**, **Publier** (commit, push, pull request en un clic) ou **Supprimer**.
+- **Modifier** : Claude Code travaille dans une **copie isolée** du dépôt (worktree Git dans `.claude/worktrees/`, exclue de `git status`). Ton dossier n'est jamais touché. Ensuite : **Revue** IA, **VS Code**, **Publier** (commit, push, pull request en un clic) ou **Supprimer**. À la publication, Studio propose le type (`feat`, `fix`, `chore`…) et des titres au format des commits conventionnels, rédigés par l'IA à partir de la consigne, du compte rendu de l'agent et de la liste des fichiers modifiés.
 - **Analyser** : lecture seule, Claude Code explore et propose.
 - **Garde-fous** : `--restricted` (fichiers confinés au dossier de travail), `--permission-mode dontAsk` et une liste explicite d'outils (lecture, écriture). Aucune commande ne s'exécute, sauf si tu coches **Tests npm** (`npm test`, `npm run …`). Pas de réglages, hooks ni serveurs MCP de l'utilisateur ; trois agents au plus, 90 minutes au plus.
 - **Sessions** : toutes les sessions Claude Code du projet (y compris celles lancées hors de Studio), avec leur fil, les fichiers touchés, les tokens, la limite d'utilisation ; chacune peut être **reprise**.

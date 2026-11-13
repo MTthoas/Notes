@@ -133,11 +133,43 @@ function detailHTML(raw: Partial<Session> & { actions?: Action[] }, root: string
 }
 
 // ---------- Actions sur les copies ----------
+// Titres au format des commits conventionnels : « type: description ».
+const TYPES: [string, string][] = [['feat', 'Nouvelle fonctionnalité'], ['fix', 'Correction de bug'], ['chore', 'Entretien, configuration, dépendances'], ['refactor', 'Refonte sans changement de comportement'], ['docs', 'Documentation'], ['test', 'Tests']];
+const CONV = /^(feat|fix|chore|refactor|docs|test|perf|ci|build|style)(\([\w./-]+\))?!?:\s*/i;
+const withType = (type: string, title: string): string => `${type}: ${title.replace(CONV, '').trim()}`.slice(0, 72);
+/** Type le plus probable d'après la consigne et le compte rendu de l'agent. */
+function guessType(text: string): string {
+  const t = text.toLowerCase();
+  if (/\b(fix|bug|corrig|répar|repar|erreur|crash|plant|cass|régression|regression|ne (marche|fonctionne|s['’]affiche) (pas|plus))/.test(t)) return 'fix';
+  if (/\b(readme|documentation|docs?\b|comment(e|aire))/.test(t)) return 'docs';
+  if (/\b(refactor|refacto|nettoie|nettoy|simplifi|renomm|réorganis)/.test(t)) return 'refactor';
+  if (/\b(tests?|couverture)\b/.test(t)) return 'test';
+  if (/\b(dépendance|dependenc|bump|mets? à jour|mise à jour|config|lint|ci\b|build)/.test(t)) return 'chore';
+  return 'feat';
+}
+const TITLE_PROMPT = `Propose trois titres pour le commit et la pull request qui publient ce travail.
+Format obligatoire, celui des commits conventionnels : « type: Description », avec type parmi feat, fix, chore, refactor, docs, test (feat = nouvelle fonctionnalité, fix = correction de bug, chore = entretien).
+En anglais, à l'impératif, première lettre de la description en majuscule, sans point final, 72 caractères au plus. Décris le changement réel, pas la consigne mot pour mot.
+Mets en premier le titre que tu recommandes. Réponds uniquement par les trois titres, un par ligne, sans numéro ni commentaire.`;
+/** Titres proposés par l'IA, à partir de la consigne, du compte rendu de l'agent et de la liste des fichiers modifiés (pas du contenu du diff). */
+async function suggestTitles(p: Project, wt: string, run: AgentRun | undefined): Promise<string[]> {
+  const d = await native.call('project', 'diff', { project: p.id, scope: 'working', worktree: wt }, 30000);
+  const files = d.ok ? `${String(d.stat ?? '').trim()}\n${String(d.untracked ?? '').trim()}`.trim().slice(0, 3000) : '';
+  const r = await ai.run({ prompt: TITLE_PROMPT, tools: [], context: `Projet : ${p.name}\n\nConsigne donnée à l'agent :\n${run?.prompt ?? '(inconnue)'}\n\nCompte rendu de l'agent :\n${(run?.result ?? '').slice(0, 4000) || '(aucun)'}\n\nFichiers modifiés :\n${files || '(inconnus)'}` });
+  const out = r.text.split('\n').map(l => l.replace(/^[\s\-*•\d.)`"«]+/, '').replace(/[`"»\s]+$/, '')).filter(l => CONV.test(l) && l.replace(CONV, '').length > 2).map(l => l.slice(0, 72));
+  return [...new Set(out)].slice(0, 3);
+}
+
 async function publish(p: Project, wt: string, root: HTMLElement): Promise<void> {
   const run = runs.find(r => r.worktree === wt), repo = p.repos[0];
-  const title = (run?.prompt ?? wt.replace(/^studio-|-\d{4}-\d{4}$/g, '').replace(/-/g, ' ')).split('\n')[0]?.slice(0, 72) ?? wt;
+  const subject = ((run?.prompt ?? wt.replace(/^studio-|-\d{4}-\d{4}$/g, '').replace(/-/g, ' ')).split('\n')[0] ?? wt).trim().replace(/[.!?…]+$/, '');
+  const type = guessType(`${run?.prompt ?? wt}\n${run?.result ?? ''}`);
+  const title = withType(type, subject.charAt(0).toUpperCase() + subject.slice(1));
   const canPR = !!repo && github.connected();
+  const provider = ai.PROVIDERS[ai.config().provider], auto = ai.ready() && ai.config().provider === 'claudecode';
   const m = modal({ cls: 'ag-pub', title: 'Publier le travail de l’agent', html: `
+    <div class="pub-type"><span>Type</span><div class="ag-seg" role="radiogroup" aria-label="Type de changement">${TYPES.map(([k, l]) => `<label title="${esc(l)}"><input type="radio" name="ctype" value="${k}"${k === type ? ' checked' : ''}><span>${k}</span></label>`).join('')}</div></div>
+    <div class="pub-sugg" data-sugg>${auto ? '<em><span class="spin"></span>Claude propose des titres…</em>' : ai.ready() ? `<button type="button" class="btn" data-suggest>${icon('sparkle')}Proposer des titres avec ${esc(provider)}</button>` : ''}</div>
     <label class="pj-field">Message de commit<input class="field" name="msg" value="${esc(title)}" required></label>
     ${canPR ? `<label class="cx-check"><input type="checkbox" name="pr" checked> Ouvrir une pull request sur <strong>${esc(repo)}</strong></label>
     <label class="pj-field">Titre de la PR<input class="field" name="title" value="${esc(title)}"></label>` : `<p class="modal-hint">${repo ? 'Connecte GitHub pour ouvrir la pull request depuis Studio.' : 'Associe un dépôt GitHub au projet pour ouvrir une pull request.'}</p>`}
@@ -145,8 +177,34 @@ async function publish(p: Project, wt: string, root: HTMLElement): Promise<void>
     <p class="rv-status"></p>
     <div class="modal-actions"><button class="btn" data-x>Annuler</button><button class="btn btn-primary" data-go>${icon('upload')}Publier</button></div>` });
   need('[data-x]', m.node).onclick = m.close;
+  const f = (n: string) => m.node.querySelector<HTMLInputElement>(`[name=${n}]`);
+  // Changer de type réécrit le préfixe du message et du titre ; choisir un titre proposé remplit les deux.
+  const inputs = () => [f('msg'), f('title')].filter((i): i is HTMLInputElement => !!i);
+  const pick = (t: string) => {
+    inputs().forEach(i => { i.value = t; });
+    const k = CONV.exec(t)?.[1]?.toLowerCase(), radio = k ? m.node.querySelector<HTMLInputElement>(`[name=ctype][value="${k}"]`) : null;
+    if (radio) radio.checked = true;
+  };
+  const sugg = need('[data-sugg]', m.node);
+  const suggest = async () => {
+    sugg.innerHTML = `<em><span class="spin"></span>${esc(provider)} propose des titres…</em>`;
+    try {
+      const list = await suggestTitles(p, wt, run);
+      if (!m.node.isConnected) return;
+      sugg.innerHTML = list.length ? `<em>Titres proposés</em>${list.map(t => `<button type="button" class="lv-chip" data-title="${esc(t)}">${esc(t)}</button>`).join('')}` : '<em>Aucun titre proposé : écris le tien ci-dessous.</em>';
+      // Le titre recommandé remplace le titre par défaut, sauf si tu as déjà écrit le tien.
+      const first = list[0]; if (first && inputs().every(i => i.value === i.defaultValue)) pick(first);
+    } catch (e) { if (m.node.isConnected) sugg.innerHTML = `<em class="err">Titres non proposés : ${esc(errMsg(e))}</em>`; }
+  };
+  m.node.addEventListener('change', e => { const t = e.target as HTMLInputElement; if (t.name === 'ctype') inputs().forEach(i => { i.value = withType(t.value, i.value); }); });
+  m.node.addEventListener('click', e => {
+    const t = e.target as HTMLElement, chip = t.closest<HTMLElement>('[data-title]');
+    if (chip) pick(chip.dataset.title ?? '');
+    else if (t.closest('[data-suggest]')) void suggest();
+  });
+  if (auto) void suggest();
   need('[data-go]', m.node).onclick = async () => {
-    const go = need<HTMLButtonElement>('[data-go]', m.node), st = need('.rv-status', m.node), f = (n: string) => m.node.querySelector<HTMLInputElement>(`[name=${n}]`);
+    const go = need<HTMLButtonElement>('[data-go]', m.node), st = need('.rv-status', m.node);
     go.disabled = true; st.innerHTML = '<span class="spin"></span>Commit et push…';
     const r = await native.call('agent', 'push', { project: p.id, worktree: wt, message: f('msg')?.value ?? title }, 120000);
     if (!r.ok) { st.innerHTML = `<span class="err">${esc(r.message ?? 'Échec.')}</span>`; go.disabled = false; return; }

@@ -36,8 +36,32 @@ const PROVIDER_NAMES: Record<string, Provider> = { claude: 'anthropic', anthropi
 
 // ---------- Claude Code (abonnement, app Mac) ----------
 export interface CcStatus { installed: boolean; loggedIn?: boolean; version?: string; plan?: string; source?: string; path?: string; authMethod?: string }
+export interface CcCounts { input: number; output: number; cacheRead: number; cacheWrite: number; calls: number }
+/** Tokens consommés par Claude Code sur ce Mac (journaux locaux, tous projets). */
+export interface CcLocal { h5: CcCounts; today: CcCounts; d7: CcCounts; models: (CcCounts & { model: string })[] }
+/** Limites de l'abonnement : part utilisée (0 à 100) de chaque fenêtre, et heure de réinitialisation (secondes). */
+export interface CcLimits { enabled: boolean; ready?: boolean; message?: string; windows?: { key: string; pct: number; resetsAt?: number }[] }
 export const cc = {
   last: null as CcStatus | null,
+  local: null as CcLocal | null,
+  limits: null as CcLimits | null,
+  /** Message si l'app Mac ne sait pas (encore) donner l'utilisation. */
+  usageError: '',
+  /** Tokens consommés, lus dans les journaux de Claude Code sur ce Mac. */
+  async usage(): Promise<CcLocal | null> {
+    if (!this.onMac()) return null;
+    const r = await native.call('claude', 'usage', {}, 90000);
+    if (r.ok && r.local) { this.local = r.local as CcLocal; this.usageError = ''; }
+    else this.usageError = r.message === 'Action inconnue.' ? 'Mets à jour l’app Studio pour Mac pour voir l’utilisation de ton abonnement.' : r.message ?? 'Utilisation illisible.';
+    return this.local;
+  },
+  /** Limites de l'abonnement. `op` : 'enable' (accord donné), 'disable', 'refresh', ou vide. */
+  async limitsCall(op = ''): Promise<CcLimits | null> {
+    if (!this.onMac()) return null;
+    const r = await native.call('claude', 'limits', { op }, 180000);
+    if (r.ok) this.limits = r as unknown as CcLimits;
+    return this.limits;
+  },
   /** Claude Code ne tourne que sur le Mac où il est installé. */
   onMac: (): boolean => native.available() && document.documentElement.dataset.native === 'mac',
   usable(): boolean { return this.onMac() && this.last?.loggedIn !== false && this.last?.installed !== false; },
