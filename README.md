@@ -167,6 +167,10 @@ Dans l'onglet **Claude Code** d'un projet, tu écris une consigne, Claude Code t
 
 Si l'agent ne parvient pas à résoudre, la publication s'arrête et te donne la liste des fichiers en conflit. Une seule tâche tourne à la fois par copie, et elle continue même si la fenêtre de publication est fermée. Le jeton GitHub a besoin de « Pull requests : lecture et écriture » pour ouvrir la PR ; sans ce droit, Studio ouvre la page de la PR sur GitHub, déjà remplie.
 
+**Déjà livré, plus reproposé** : Studio relit le dépôt distant (au plus toutes les 90 s, et à la fin de chaque discussion avec un agent) et reconnaît une branche fusionnée dans la branche principale, qu'elle l'ait été par merge, rebase ou squash. Une copie fusionnée sans nouveau travail n'est plus proposée à la publication : elle repart d'elle-même de la dernière version de la branche principale, sur une nouvelle branche. Une même discussion peut ainsi livrer **plusieurs branches** ; **Nouvelle branche** fait la même chose sans attendre la fusion (la branche poussée garde sa PR). Les branches livrées par chaque copie s'affichent sous elle, fusionnées ou en attente.
+
+**Messages en attente** : pendant qu'un agent travaille, tu peux continuer à lui écrire. Tes messages s'affichent « en attente » dans le fil (tu peux en retirer un) et lui sont remis ensemble, en une seule consigne, dès qu'il a fini son tour : dans l'ordre, chacun délimité, avec la règle « le plus récent l'emporte » s'ils se contredisent. Studio ne coupe jamais l'agent en plein travail. S'il s'est arrêté ou a échoué, les messages restent en attente jusqu'à ce que tu cliques sur **Envoyer maintenant** ou que tu répondes.
+
 **Garde-fous** : `--restricted` (fichiers confinés au dossier de travail), `--permission-mode dontAsk` et une liste explicite d'outils (lecture, écriture). Aucune commande ne s'exécute, sauf si tu coches **Tests npm** (`npm test`, `npm run …`). Pas de réglages, hooks ni serveurs MCP de l'utilisateur ; trois agents au plus, 90 minutes au plus.
 
 ### Serveurs et pilotage à distance

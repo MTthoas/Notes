@@ -71,10 +71,26 @@ final class Orchestrator {
         let folders = ProjectFolders.shared
         let fail: (String) -> Void = { m in self.set(j) { $0.status = "error"; $0.step = m; $0.log.append(m) } }
 
+        // Le travail de la copie est déjà fusionné dans la branche principale et rien de nouveau n'a été fait :
+        // il n'y a rien à publier (on ne repousse jamais une branche déjà fusionnée).
+        note(j, "Vérification de ce qui est déjà fusionné…")
+        if let old = folders.recycleIfDelivered(wt, fetch: true) {
+            set(j) { $0.status = "done"; $0.step = "\(old) est déjà fusionnée dans la branche principale : rien de nouveau à publier. La copie repart de sa dernière version, sur une nouvelle branche."; $0.log.append($0.step) }
+            return
+        }
         // Copie déjà publiée : son message d'origine servira à re-valider le travail après la mise à jour.
-        let pushed = folders.gitRun(["rev-parse", "--abbrev-ref", "@{upstream}"], in: wt).ok
-        let dirty = !(folders.git(["status", "--porcelain"], in: wt) ?? "").isEmpty
         let base0 = folders.baseRef(wt, fetch: false)
+        let current = folders.currentBranch(wt) ?? ""
+        let published = folders.wasPublished(wt, branch: current, base: base0)
+        // Publiée puis fusionnée, avec du nouveau travail en cours : seul ce nouveau travail sera publié.
+        let merged = published && folders.delivered(wt, rev: "HEAD", base: base0)
+        if merged, let sha = folders.git(["rev-parse", "HEAD"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines) {
+            let subject = folders.git(["log", "-1", "--format=%s"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            folders.recordDelivery(wt, branch: current, sha: sha, merged: true, subject: subject)
+            note(j, "\(current) est déjà fusionnée : seul le nouveau travail sera publié.")
+        }
+        let pushed = published && !merged
+        let dirty = !(folders.git(["status", "--porcelain"], in: wt) ?? "").isEmpty
         let firstCommit = folders.git(["rev-list", "--reverse", "\(base0)..HEAD"], in: wt)?.split(separator: "\n").first.map(String.init)
         let previous = firstCommit.flatMap { folders.git(["log", "-1", "--format=%B", $0], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
 
@@ -134,7 +150,7 @@ final class Orchestrator {
 
     private func startAgent(project: String, session: String, prompt: String) -> [String: Any] {
         let sem = DispatchSemaphore(value: 0); var out: [String: Any] = [:]
-        Agents.shared.start(project: project, body: ["session": session, "prompt": prompt]) { r in out = r; sem.signal() }
+        Agents.shared.start(project: project, body: ["session": session, "prompt": prompt, "internal": true]) { r in out = r; sem.signal() }
         _ = sem.wait(timeout: .now() + 90)
         return out
     }

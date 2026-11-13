@@ -163,8 +163,12 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         let send: ([String: Any]) -> Void = { var r = $0; r["id"] = id; self.answer(r) }
         let bg: (@escaping () -> [String: Any]) -> Void = { work in DispatchQueue.global(qos: .userInitiated).async { send(work()) } }
         switch action {
-        case "start": DispatchQueue.global(qos: .userInitiated).async { Agents.shared.start(project: pid, body: body, done: send) }
+        case "start":
+            // « internal » est réservé à l'orchestrateur (reprise sans passer par la file des messages en attente).
+            var b = body; b["internal"] = nil
+            DispatchQueue.global(qos: .userInitiated).async { Agents.shared.start(project: pid, body: b, done: send) }
         case "list": send(Agents.shared.list(project: pid))
+        case "unqueue": send(Agents.shared.unqueue(project: pid, id: body["queued"] as? String ?? ""))
         case "stop": send(Agents.shared.stop(body["run"] as? String ?? ""))
         case "worktrees": bg { folders.worktrees(pid) }
         case "pushcheck": bg { folders.pushCheck(pid) }
@@ -173,6 +177,10 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
             let name = body["worktree"] as? String ?? ""
             if Orchestrator.shared.busy(project: pid, worktree: name) { send(["ok": false, "message": "Une publication est en cours sur cette copie."]); return }
             bg { folders.removeWorktree(pid, name: name) }
+        case "newbranch":
+            let name = body["worktree"] as? String ?? ""
+            if Orchestrator.shared.busy(project: pid, worktree: name) || Agents.shared.busy(project: pid, worktree: name) { send(["ok": false, "message": "Un agent ou une publication travaille encore dans cette copie."]); return }
+            bg { folders.newBranch(pid, name: name) }
         // Orchestrateur : publication ou mise à jour d'une copie, de bout en bout (voir Orchestrator.swift).
         case "publish": bg { Orchestrator.shared.start(kind: "publish", project: pid, worktree: body["worktree"] as? String ?? "", message: body["message"] as? String ?? "", branch: body["branch"] as? String ?? "") }
         case "sync": bg { Orchestrator.shared.start(kind: "sync", project: pid, worktree: body["worktree"] as? String ?? "") }

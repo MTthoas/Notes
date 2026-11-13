@@ -1234,6 +1234,11 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ss-msg.user { align-self: flex-end; max-width: min(88%, 680px); padding: 8px 14px 10px; border-radius: 14px 14px 4px 14px; background: color-mix(in srgb, var(--c-blue) 9%, var(--bg)); border: 1px solid color-mix(in srgb, var(--c-blue) 22%, var(--border)); }
 .ss-msg.user header strong { color: var(--c-blue); }
 .ss-msg.user p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-2); line-height: 1.55; }
+.ss-msg.user.queued { border-style: dashed; opacity: .78; }
+.ss-msg.queued .ss-wait { display: inline-flex; align-items: center; gap: 4px; font-style: normal; color: var(--text-3); }
+.ss-msg.queued .ss-wait svg { width: 13px; height: 13px; }
+.ss-msg.queued .icon-btn { margin-left: auto; width: 24px; height: 24px; }
+.ss-cut .link-btn { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
 .ss-msg.ai header strong { color: var(--c-violet); }
 .ss-msg.ai .md { font-size: var(--t-2); line-height: 1.6; overflow-wrap: anywhere; }
 .ss-msg.ai .md > :last-child { margin-bottom: 0; }
@@ -1488,7 +1493,13 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ag-tree-main { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 2px; }
 .ag-tree-main code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-tree-main em { font-style: normal; color: var(--text-3); font-size: var(--t-1); }
-.ag-tree-act { display: flex; align-items: center; gap: 6px; }
+.ag-tree-main .ag-ok { font-weight: 500; color: var(--ok); }
+.ag-hist { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.ag-hist-b { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; font-size: var(--t-1); color: var(--text-3); }
+.ag-hist-b svg { width: 12px; height: 12px; }
+.ag-hist-b code { font-size: inherit; color: var(--text-2); }
+.ag-hist-b.ok { color: var(--ok); }
+.ag-tree-act { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ag-tree-act .btn { height: 28px; }
 .ss-box .ss-h:first-child { margin-top: 4px; }
 .ss-dhead .btn { height: 28px; }

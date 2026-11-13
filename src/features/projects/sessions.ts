@@ -19,12 +19,21 @@ interface Session { id: string; title: string; /** Titre écrit par Claude Code 
 interface Quota { status?: string; resetsAt?: number; rateLimitType?: string; isUsingOverage?: boolean }
 interface Action { at: string; kind: string; text: string }
 export interface AgentRun { machine?: string; host?: string; run: string; mode: string; prompt: string; status: string; session: string; worktree: string; started: string; finished: string; result: string; lastText: string; turns: number; denials: string[]; quota?: Quota | null }
-interface Worktree { name: string; branch: string; changes: number; ahead: number; behind?: number; pushed: boolean; conflicts?: string[]; /** Titre du dernier commit de la copie, si elle en a un. */ subject?: string }
+interface Worktree {
+  name: string; branch: string; changes: number; ahead: number; behind?: number; pushed: boolean; conflicts?: string[];
+  /** Titre du dernier commit de la copie, si elle en a un. */ subject?: string;
+  /** La branche distante est exactement la copie : rien de nouveau à pousser. */ upToDate?: boolean;
+  /** Le travail poussé est déjà fusionné dans la branche principale. */ merged?: boolean;
+  /** Branches déjà livrées par cette copie (une discussion peut en livrer plusieurs), les plus récentes d'abord. */
+  history?: { branch: string; subject: string; merged: boolean }[];
+}
 /** Tâche de l'orchestrateur (Orchestrator.swift) : publication ou mise à jour d'une copie. */
 interface Job { job: string; kind: 'publish' | 'sync'; worktree: string; status: 'running' | 'done' | 'error' | 'blocked'; step: string; log: string[]; conflicts: string[]; branch: string; message: string }
 
 let selected: string | null = null, timer: ReturnType<typeof setInterval> | undefined, tick = 0;
-let runs: AgentRun[] = [], trees: Worktree[] = [], jobs: Job[] = [];
+/** Message secondaire : écrit pendant que l'agent travaillait, remis à la fin de son tour (voir Agents.swift). */
+interface Queued { id: string; session: string; text: string; at: string }
+let runs: AgentRun[] = [], trees: Worktree[] = [], jobs: Job[] = [], queued: Queued[] = [];
 const ms = (iso: string) => Date.parse(iso) || 0;
 const short = (path: string, root: string | null) => root && path.includes('/.claude/worktrees/') ? path.replace(/^.*\/\.claude\/worktrees\/[^/]+\//, '') : root && path.startsWith(root + '/') ? path.slice(root.length + 1) : path.replace(/^\/Users\/[^/]+/, '~');
 const modelName = (m: string) => m.replace(/^claude-/, '').replace(/-(\d)-(\d)$/, ' $1.$2').replace(/-/g, ' ');
@@ -222,8 +231,10 @@ async function limitsAction(op: string): Promise<void> {
 
 // ---------- Consigne ----------
 const HINT_IDLE = `${icon('history')}Reprend la conversation là où elle s’est arrêtée, dans le même dossier.`;
-const HINT_BUSY = '<span class="spin"></span>Claude travaille : arrête-le pour corriger le tir, ou attends la fin pour lui répondre.';
-/** Zone de réponse d'une conversation : tant que son agent travaille, on peut l'arrêter mais pas lui écrire. */
+const HINT_BUSY = '<span class="spin"></span>Claude travaille : écris la suite, elle lui sera remise d’un bloc à la fin de son tour. Pour corriger le tir tout de suite, arrête-le.';
+const SEND_IDLE = `${icon('play')}Envoyer<kbd>⌘↩</kbd>`, SEND_BUSY = `${icon('history')}Mettre en attente<kbd>⌘↩</kbd>`;
+/** Zone de réponse d'une conversation : pendant que son agent travaille, on peut l'arrêter, ou lui écrire
+ *  des messages secondaires qu'il lira ensemble à la fin de son tour. */
 function syncStop(box: HTMLElement): void {
   const f = $('.ag-continue', box); if (!f) return;
   const run = runs.find(r => r.session === selected && live(r)), state = run ? run.run : '';
@@ -231,7 +242,7 @@ function syncStop(box: HTMLElement): void {
   f.dataset.busy = state;
   const stopBtn = $<HTMLButtonElement>('.ag-stop', f), send = $<HTMLButtonElement>('button.btn-primary', f), hint = $('[data-hint]', f);
   if (stopBtn) { stopBtn.hidden = !run; stopBtn.dataset.run = state; }
-  if (send) send.disabled = !!run;
+  if (send && !send.disabled) send.innerHTML = run ? SEND_BUSY : SEND_IDLE;
   if (hint) hint.innerHTML = run ? HINT_BUSY : HINT_IDLE;
 }
 
@@ -240,7 +251,7 @@ export function composerHTML(p: Project, { session = '', compact = false, machin
   // Un agent lancé sur un serveur utilise la connexion Claude du serveur, pas l'abonnement lu sur le Mac.
   const lims = machine === 'server' ? '' : `<div class="ag-lims" aria-label="Utilisation de l’abonnement Claude">${limsHTML()}</div>`;
   if (session) return `<form class="ag-compose ag-continue" data-session="${esc(session)}"${machine ? ` data-machine="${esc(machine)}"` : ''}><textarea name="prompt" rows="2" placeholder="Réponds à Claude : précise, corrige, tranche, demande la suite…" aria-label="Répondre dans la session"></textarea>
-    <div class="ag-opts"><span class="ag-hint" data-hint>${HINT_IDLE}</span><button type="button" class="btn btn-danger ag-stop" data-ag="stop" hidden>${icon('stop')}Arrêter</button><button class="btn btn-primary">${icon('play')}Envoyer<kbd>⌘↩</kbd></button></div>${lims}</form>`;
+    <div class="ag-opts"><span class="ag-hint" data-hint>${HINT_IDLE}</span><button type="button" class="btn btn-danger ag-stop" data-ag="stop" hidden>${icon('stop')}Arrêter</button><button class="btn btn-primary">${SEND_IDLE}</button></div>${lims}</form>`;
   const pre = pending?.project === p.id ? pending : null; if (pre && !compact) pending = null;
   const notes = pre && !compact ? pre.notes : [];
   return `<form class="ag-compose${compact ? ' compact' : ''}" data-notes="${esc(notes.join(','))}"><textarea name="prompt" rows="${compact ? 1 : 3}" placeholder="Que doit faire Claude Code dans ${esc(p.name)} ? Ex. « Ajoute des tests au parseur de dates »" aria-label="Consigne pour Claude Code">${pre && !compact ? esc(pre.prompt) : ''}</textarea>
@@ -283,7 +294,7 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
   root.addEventListener('submit', async e => {
     const f = (e.target as HTMLElement).closest<HTMLFormElement>('.ag-compose'); if (!f) return;
     e.preventDefault(); e.stopPropagation();
-    if (f.querySelector<HTMLButtonElement>('button.btn-primary')?.disabled) return; // agent en cours, ou envoi déjà parti
+    if (f.querySelector<HTMLButtonElement>('button.btn-primary')?.disabled) return; // envoi déjà parti
     const ta = need<HTMLTextAreaElement>('textarea', f), noteIds = (f.dataset.notes || '').split(',').filter(Boolean);
     if (!ta.value.trim() && !noteIds.length) { ta.focus(); return; }
     const built = withNotes(ta.value.trim(), noteIds), prompt = built.text;
@@ -293,11 +304,17 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
     const body: Record<string, unknown> = { project: p.id, prompt };
     if (f.dataset.session) { body.session = f.dataset.session; if (f.dataset.machine) body.machine = f.dataset.machine; }
     else { body.mode = f.querySelector<HTMLInputElement>('[name=mode]:checked')?.value ?? 'edit'; body.tests = !!val('tests')?.checked; body.model = val('model')?.value ?? ''; const mc = val('machine'); if (mc && !mc.hidden) body.machine = mc.value; }
-    btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Démarrage…';
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Envoi…';
     const r = await bridge.call('agent', 'start', body, 60000);
     btn.disabled = false; btn.innerHTML = label; delete f.dataset.busy;
     if (!r.ok) { toast(r.message ?? 'Lancement impossible.'); return; }
     ta.value = ''; f.dataset.notes = ''; f.querySelectorAll('.ag-note').forEach(x => x.remove());
+    // L'agent travaille encore : le message attend la fin de son tour (il apparaît dans le fil, « en attente »).
+    if (typeof r.queued === 'number') {
+      toast(r.queued > 1 ? `${r.queued} messages en attente : Claude les lira ensemble à la fin de son tour` : 'Message en attente : Claude le lira à la fin de son tour');
+      if (cur) void paint(cur.box, cur.p);
+      return;
+    }
     toast(f.dataset.session ? 'Session reprise' : 'Claude Code est au travail');
     onStarted(r as unknown as AgentRun);
   });
@@ -318,8 +335,14 @@ function treeRow(w: Worktree): string {
   const job = jobs.find(j => j.worktree === w.name), busy = job?.status === 'running';
   const conflicts = w.conflicts?.length ? `<span class="err"> · conflits : ${esc(w.conflicts.join(', '))}</span>` : '';
   const state = busy ? ` · <span class="spin"></span>${esc(job.step)}` : job?.status === 'error' || job?.status === 'blocked' ? `<span class="err"> · ${esc(job.step)}</span>` : conflicts;
-  return `<div class="ag-tree"><span class="ag-tree-main"><code>${esc(w.branch || w.name)}</code><em>${w.changes ? `${w.changes} fichier${w.changes > 1 ? 's' : ''} modifié${w.changes > 1 ? 's' : ''}` : 'aucun changement en attente'}${w.ahead ? ` · ${w.ahead} commit${w.ahead > 1 ? 's' : ''}` : ''}${w.pushed ? ' · poussée' : ''}${w.behind ? ` · ${w.behind} commit${w.behind > 1 ? 's' : ''} de retard sur la branche principale` : ''}${state}</em></span>
-    <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `${w.behind && !busy ? `<button class="btn" data-ag="sync" data-wt="${esc(w.name)}" title="Remettre la copie sur la dernière version de la branche principale ; l'agent résout les conflits éventuels">${icon('refresh')}Mettre à jour</button>` : ''}<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${(w.changes || w.ahead) && !busy ? '' : ' disabled'}>${icon('upload')}Publier</button>${w.pushed ? `<button class="btn" data-ag="pr" data-wt="${esc(w.name)}" title="Ouvrir la page de la pull request sur GitHub">${icon('github')}PR</button>` : ''}<button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
+  // Ce qui est déjà poussé ou fusionné n'est plus proposé : « Publier » ne sert qu'à du travail nouveau.
+  const pending = w.pushed && !w.merged, fresh = w.changes > 0 || (w.ahead > 0 && !w.merged && !w.upToDate);
+  const where = w.merged ? ' · <b class="ag-ok">déjà fusionnée dans la branche principale</b>' : pending ? (w.upToDate ? ' · poussée, PR en attente de fusion' : ' · poussée, changements à republier') : '';
+  // Avec retard sur la branche principale, une copie fusionnée ou sans travail n'a rien à « mettre à jour » de visible.
+  const canSync = !!w.behind && !busy && (w.changes > 0 || pending);
+  const hist = w.history?.length ? `<span class="ag-hist">${w.history.map(h => `<span class="ag-hist-b${h.merged ? ' ok' : ''}" title="${esc(h.subject || h.branch)}">${icon(h.merged ? 'check' : 'pr')}<code>${esc(h.branch)}</code>${h.merged ? 'fusionnée' : 'PR en attente'}</span>`).join('')}</span>` : '';
+  return `<div class="ag-tree"><span class="ag-tree-main"><code>${esc(w.branch || w.name)}</code><em>${w.changes ? `${w.changes} fichier${w.changes > 1 ? 's' : ''} modifié${w.changes > 1 ? 's' : ''}` : 'aucun changement en attente'}${w.ahead && !w.merged ? ` · ${w.ahead} commit${w.ahead > 1 ? 's' : ''}` : ''}${where}${w.behind && !w.merged && (w.changes || pending) ? ` · ${w.behind} commit${w.behind > 1 ? 's' : ''} de retard sur la branche principale` : ''}${state}</em>${hist}</span>
+    <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `${canSync ? `<button class="btn" data-ag="sync" data-wt="${esc(w.name)}" title="Remettre la copie sur la dernière version de la branche principale ; l'agent résout les conflits éventuels">${icon('refresh')}Mettre à jour</button>` : ''}<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${fresh && !busy ? '' : ' disabled'} title="${fresh ? 'Publier le nouveau travail de l’agent' : w.merged ? 'Déjà fusionné : rien de nouveau à publier' : pending ? 'Déjà poussé : rien de nouveau à publier' : 'Rien à publier'}">${icon('upload')}Publier</button>${pending ? `<button class="btn" data-ag="pr" data-wt="${esc(w.name)}" title="Ouvrir la page de la pull request sur GitHub">${icon('github')}PR</button>` : ''}${pending && !w.changes && !busy ? `<button class="btn" data-ag="newbranch" data-wt="${esc(w.name)}" title="Garder cette branche pour sa PR et repartir de la dernière version de la branche principale, sur une nouvelle branche, dans la même discussion">${icon('plus')}Nouvelle branche</button>` : ''}<button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
 }
 
 function listHTML(list: Session[]): string {
@@ -355,7 +378,7 @@ const answerHTML = (text: string): string => renderMarkdown(text)
   .replace(/<input type="checkbox"/g, '<input type="checkbox" disabled');
 
 /** Découpe les étapes en blocs de conversation : demandes, réponses, et outils consécutifs regroupés. */
-function feedBlocks(actions: Action[], root: string | null, working: boolean): Block[] {
+function feedBlocks(actions: Action[], root: string | null, working: boolean, waiting: Queued[] = [], stalled = false): Block[] {
   const out: Block[] = [], seen = new Map<string, number>();
   const key = (a: Action, c: string) => { const k = `${c}|${a.at}`, n = seen.get(k) ?? 0; seen.set(k, n + 1); return n ? `${k}|${n}` : k; };
   const toolRow = (a: Action) => `<li><b>${esc(a.kind.slice(5))}</b><span>${esc(short(a.text, root))}</span></li>`;
@@ -383,6 +406,10 @@ function feedBlocks(actions: Action[], root: string | null, working: boolean): B
   flush(true);
   if (!actions.length) out.push({ key: 'empty', html: `<p class="ss-cut">${working ? 'La session démarre…' : 'Aucune étape dans cette session.'}</p>` });
   if (working) out.push({ key: 'working', html: '<div class="ss-working"><span class="spin"></span>Claude travaille…</div>' });
+  // Messages secondaires, pas encore lus par Claude : remis ensemble à la fin de son tour.
+  for (const q of waiting) out.push({ key: `queued|${q.id}`, html: `<div class="ss-msg user queued"><header><strong>Toi</strong><em class="ss-wait">${icon('history')}en attente</em><time>${esc(clock(q.at))}</time><button class="icon-btn" data-ag="unqueue" data-q="${esc(q.id)}" title="Retirer ce message" aria-label="Retirer ce message">${icon('trash')}</button></header><p>${esc(q.text)}</p></div>` });
+  // Le tour s'est fini sans eux (agent arrêté ou en erreur) : ils partent quand l'utilisateur le décide.
+  if (waiting.length && stalled) out.push({ key: 'queued-send', html: `<p class="ss-cut">${waiting.length > 1 ? 'Ces messages n’ont pas été transmis' : 'Ce message n’a pas été transmis'} : l’agent s’est arrêté avant la fin de son tour. <button class="link-btn" data-ag="flush">${icon('play')}Envoyer maintenant</button></p>` });
   return out;
 }
 
@@ -445,7 +472,10 @@ function showDetail(zone: HTMLElement, raw: Partial<Session> & { actions?: Actio
     if (cur && wantsName(named, working)) void nameSession(cur.p, named, s.actions);
   }
   const first = !feed.children.length, end = atEnd(feed);
-  if (!syncFeed(feed, feedBlocks(s.actions, root, working))) return;
+  // Messages en attente restés en plan : le dernier tour s'est terminé autrement que normalement (arrêt, erreur).
+  const latest = own.reduce<AgentRun | undefined>((a, r) => !a || ms(r.started) > ms(a.started) ? r : a, undefined);
+  const stalled = !working && !!latest && !live(latest) && latest.status !== 'done';
+  if (!syncFeed(feed, feedBlocks(s.actions, root, working, queued.filter(q => q.session === s.id), stalled))) return;
   if (first || end) feed.scrollTop = feed.scrollHeight;
   else need('.ss-jump', zone).hidden = false;
 }
@@ -529,7 +559,10 @@ async function suggestMessage(p: Project, wt: string, run: AgentRun | undefined,
   const stat = String(d.stat ?? ''), files = statFiles(stat), prompt = run?.prompt ?? wt.replace(/^studio-|-\d{4}-\d{4}$/g, '').replace(/-/g, ' ');
   // 1. le message écrit par l'agent (compte rendu le plus récent qui en contient un, sinon le fil de sa session) ;
   // 2. l'IA d'après le diff ; 3. en dernier recours, un résumé des fichiers modifiés. Jamais la consigne telle quelle.
-  const fromAgent = runs.filter(r => r.worktree === wt && r.result).map(r => agentMessage(r.result)).find(Boolean) || await sessionMessage(p, wt);
+  // Un message qui a déjà servi à une branche livrée par cette copie décrit du travail fusionné : il n'est plus proposé.
+  const tree = trees.find(t => t.name === wt), shipped = new Set((tree?.history ?? []).map(h => h.subject).concat(tree?.merged && tree.subject ? [tree.subject] : []));
+  const fresh = (m: string) => m && !shipped.has(m) ? m : '';
+  const fromAgent = runs.filter(r => r.worktree === wt && r.result).map(r => fresh(agentMessage(r.result))).find(Boolean) || fresh(await sessionMessage(p, wt));
   const draft = fromAgent || draftMessage(prompt, files);
   if ((fromAgent && !forceAI) || !d.ok || !ai.ready() || !String(d.patch ?? '').trim()) return { draft, fromAgent: !!fromAgent, ai: null, files };
   const user = `Consigne donnée à l’agent : ${prompt}\n\n${run?.result ? `Compte rendu de l’agent :\n${run.result.slice(0, 1500)}\n\n` : ''}Commits récents du dépôt :\n${String(d.log ?? '').trim() || '(aucun)'}\n\nFichiers modifiés :\n${stat}\n\nDiff (extrait) :\n\`\`\`diff\n${String(d.patch).slice(0, 20000)}\n\`\`\``;
@@ -568,6 +601,12 @@ async function publish(p: Project, wt: string, root: HTMLElement): Promise<void>
   const sugSt = need('.ag-sug-st', m.node), sugTag = need('.ag-sug', m.node), resug = need<HTMLButtonElement>('[data-resug]', m.node);
   const branchIn = need<HTMLInputElement>('[name=branch]', m.node);
   let editedMsg = false, editedTitle = false, editedBranch = false;
+  // Branche déjà poussée et pas encore fusionnée : publier la met à jour (et sa PR) ; un autre nom crée une branche à part.
+  const tree = trees.find(t => t.name === wt);
+  if (tree?.pushed && !tree.merged && tree.branch) {
+    branchIn.value = tree.branch; editedBranch = true;
+    branchIn.closest('.pj-field')?.insertAdjacentHTML('beforeend', `<em class="modal-hint">${esc(tree.branch)} est déjà poussée : publier met à jour sa PR. Un autre nom crée une nouvelle branche (qui contiendra aussi ce travail déjà poussé).</em>`);
+  }
   const subject = () => msg.value.split('\n')[0]?.trim() ?? '';
   const typeOf = () => new RegExp(`^(${TYPES})`).exec(subject())?.[1] ?? '';
   const sync = () => {
@@ -641,6 +680,8 @@ async function publish(p: Project, wt: string, root: HTMLElement): Promise<void>
     }
     if (j.status !== 'done') { go.disabled = false; return; }
     const branch = j.branch;
+    // Rien n'a été poussé : le travail était déjà fusionné dans la branche principale.
+    if (!branch) { m.close(); toast(j.step); return; }
     if (!wantPR || !repo) { m.close(); toast(`Branche ${branch} poussée`); return; }
     st.insertAdjacentHTML('beforeend', '<p class="rv-status"><span class="spin"></span>Ouverture de la pull request…</p>');
     let base = 'main';
@@ -676,6 +717,8 @@ async function refreshTrees(p: Project): Promise<void> {
   const [r, j] = await Promise.all([bridge.call('agent', 'worktrees', { project: p.id }, 30000), bridge.call('agent', 'jobs', { project: p.id }, 10000)]);
   trees = r.ok ? (r.worktrees as Worktree[]) : [];
   jobs = j.ok ? (j.jobs as Job[]) : [];
+  // Copies dont la branche vient d'être fusionnée : elles repartent de la branche principale, on le dit une fois.
+  for (const x of (r.recycled as { worktree: string; branch: string }[] | undefined) ?? []) toast(`${x.branch} est fusionnée : la copie repart de la branche principale, sur une nouvelle branche`);
 }
 
 // ---------- Montage ----------
@@ -692,8 +735,12 @@ async function paint(box: HTMLElement, p: Project): Promise<void> {
 async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
   const zone = $('.ag-zone', box); if (!zone || !box.isConnected) { clearInterval(timer); return; }
   void loadLimits(); paintLimits(); // le bandeau de l'abonnement suit son propre rythme (une lecture par minute)
+  const wasLive = new Set(runs.filter(live).map(r => r.run));
   const l = await bridge.call('agent', 'list', { project: p.id }, 10000); runs = l.ok ? (l.runs as AgentRun[]) : runs;
-  if (tick++ % 4 === 0 || (tick % 2 === 0 && jobs.some(j => j.status === 'running'))) await refreshTrees(p);
+  if (l.ok) queued = (l.queued as Queued[] | undefined) ?? [];
+  // Fin d'une discussion avec un agent : l'état de sa copie (poussée, fusionnée…) est relu tout de suite.
+  const ended = runs.some(r => wasLive.has(r.run) && !live(r));
+  if (tick++ % 4 === 0 || ended || (tick % 2 === 0 && jobs.some(j => j.status === 'running'))) await refreshTrees(p);
   const sel = selected;
   if (sel) {
     syncStop(box);
@@ -786,6 +833,20 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
       return;
     }
     if (b.dataset.ag === 'stop') { const r = await bridge.call('agent', 'stop', { run: b.dataset.run }, 10000); toast(r.ok ? 'Agent arrêté' : r.message ?? 'Impossible.'); void paint(box, p); }
+    if (b.dataset.ag === 'unqueue') {
+      const r = await bridge.call('agent', 'unqueue', { project: p.id, queued: b.dataset.q }, 10000);
+      if (!r.ok) toast(r.message ?? 'Impossible.');
+      else queued = queued.filter(q => q.id !== b.dataset.q);
+      void paint(box, p); return;
+    }
+    if (b.dataset.ag === 'flush' && selected) {
+      // Reprise sans nouveau texte : le Mac joint tous les messages en attente de la discussion.
+      const run = runs.find(r => r.session === selected);
+      b.setAttribute('disabled', '');
+      const r = await bridge.call('agent', 'start', { project: p.id, session: selected, prompt: '', ...(run?.machine === 'server' ? { machine: 'server' } : {}) }, 60000);
+      toast(r.ok ? 'Messages transmis à Claude' : r.message ?? 'Envoi impossible.');
+      void paint(box, p); return;
+    }
     if (b.dataset.ag === 'delete' && selected) { await removeSession(p, selected); return; }
     if (b.dataset.ag === 'review') await review.review(p, 'working', wt);
     if (b.dataset.ag === 'vscode') { const r = await native.call('project', 'open', { project: p.id, app: 'vscode', worktree: wt }, 15000); if (!r.ok) toast(r.message ?? 'Impossible d’ouvrir.'); }
@@ -796,6 +857,13 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
       await refreshTrees(p); void paint(box, p);
     }
     if (b.dataset.ag === 'pr') { const w = trees.find(x => x.name === wt); if (w) await openPR(p, w); }
+    if (b.dataset.ag === 'newbranch') {
+      const w = trees.find(x => x.name === wt);
+      if (!await confirmBox({ title: 'Repartir sur une nouvelle branche ?', text: `${w?.branch ? `La branche ${w.branch} reste poussée avec sa PR. ` : ''}La copie repart de la dernière version de la branche principale : la discussion avec l’agent continue, et son prochain travail sera publié sur une nouvelle branche.`, ok: 'Nouvelle branche' })) return;
+      const r = await native.call('agent', 'newbranch', { project: p.id, worktree: wt }, 60000);
+      toast(r.ok ? `Nouvelle branche : ${String(r.branch)}` : r.message === 'Action inconnue.' ? 'Mets à jour l’app Studio pour Mac.' : r.message ?? 'Impossible.');
+      await refreshTrees(p); void paint(box, p);
+    }
     if (b.dataset.ag === 'discard' && await confirmBox({ title: 'Supprimer cette copie ?', text: `${runs.some(r => live(r) && r.worktree === wt) ? 'L’agent qui y travaille sera arrêté. ' : ''}Les changements non publiés de l’agent seront perdus. Une branche déjà poussée sur GitHub reste en place.`, ok: 'Supprimer', danger: true })) {
       for (const r of runs.filter(x => live(x) && x.worktree === wt)) await bridge.call('agent', 'stop', { run: r.run }, 10000);
       const r = await native.call('agent', 'discard', { project: p.id, worktree: wt }, 30000);
