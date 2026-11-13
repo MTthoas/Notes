@@ -18,8 +18,12 @@ import * as home from './features/home.ts';
 import * as automations from './features/automations.ts';
 import * as help from './features/help.ts';
 import * as onboarding from './features/onboarding.ts';
+import * as projectsPage from './features/projects/page.ts';
+import * as projectsModel from './features/projects/model.ts';
+import { registerBuiltins } from './plugins/builtin.ts';
 import * as caret from './ui/caret.ts';
 import * as biometric from './core/biometric.ts';
+import * as native from './core/native.ts';
 import * as linear from './integrations/linear/api.ts';
 import * as vault from './core/vault.ts';
 import * as link from './integrations/link.ts';
@@ -65,15 +69,15 @@ const SC = {
   sidebar: isMac ? 'ctrl+mod+s' : 'mod+alt+s', task: 'mod+enter', bold: 'mod+b', italic: 'mod+i',
 };
 const VIEWS: Record<string, { label: string; icon: string }> = {
-  home: { label: 'Accueil', icon: 'home' }, agents: { label: 'Automatisations', icon: 'bot' }, help: { label: 'Aide', icon: 'help' }, settings: { label: 'Réglages', icon: 'gear' },
+  home: { label: 'Accueil', icon: 'home' }, agents: { label: 'Automatisations', icon: 'bot' }, help: { label: 'Aide', icon: 'help' }, projets: { label: 'Projets', icon: 'folder' }, settings: { label: 'Réglages', icon: 'gear' },
   today: { label: 'Aujourd’hui', icon: 'today' }, tasks: { label: 'Tâches', icon: 'check' }, linear: { label: 'Linear', icon: 'linear' }, github: { label: 'GitHub', icon: 'github' }, all: { label: 'Toutes les notes', icon: 'notes' },
   inbox: { label: 'Boîte de réception', icon: 'inbox' }, ephemeral: { label: 'Éphémères', icon: 'hourglass' },
   graph: { label: 'Graphe', icon: 'graph' }, trash: { label: 'Corbeille', icon: 'trash' },
 };
 /** Teinte de l'icône de chaque section dans la barre latérale. */
-const SIDE_HUE: Record<string, string> = { home: 'gray', inbox: 'blue', today: 'amber', all: 'gray', ephemeral: 'orange', tasks: 'green', agents: 'violet', help: 'blue', linear: 'indigo', github: 'gray', graph: 'teal', trash: 'gray' };
+const SIDE_HUE: Record<string, string> = { home: 'gray', inbox: 'blue', today: 'amber', all: 'gray', ephemeral: 'orange', tasks: 'green', agents: 'violet', help: 'blue', projets: 'orange', linear: 'indigo', github: 'gray', graph: 'teal', trash: 'gray' };
 const titleOf = (n: Note) => n.title.trim() || 'Sans titre';
-const WIDE = new Set(['graph', 'home', 'settings', 'tasks', 'linear', 'github', 'agents', 'help']); // vues sans colonne de liste
+const WIDE = new Set(['graph', 'home', 'settings', 'tasks', 'linear', 'github', 'agents', 'help', 'projets']); // vues sans colonne de liste
 
 function applyTheme() {
   const dark = ui.theme === 'dark' || (ui.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
@@ -168,7 +172,7 @@ function renderSidebar() {
   const idx = store.index(), v = ui.view;
   const count: Record<string, number> = { inbox: idx.live.filter(n => n.inbox).length, tasks: todo.openCount(), linear: notifs.unreadCount(), github: github.unseenCount(), ephemeral: idx.live.filter(n => n.expiresAt).length };
   const item = (type: string) => `<button class="side-item${v.type === type ? ' sel' : ''}" data-view="${type}" style="--ic:var(--c-${SIDE_HUE[type] ?? 'gray'})">${icon(VIEWS[type]?.icon ?? 'notes')}<span>${VIEWS[type]?.label ?? type}</span>${count[type] ? `<span class="side-count">${count[type]}</span>` : ''}</button>`;
-  const tags = [...idx.tags].sort((a, b) => a[0].localeCompare(b[0], 'fr'));
+  const tags = [...idx.tags].filter(([t]) => !t.startsWith('projet/')).sort((a, b) => a[0].localeCompare(b[0], 'fr'));
   const devs = vault.isOpen() ? link.devices().length : 0;
   need('#sidebar').innerHTML = `
     <div class="side-head">
@@ -182,7 +186,7 @@ function renderSidebar() {
       <div class="side-label">Notes</div>
       <div class="side-group">${item('inbox')}${item('today')}${item('all')}${count.ephemeral || v.type === 'ephemeral' ? item('ephemeral') : ''}</div>
       <div class="side-label">Organisation</div>
-      <div class="side-group">${item('tasks')}${item('agents')}</div>
+      <div class="side-group">${item('projets')}${projectsModel.projects().slice(0, 8).map(p => `<button class="side-item side-sub${v.type === 'projets' && v.project === p.id ? ' sel' : ''}" data-pj-open="${esc(p.id)}"><i class="tag-dot" style="--c:var(--c-${p.hue})"></i><span>${esc(p.name)}</span></button>`).join('')}${item('tasks')}${item('agents')}</div>
       <div class="side-label">Connexions</div>
       <div class="side-group">${item('linear')}${item('github')}</div>
       ${tags.length ? `<button class="side-label" data-act="tags" aria-expanded="${ui.tagsOpen}">${icon('chevron')}Tags</button>${ui.tagsOpen ? `<div class="side-group">${tags.map(([t, c]) => `<button class="side-item${v.type === 'tag' && v.tag === t ? ' sel' : ''}" data-tag="${esc(t)}"><i class="tag-dot" style="--c:var(--c-${hue(t)})"></i><span>${esc(t)}</span><span class="side-count">${c}</span></button>`).join('')}</div>` : ''}` : ''}
@@ -259,6 +263,7 @@ function renderMain() {
   if (ui.view.type === 'settings') return hub.mountSettings(main, ui.view.tab || 'coffre');
   if (ui.view.type === 'tasks') return todo.mount(main);
   if (ui.view.type === 'agents') return automations.mount(main);
+  if (ui.view.type === 'projets') return projectsPage.mount(main);
   if (ui.view.type === 'help') return help.mount(main);
   if (ui.view.type === 'linear') return linearView.mount(main);
   if (ui.view.type === 'github') return githubPage.mount(main);
@@ -282,6 +287,7 @@ function mountNote(main: HTMLElement, n: Note, keep: Keep | null): void {
         ${n.enc && !trashed ? tb('lock', locked ? 'lock' : 'unlock', locked ? 'Note verrouillée' : 'Verrouiller maintenant', locked ? '' : SC.lock, 'on') : ''}
         ${ro ? '' : `<div class="seg" role="tablist" title="Changer de mode (${keys(SC.mode)})">${seg.map(([m, ic, l]) => `<button role="tab" data-mode="${m}" aria-selected="${m === mode}" aria-label="${l}" title="${l}">${icon(ic)}</button>`).join('')}</div>`}
         ${ro ? '' : `<button class="btn btn-ghost" data-act="ask" title="Demander à l’IA (${keys(SC.ask)})">${icon('sparkle')}<span>Demander</span></button>`}
+        ${ro ? '' : `<button class="btn btn-ghost pj-pick" data-act="project" title="Projet de la note">${icon('folder')}<span>${esc(projectsModel.projectOfNote(n)?.name ?? 'Projet')}</span></button>`}
         ${tb('more', 'more', 'Plus d’actions')}
       </div>
     </header>
@@ -747,6 +753,10 @@ function commands() {
     c('Nouvelle note', 'compose', () => newNote(), SC.newNote, 'créer ajouter'),
     c('Capture rapide', 'bolt', openCapture, SC.capture, 'inbox idée todo'),
     c('Aujourd’hui', 'today', () => setView({ type: 'today' }), SC.today, 'note du jour quotidienne daily'),
+    c('Projets', 'folder', () => setView({ type: 'projets', project: null }), '', 'dossier dépôt github vscode cockpit'),
+    c('Nouveau projet', 'plus', () => projectsPage.createDialog(), '', 'créer projet dossier dépôt'),
+    ...(open && n ? [c('Ranger la note dans un projet…', 'folder', () => { const a = $('[data-act=project]'); if (a) menu(a, projectsPage.projectMenuItems(n)); }, '', 'projet déplacer tag')] : []),
+    ...projectsModel.projects().map(p => c(`Projet : ${p.name}`, 'folder', () => setView({ type: 'projets', project: p.id }), '', 'projet ouvrir ' + p.repos.join(' '))),
     c('Tâches', 'check', () => setView({ type: 'tasks' }), SC.tasks, 'todo liste à faire'),
     c('Linear : mes tickets', 'linear', () => setView({ type: 'linear', tab: 'issues' }), SC.notifs, 'linear issues tickets'),
     c('Linear : projets', 'linear', () => setView({ type: 'linear', tab: 'projects' }), '', 'linear projects roadmap'),
@@ -935,6 +945,7 @@ store.onChange((kind, id, remote) => {
   renderSidebar(); renderList();
   if (ui.view.type === 'home' && !topLayer() && !need('#main').contains(document.activeElement)) return renderMain();
   if (ui.view.type === 'tasks') return todo.refresh();
+  if (ui.view.type === 'projets') return projectsPage.refresh();
   const typing = ed && document.activeElement && need('#main').contains(document.activeElement) && !remote;
   if (['lock', 'unlock', 'destroy', 'purge', 'import'].includes(kind) || (remote && (!id || id === ui.id) && !pending.has(ui.id))) renderMain();
   else if (kind === 'save' && ed && id !== ed.note.id && !typing) renderPreview();
@@ -963,11 +974,13 @@ async function onClick(e: MouseEvent): Promise<void> {
     else if (act === 'focus') setFocus(!focusMode);
     else if (act === 'restore') { await store.restoreNote(n); await openNote(n.id); }
     else if (act === 'destroy') await destroy(n);
+    else if (act === 'project') menu(anchor, projectsPage.projectMenuItems(n));
     else if (act === 'backlinks') menu(anchor, [{ label: 'Rétroliens' }, ...store.backlinks(n).map(b => ({ label: titleOf(b), icon: 'notes', run: () => openNote(b.id) }))]);
     return;
   }
   if (await hub.click(e)) return;
   let x: HTMLElement | null;
+  if ((x = t.closest('[data-pj-open], [data-project-open]')) && !t.closest('.pj')) { await setView({ type: 'projets', project: x.dataset.pjOpen || x.dataset.projectOpen || null }); return; }
   if ((x = t.closest('[data-view]'))) { await setView({ type: x.dataset.view ?? 'home' }); return; }
   if ((x = t.closest('[data-open-note]')) && store.get(x.dataset.openNote)) { await openNote(x.dataset.openNote ?? ''); return; }
   if ((x = t.closest('[data-tag]'))) { e.preventDefault(); await setView({ type: 'tag', tag: x.dataset.tag ?? '' }); return; }
@@ -1133,7 +1146,7 @@ Les notes chiffrées et celles taguées \`#privé\` ne sont jamais envoyées à 
 ];
 
 // Points d'entrée pour l'app native (menu Réglages, enregistrement avant de quitter).
-window.carnet = { flush: async () => { await flushAll(); }, settings: () => hub.openConnections('coffre'), voice: (p: unknown) => voice.onNative(p), bio: (p: unknown) => biometric.onNative(p as biometric.BioReply) };
+window.carnet = { flush: async () => { await flushAll(); }, settings: () => hub.openConnections('coffre'), voice: (p: unknown) => voice.onNative(p), bio: (p: unknown) => biometric.onNative(p as biometric.BioReply), reply: (p: unknown) => native.onReply(p) };
 
 async function start() {
   applyTheme();
@@ -1143,7 +1156,8 @@ async function start() {
   todo.init({ flush, refreshNote, toggleTask, tbLeft, crumb });
   const shared = { setView, openNote, capture: quickCapture, view: () => ui.view.type, viewState: () => ui.view, renderSidebar, tbLeft, crumb,
     onCount: () => { renderSidebar(); linearView.refreshCount(); if (ui.view.type === 'home' && !topLayer() && !need('#main').contains(document.activeElement)) renderMain(); } };
-  home.init(shared); automations.init(shared); help.init({ ...shared, shortcuts: shortcutRows }); voice.init(shared); linearView.init(shared); githubPage.init(shared);
+  registerBuiltins();
+  home.init(shared); automations.init(shared); projectsPage.init(shared); help.init({ ...shared, shortcuts: shortcutRows }); voice.init(shared); linearView.init(shared); githubPage.init(shared);
 
   hub.init({
     openNote, setView, renderMain, flush, flushAll, refreshNote, capture: quickCapture, crumb,

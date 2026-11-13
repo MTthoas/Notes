@@ -107,6 +107,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         r.indexedDB = await new Promise(res => { const q = indexedDB.open('carnet'); q.onsuccess = () => res(q.result.objectStoreNames.contains('notes')); q.onerror = () => res(String(q.error)); });
         r.notesShown = document.querySelectorAll('#list .note-item, .hm-note').length;
         try { r.github = (await fetch('https://api.github.com/zen', { credentials: 'omit' })).status; } catch (e) { r.github = String(e); }
+        const pid = '\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_PROJECT"] ?? "")';
+        if (pid) r.project = await new Promise(res => {
+          const prev = window.carnet.reply;
+          window.carnet.reply = p => { if (p && p.id === 424242) { window.carnet.reply = prev; res(p); } else prev(p); };
+          window.webkit.messageHandlers.carnet.postMessage({ type: 'project', action: 'info', id: 424242, project: pid });
+          setTimeout(() => res('pas de réponse'), 8000);
+        });
         try { r.ntfy = (await fetch('https://ntfy.sh/carnet-autotest-' + crypto.randomUUID(), { method: 'POST', body: 'x', headers: { Cache: 'no' } })).status; } catch (e) { r.ntfy = String(e); }
         try { r.anthropic = (await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json', 'x-api-key': 'cle-invalide', 'anthropic-version': '2026-10-21', 'anthropic-dangerous-direct-browser-access': 'true' } })).status; } catch (e) { r.anthropic = String(e); }
         return JSON.stringify(r);

@@ -7,6 +7,8 @@ import * as store from '../core/store.ts';
 import * as linear from '../integrations/linear/api.ts';
 import { esc, plain, statusOf } from '../lib/markdown.ts';
 import * as board from './board.ts';
+import * as projectsModel from './projects/model.ts';
+import type { Project } from './projects/model.ts';
 import { grouped, prio, day as issueDay } from '../integrations/linear/render.ts';
 import { $, $$, icon, toast, menu, need, target, errMsg, num, avatar } from '../ui/kit.ts';
 import type { Note, TaskStatus } from '../types.ts';
@@ -25,6 +27,8 @@ export interface Task {
   note: Note; line: number; done: boolean; status: TaskStatus; own: boolean;
   text: string; due: string | null; ticket: string | null;
   subs: Task[]; sub?: boolean;
+  /** Projet (identifiant de sa note) : tag #projet/… dans la tâche, sinon celui de la note. */
+  project: string | null;
 }
 export interface Agenda { items: Task[]; total: number; late: number; today: number; isLate(t: Task): boolean }
 
@@ -81,10 +85,17 @@ function dueLabel(iso: string): string {
 
 // ---------- Lecture ----------
 // Sépare le texte affiché, l'échéance et le ticket Linear d'une ligne de tâche.
-export function parts(raw: string): { text: string; due: string | null; ticket: string | null } {
-  const m = raw.match(DUE_RE), rest = m ? raw.slice(0, m.index) : raw, k = rest.match(TICKET_RE);
-  return { text: (k ? rest.replace(k[0], ' ') : rest).replace(/\s+/g, ' ').trim() || rest.trim(), due: m?.[1] || null, ticket: k?.[1] || null };
+export function parts(raw: string): { text: string; due: string | null; ticket: string | null; projectSlug: string | null } {
+  const m = raw.match(DUE_RE), body = m ? raw.slice(0, m.index) : raw;
+  const pm = [...body.matchAll(projectsModel.PROJECT_TAG_RE)][0], rest = projectsModel.stripProjectTags(body), k = rest.match(TICKET_RE);
+  return { text: (k ? rest.replace(k[0], ' ') : rest).replace(/\s+/g, ' ').trim() || rest.trim(), due: m?.[1] || null, ticket: k?.[1] || null, projectSlug: pm?.[2] ?? null };
 }
+/** Projet d'une tâche : celui écrit dans la tâche, sinon celui de sa note. */
+const projectFor = (n: Note, slug: string | null): string | null => (slug ? projectsModel.bySlug(slug)?.id : null) ?? projectsModel.projectOfNote(n)?.id ?? null;
+const mkTask = (n: Note, line: number, done: boolean, status: TaskStatus, own: boolean, raw: string): Task => {
+  const { projectSlug, ...p } = parts(raw);
+  return { note: n, line, done, status, own, subs: [], ...p, project: projectFor(n, projectSlug) };
+};
 
 // La note « Tâches » : tâches de premier niveau, chacune avec ses sous-tâches (lignes indentées dessous).
 function ownTasks(n: Note): Task[] {
@@ -93,20 +104,21 @@ function ownTasks(n: Note): Task[] {
     const m = raw.match(TASK_RE);
     if (!m) { if (raw.trim()) parent = null; return; }
     const status = statusOf(m[2]);
-    const t: Task = { note: n, line, done: status === 'done', status, own: true, subs: [], ...parts(m[3] ?? '') };
+    const t: Task = mkTask(n, line, status === 'done', status, true, m[3] ?? '');
     if ((m[1] ?? '').length && parent) { t.sub = true; parent.subs.push(t); } else { parent = t; out.push(t); }
   });
   return out;
 }
 
-function collect() {
-  const mine = list(), today = store.dayKey(), all: Task[] = [];
+function collect(only?: (t: Task) => boolean) {
+  const mine = list(), today = store.dayKey(), found: Task[] = [];
   let subsOpen = 0;
   for (const n of store.index().live) {
     if (store.isLocked(n)) continue;
-    if (n === mine) { const own = ownTasks(n); all.push(...own); subsOpen += own.reduce((s, t) => s + t.subs.filter(x => !x.done).length, 0); }
-    else for (const t of store.meta(n).tasks) all.push({ note: n, line: t.line, done: t.done, status: t.status, own: false, subs: [], ...parts(t.text) });
+    if (n === mine) { const own = ownTasks(n); found.push(...own); subsOpen += own.reduce((s, t) => s + t.subs.filter(x => !x.done).length, 0); }
+    else for (const t of store.meta(n).tasks) found.push(mkTask(n, t.line, t.done, t.status, false, t.text));
   }
+  const all = only ? found.filter(only) : found;
   const open = all.filter(t => !t.done), byDue = (a: Task, b: Task) => (a.due ?? '').localeCompare(b.due ?? '');
   return {
     late: open.filter(t => t.due && t.due < today).sort(byDue),
@@ -121,6 +133,11 @@ function collect() {
   };
 }
 export const openCount = () => collect().openCount;
+/** Ouvre la page Tâches sur un projet. */
+export function showProject(id: string): void { prefs.source = 'projet:' + id; savePrefs(); linearData = null; }
+/** Tâches d'un projet (pour sa page). */
+export const ofProject = (id: string) => collect(t => t.project === id);
+const scope = (): ((t: Task) => boolean) | undefined => prefs.source.startsWith('projet:') ? (t => t.project === prefs.source.slice(7)) : undefined;
 // Pour l'accueil : ce qui presse d'abord (en retard, aujourd'hui, à venir, puis le reste).
 export function agenda(max = 6): Agenda {
   const c = collect(), today = store.dayKey();
@@ -159,8 +176,9 @@ async function mutate(n: Note, fn: (lines: string[]) => void): Promise<void> {
   app.refreshNote(n);
 }
 
-export async function add(input: string): Promise<{ text: string; due: string | null } | null> {
-  const { text, due } = parseDue(input);
+export async function add(input: string, projectId: string | null = prefs.source.startsWith('projet:') ? prefs.source.slice(7) : null): Promise<{ text: string; due: string | null } | null> {
+  const parsed = parseDue(input), due = parsed.due, p = projectsModel.byId(projectId);
+  const text = p ? `${projectsModel.stripProjectTags(parsed.text)} #${p.tag}` : parsed.text;
   if (!text) return null;
   const n = await ensureList();
   if (store.isLocked(n)) { toast('La note « Tâches » est verrouillée.'); return null; }
@@ -169,6 +187,15 @@ export async function add(input: string): Promise<{ text: string; due: string | 
     lines.push(`- [ ] ${text}${due ? ' @' + due : ''}`);
   });
   return { text, due };
+}
+
+/** Range une tâche de la liste dans un projet (ou la sort de tout projet). */
+export async function setProject(n: Note, line: number, p: Project | null): Promise<void> {
+  await mutate(n, lines => {
+    const cur = lines[line]; if (cur === undefined || !PREFIX_RE.test(cur)) return;
+    const m = cur.match(DUE_RE), head = projectsModel.stripProjectTags(m ? cur.slice(0, m.index) : cur);
+    lines[line] = head + (p ? ` #${p.tag}` : '') + (m ? m[0] : '');
+  });
 }
 
 // Sous-tâche : ligne indentée, insérée après la dernière sous-tâche du parent.
@@ -209,16 +236,25 @@ export const toggle = (t: Task) => app.toggleTask(t.note, t.line);
 // ---------- Rendu ----------
 let subFor: number | null = null; // ligne de la tâche dont on saisit une sous-tâche
 
+/** Pastille du projet d'une tâche (masquée quand on regarde déjà ce projet). */
+function projectChip(t: Task): string {
+  if (!t.project || prefs.source === 'projet:' + t.project) return '';
+  const p = projectsModel.byId(t.project); if (!p) return '';
+  return `<button class="pj-chip" data-project-open="${esc(p.id)}" style="--c:var(--c-${p.hue})">${esc(p.name)}</button>`;
+}
+
 function line(t: Task, { source = false } = {}): string {
   const late = t.due && t.due < store.dayKey() && !t.done, n = t.subs.length, d = t.subs.filter(x => x.done).length;
   return `<div class="td-row${t.done ? ' done' : ''}${t.sub ? ' td-subrow' : ''}" data-note="${t.note.id}" data-line="${t.line}">
     <input type="checkbox" class="td-check${t.status === 'doing' ? ' doing' : ''}"${t.done ? ' checked' : ''} aria-label="${t.done ? 'Rouvrir' : 'Terminer'}">
     <span class="td-text"${t.own ? ' data-edit tabindex="0" title="Cliquer pour modifier"' : ''}>${esc(plain(t.text))}</span>
     ${t.status === 'doing' ? '<span class="td-status">En cours</span>' : ''}
+    ${projectChip(t)}
     ${n ? `<span class="td-prog">${d}/${n}</span>` : ''}
     ${t.ticket ? ticketChip(t.ticket) : ''}
     ${t.due ? `<span class="td-due${late ? ' late' : t.due === store.dayKey() ? ' today' : ''}">${esc(dueLabel(t.due))}</span>` : ''}
     ${source && !t.own ? `<button class="td-src" data-open-note="${t.note.id}">${esc(titleOf(t.note))}</button>` : ''}
+    ${t.own && !t.sub ? `<button class="icon-btn td-del" data-td-proj title="Projet" aria-label="Choisir le projet">${icon('folder')}</button>` : ''}
     ${t.own && !t.sub && !t.done ? `<button class="icon-btn td-del" data-td-sub title="Ajouter une sous-tâche" aria-label="Ajouter une sous-tâche">${icon('plus')}</button>` : ''}
     ${t.own ? `<button class="icon-btn td-del" data-td-del title="Supprimer" aria-label="Supprimer">${icon('trash')}</button>` : ''}
   </div>`;
@@ -230,7 +266,7 @@ function row(t: Task, opts?: { source?: boolean }): string {
 }
 
 function body() {
-  const c = collect();
+  const c = collect(scope());
   const sec = (title: string, items: Task[], opts?: { source?: boolean }) => items.length ? `<section class="td-sec"><h2>${title}<span>${items.length}</span></h2>${items.map(t => row(t, opts)).join('')}</section>` : '';
   const groups = new Map<Note, Task[]>();
   for (const t of c.notes) { let g = groups.get(t.note); if (!g) groups.set(t.note, g = []); g.push(t); }
@@ -261,15 +297,18 @@ async function loadViews(): Promise<void> {
 
 function paintChrome(): void {
   const nav = $('#main .td-sources'); if (!nav) return;
-  if (prefs.source !== 'local' && (!linear.connected() || (prefs.source.startsWith('view:') && views.length && !views.some(v => 'view:' + v.id === prefs.source)))) prefs.source = 'local';
+  const projs = projectsModel.projects();
+  if (prefs.source.startsWith('projet:') && !projs.some(p => 'projet:' + p.id === prefs.source)) prefs.source = 'local';
+  if ((prefs.source.startsWith('linear') || prefs.source.startsWith('view:')) && (!linear.connected() || (prefs.source.startsWith('view:') && views.length && !views.some(v => 'view:' + v.id === prefs.source)))) prefs.source = 'local';
   const chip = (src: string, label: string, dot: string) => `<button class="lv-chip${prefs.source === src ? ' sel' : ''}" data-src="${esc(src)}">${dot}${esc(label)}</button>`;
-  nav.innerHTML = linear.connected()
-    ? chip('local', 'Mes tâches', icon('check')) + chip('linear:me', 'Mes tickets Linear', icon('linear')) + views.map(v => chip('view:' + v.id, v.name, `<i class="st" style="background:${/^#[0-9a-f]{3,8}$/i.test(v.color ?? '') ? v.color : 'var(--c-indigo)'}"></i>`)).join('')
-    : '';
-  nav.hidden = !linear.connected();
+  const pchips = projs.map(p => chip('projet:' + p.id, p.name, `<i class="st" style="background:var(--c-${p.hue})"></i>`)).join('');
+  const lchips = linear.connected() ? chip('linear:me', 'Mes tickets Linear', icon('linear')) + views.map(v => chip('view:' + v.id, v.name, `<i class="st" style="background:${/^#[0-9a-f]{3,8}$/i.test(v.color ?? '') ? v.color : 'var(--c-indigo)'}"></i>`)).join('') : '';
+  nav.innerHTML = pchips || lchips ? chip('local', 'Toutes mes tâches', icon('check')) + pchips + (pchips && lchips ? '<i class="td-sep"></i>' : '') + lchips : '';
+  nav.hidden = !nav.innerHTML;
   for (const b of $$('#main .td-layout [data-layout]')) b.setAttribute('aria-selected', String(b.dataset.layout === prefs.layout));
-  const add = $('#main .td-add'); if (add) add.hidden = prefs.source !== 'local';
-  const reload = $('#main [data-td-reload]'); if (reload) reload.hidden = prefs.source === 'local';
+  const isLocal = prefs.source === 'local' || prefs.source.startsWith('projet:');
+  const add = $('#main .td-add'); if (add) add.hidden = !isLocal;
+  const reload = $('#main [data-td-reload]'); if (reload) reload.hidden = isLocal;
 }
 
 // Kanban de mes tâches : à faire, en cours, terminées.
@@ -281,7 +320,7 @@ function localCard(t: Task, i: number): string {
     <footer>${t.due ? `<span class="td-due${late ? ' late' : t.due === store.dayKey() ? ' today' : ''}">${esc(dueLabel(t.due))}</span>` : ''}${t.ticket ? ticketChip(t.ticket) : ''}${n ? `<span class="td-prog">${d}/${n}</span>` : ''}${t.own ? '' : `<button class="td-src" data-open-note="${t.note.id}">${esc(titleOf(t.note))}</button>`}${board.moveButtons(i === 0, i === COLS.length - 1)}</footer></article>`;
 }
 function localBoard(): string {
-  const c = collect();
+  const c = collect(scope());
   const todo = [...c.late, ...c.today, ...c.soon, ...c.tickets, ...c.undated, ...c.notes].filter(t => t.status === 'todo');
   const by: Record<TaskStatus, Task[]> = { todo, doing: c.doing, done: c.done.slice(0, 30) };
   return board.boardHTML(COLS.map(([key, label, tone], i) => ({ key, label, tone, cards: by[key].map(t => localCard(t, i)) })));
@@ -335,12 +374,12 @@ export function refresh(): void {
   if (box.querySelector('.td-edit')) return; // une modification est en cours : on ne casse pas la saisie
   const typed = box.querySelector<HTMLInputElement>('.td-subinput'), keep = typed?.value || '', had = typed && document.activeElement === typed;
   paintChrome();
-  if (prefs.source !== 'local') { void paintLinear(box); return; }
+  if (prefs.source !== 'local' && !prefs.source.startsWith('projet:')) { void paintLinear(box); return; }
   if (prefs.layout === 'board') { box.innerHTML = localBoard(); queueMicrotask(() => loadTickets(collect().doing.flatMap(t => t.ticket ? [t.ticket] : []))); }
   else box.innerHTML = body();
   const si = box.querySelector<HTMLInputElement>('.td-subinput'); if (si) { si.value = keep; if (had || subFocus) si.focus(); subFocus = false; }
   const d = $<HTMLDetailsElement>('.td-donesec', box); if (d) { d.open = doneOpen; d.ontoggle = () => { doneOpen = d.open; }; }
-  const c = collect(), late = c.late.length;
+  const c = collect(scope()), late = c.late.length;
   const sub = $('#main .td-sub'); if (sub) sub.textContent = `${c.openCount} à faire${c.doing.length ? ` · ${c.doing.length} en cours` : ''}${late ? ` · ${late} en retard` : ''}`;
 }
 
@@ -401,6 +440,14 @@ export function mount(main: HTMLElement): void {
     const k = target(e).closest('[data-ticket]');
     if (k) { const id = k.dataset.ticket ?? ''; if (linear.connected()) void import('../integrations/linear/page.ts').then(m => m.openTicket(id)); else toast('Connecte Linear dans Réglages pour ouvrir le ticket.'); return; }
     if (target(e).closest('[data-td-sub]') && r) { subFor = num(r, 'line'); subFocus = true; refresh(); return; }
+    const pb = target(e).closest('[data-td-proj]');
+    if (pb && n && r) {
+      const line = num(r, 'line'), all = projectsModel.projects();
+      menu(pb, [{ label: 'Ranger dans un projet' }, ...all.map(p => ({ label: p.name, icon: 'folder', run: () => setProject(n, line, p) })),
+        ...(all.length ? ['-' as const] : []), { label: 'Aucun projet', run: () => setProject(n, line, null) },
+        { label: 'Nouveau projet…', icon: 'plus', run: () => void import('./projects/page.ts').then(m => m.createDialog()) }]);
+      return;
+    }
     if (target(e).closest('[data-td-del]') && n && r) { void remove(n, num(r, 'line')); return; }
     if (target(e).closest('[data-td-clear]')) { e.preventDefault(); const l = list(); if (l) void clearDone(l); return; }
     const t = target(e).closest('.td-text[data-edit]'); if (t && n && r) startEdit(t, n, num(r, 'line'));

@@ -4,7 +4,7 @@ Notes Markdown reliées entre elles, stockées uniquement sur tes appareils. Pas
 
 Connectées à Claude, OpenAI ou un modèle local, à Linear, à GitHub et à tes autres appareils — toujours sans backend, et chiffrées de bout en bout.
 
-[![Build](https://github.com/MTthoas/Notes/actions/workflows/build.yml/badge.svg)](https://github.com/MTthoas/Notes/actions/workflows/build.yml) · Licence [MIT](LICENSE)
+[![Build](https://github.com/MTthoas/Studio/actions/workflows/build.yml/badge.svg)](https://github.com/MTthoas/Studio/actions/workflows/build.yml) · Licence [MIT](LICENSE)
 
 ## Applications Mac et iPhone
 
@@ -66,6 +66,25 @@ Elle s'affiche en **liste** ou en **Kanban** (À faire, En cours, Terminées : g
 
 Les agents planifiés tournent tant que l'application est ouverte (rattrapage unique au retour).
 
+## Projets
+
+Un **projet** réunit son dossier sur le Mac, son ou ses dépôts GitHub, son projet Linear, ses tâches et ses notes. C'est une note qui contient un bloc :
+
+```projet
+nom: Studio
+dépôts: MTthoas/Studio
+linear: Studio
+```
+
+- Une note ou une tâche y appartient avec le tag `#projet/studio` — posé par le bouton **Projet** de l'éditeur, le menu d'une tâche, ou en créant depuis la page du projet.
+- Le **cockpit** du projet montre les PR ouvertes avec leur CI et leurs revues, l'activité du dépôt, les tickets Linear, les tâches et les notes ; il ouvre le dossier dans **VS Code**, le Finder ou le Terminal (app Mac).
+- Le **dossier local** est choisi dans le sélecteur de macOS et reste dans les réglages de l'app Mac : il n'est jamais écrit dans une note ni synchronisé. L'app n'en lit l'état Git qu'en lecture seule.
+- La page Tâches filtre par projet, en liste ou en Kanban.
+
+## Plugins
+
+Les fonctions de Studio se branchent sur un registre d'extensions (`src/plugins/registry.ts`) : panneaux de la page projet, actions sur une tâche. GitHub et Linear y sont déjà enregistrés comme plugins maison (`src/plugins/builtin.ts`). Prochaines étapes : plugins déclaratifs (modèles, thèmes), puis plugins avec code, isolés et soumis à permissions.
+
 ## Automatisations
 
 Studio est pensé autour de l'automatisation : une **automatisation** est une consigne en langage naturel, écrite dans une note (bloc ` ```agent `), que l'IA exécute avec des outils — lire et ranger les notes, créer des tâches, lire l'activité Linear et GitHub, ouvrir des tickets.
@@ -97,12 +116,15 @@ src/                               TypeScript strict
     tasks.ts          tâches, sous-tâches, échéances, tickets Linear
     voice.ts          notes vocales (transcription sur l'appareil)
     hub.ts            réglages, coffre, agents, blocs spéciaux, liaison d'appareils
+    projects/         projets : modèle (bloc ```projet, tags) et page cockpit
+    automations.ts, help.ts, onboarding.ts, board.ts
   integrations/     services extérieurs, appelés directement depuis l'app
     ai.ts             Claude, OpenAI, modèle local : boucle d'agent et outils
     link.ts           liaison et synchronisation entre appareils (WebRTC)
     linear/           api.ts (GraphQL typé), page.ts (tickets, projets, fiche), notifications.ts
     github/           api.ts (actualité des dépôts), page.ts
   lib/              outils sans état : markdown, calc, schema, graph, qr, fuzzy, diff, zip
+  plugins/          registre d'extensions et plugins maison (GitHub, Linear)
   ui/               kit.ts (icônes, menus, fenêtres), caret.ts (curseur d'écriture)
   sw/sw.ts          service worker (compilé avec les types « worker »)
 native/             apps Mac et iPhone (Swift) et leurs scripts de build
