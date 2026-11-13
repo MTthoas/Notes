@@ -195,7 +195,9 @@ function renderSidebar() {
         const talks = open ? projectsPage.sideSessions(p.id) : [], talking = tab === 'sessions' && talks.some(s => s.sel);
         return `<button class="side-item side-sub${open && tab === 'overview' ? ' sel' : ''}${open ? ' open' : ''}" data-pj-open="${esc(p.id)}"><i class="tag-dot" style="--c:var(--c-${p.hue})"></i><span>${esc(p.name)}</span></button>`
           + (open ? projectsPage.TABS.slice(1).map(([k, l, ic]) => `<button class="side-item side-sub2${tab === k && !(k === 'sessions' && talking) ? ' sel' : ''}" data-pj-open="${esc(p.id)}" data-pj-tab="${k}"${k === 'sessions' ? ' data-pj-session=""' : ''}>${icon(ic)}<span>${esc(l)}</span></button>`
-            + (k === 'sessions' ? talks.map(s => `<button class="side-item side-sub3${tab === 'sessions' && s.sel ? ' sel' : ''}" data-pj-open="${esc(p.id)}" data-pj-tab="sessions" data-pj-session="${esc(s.id)}" title="${esc(s.title)}"><i class="ss-live${s.live ? ' on' : ''}"></i><span>${esc(s.title)}</span></button>`).join('') : '')).join('') : '');
+            + (k === 'sessions' ? talks.map(s => `<button class="side-item side-sub3${tab === 'sessions' && s.sel && !s.subs.some(a => a.sel) ? ' sel' : ''}" data-pj-open="${esc(p.id)}" data-pj-tab="sessions" data-pj-session="${esc(s.id)}" title="${esc(s.title)}"><i class="ss-live${s.live ? ' on' : ''}"></i><span>${esc(s.title)}</span></button>`
+              // Sous la conversation : ses sous-agents épinglés, et celui dont on lit le fil.
+              + s.subs.map(a => `<button class="side-item side-sub4${tab === 'sessions' && a.sel ? ' sel' : ''}" data-pj-open="${esc(p.id)}" data-pj-tab="sessions" data-pj-session="${esc(s.id)}" data-pj-sub="${esc(a.id)}" title="Sous-agent : ${esc(a.title)}"><i class="ss-live${a.live ? ' on' : ''}"></i><span>${esc(a.title)}</span></button>`).join('')).join('') : '')).join('') : '');
       }).join('')}${item('tasks')}${item('agents')}</div>
       <div class="side-label">Connexions</div>
       <div class="side-group">${item('linear')}${item('github')}</div>
@@ -211,6 +213,7 @@ function workspaceMenu(anchor: HTMLElement) {
   menu(anchor, [
     { label: 'Réglages', icon: 'gear', keys: SC.settings, run: () => hub.openConnections('coffre') },
     { label: 'Aide et raccourcis', icon: 'help', run: openHelp },
+    ...(update.supported() ? [{ label: update.available() ? 'Installer la mise à jour…' : 'Mises à jour', icon: 'download', run: () => hub.openConnections('maj') }] : []),
     '-',
     { label: 'Thème' },
     { label: 'Automatique', checked: ui.theme === 'auto', run: () => setTheme('auto') },
@@ -997,7 +1000,7 @@ async function onClick(e: MouseEvent): Promise<void> {
   }
   if (await hub.click(e)) return;
   let x: HTMLElement | null;
-  if ((x = t.closest('[data-pj-open], [data-project-open]')) && !t.closest('.pj')) { if (x.dataset.pjOpen && x.dataset.pjSession !== undefined) projectsPage.openSession(x.dataset.pjOpen, x.dataset.pjSession || null); await setView({ type: 'projets', project: x.dataset.pjOpen || x.dataset.projectOpen || null, ...(x.dataset.pjTab ? { tab: x.dataset.pjTab } : {}) }); return; }
+  if ((x = t.closest('[data-pj-open], [data-project-open]')) && !t.closest('.pj')) { if (x.dataset.pjOpen && x.dataset.pjSession !== undefined) projectsPage.openSession(x.dataset.pjOpen, x.dataset.pjSession || null, x.dataset.pjSub || null); await setView({ type: 'projets', project: x.dataset.pjOpen || x.dataset.projectOpen || null, ...(x.dataset.pjTab ? { tab: x.dataset.pjTab } : {}) }); return; }
   if ((x = t.closest('[data-view]'))) { await setView({ type: x.dataset.view ?? 'home' }); return; }
   if ((x = t.closest('[data-open-note]')) && store.get(x.dataset.openNote)) { await openNote(x.dataset.openNote ?? ''); return; }
   if ((x = t.closest('[data-tag]'))) { e.preventDefault(); await setView({ type: 'tag', tag: x.dataset.tag ?? '' }); return; }

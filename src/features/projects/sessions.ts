@@ -49,25 +49,74 @@ let cur: { box: HTMLElement; p: Project } | null = null;
 let selFor = '', selTitle = '';
 /** Dernières sessions lues, par projet. */
 const known = new Map<string, { list: Session[]; at: number }>();
+
+// Sous-agents : les tâches que Claude délègue pendant une conversation ont chacune leur propre fil (voir Sessions.swift).
+// On en ouvre un depuis sa conversation, on passe de l'un à l'autre, et on peut l'épingler dans la barre latérale.
+interface SubAgent { id: string; title: string; type: string; started: string; updated: string; live: boolean; tokens: number; steps: number }
+/** Sous-agent ouvert dans la conversation sélectionnée, et son nom une fois connu. */
+let sub: string | null = null, subTitle = '';
+/** Derniers sous-agents lus, par conversation. */
+const subsOf = new Map<string, SubAgent[]>();
+/** Sous-agents épinglés dans la barre latérale : projet, conversation, sous-agent, et son nom au moment de l'épingler. */
+interface Pin { p: string; s: string; a: string; t: string }
+const PINS = 'studio.cc.subpins';
+let pins: Pin[] = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(PINS) || '[]') as unknown;
+    return Array.isArray(v) ? (v as Partial<Pin>[]).filter(x => x && typeof x.p === 'string' && typeof x.s === 'string' && typeof x.a === 'string').map(x => ({ p: x.p ?? '', s: x.s ?? '', a: x.a ?? '', t: typeof x.t === 'string' ? x.t : '' })) : [];
+  } catch { return []; }
+})();
+function savePins(): void {
+  pins = pins.slice(-40);
+  try { localStorage.setItem(PINS, JSON.stringify(pins)); } catch { /* stockage plein */ }
+}
+const pinned = (session: string, agent: string): boolean => pins.some(x => x.s === session && x.a === agent);
+const subName = (session: string, agent: string): string => subsOf.get(session)?.find(x => x.id === agent)?.title || pins.find(x => x.s === session && x.a === agent)?.t || 'Sous-agent';
+/** Retient les sous-agents d'une conversation ; le nom de ceux qui sont épinglés suit celui lu sur le Mac. */
+function noteSubs(session: string, list: unknown): void {
+  const subs = Array.isArray(list) ? list as SubAgent[] : [];
+  subsOf.set(session, subs);
+  let renamed = false;
+  for (const x of pins) {
+    const a = x.s === session ? subs.find(y => y.id === x.a) : undefined;
+    if (a && a.title !== x.t) { x.t = a.title; renamed = true; }
+  }
+  if (renamed) savePins();
+}
+function togglePin(pid: string, session: string, agent: string): void {
+  const had = pinned(session, agent), t = subName(session, agent);
+  pins = pins.filter(x => !(x.s === session && x.a === agent));
+  if (!had) pins.push({ p: pid, s: session, a: agent, t });
+  savePins(); notify();
+  toast(had ? 'Retiré de la barre latérale' : 'Épinglé dans la barre latérale, sous sa conversation');
+}
+
 let listener: (() => void) | null = null, lastSig = '';
 /** Prévient l'application quand la liste des conversations, leurs noms ou la sélection changent. */
 export const onChange = (f: () => void): void => { listener = f; };
 function notify(): void {
-  const sig = JSON.stringify([selFor, selected, selTitle, [...known].map(([k, v]) => [k, v.list.slice(0, 8).map(s => [s.id, nameOf(s), s.live])]), runs.filter(live).map(r => r.session)]);
+  const sig = JSON.stringify([selFor, selected, selTitle, sub, subTitle, pins, (selected ? subsOf.get(selected) ?? [] : []).filter(a => a.live).map(a => a.id),
+    [...known].map(([k, v]) => [k, v.list.slice(0, 8).map(s => [s.id, nameOf(s), s.live])]), runs.filter(live).map(r => r.session)]);
   if (sig === lastSig) return;
   lastSig = sig; listener?.();
 }
-/** Conversation ouverte dans ce projet, s'il y en a une. */
-export function current(pid: string): { id: string; title: string } | null {
+/** Conversation ouverte dans ce projet, s'il y en a une, et le sous-agent qu'on y regarde. */
+export function current(pid: string): { id: string; title: string; sub?: { id: string; title: string } } | null {
   if (!selected || selFor !== pid) return null;
   const s = known.get(pid)?.list.find(x => x.id === selected);
-  return { id: selected, title: selTitle || (s ? nameOf(s) : 'Conversation') };
+  return { id: selected, title: selTitle || (s ? nameOf(s) : 'Conversation'), ...(sub ? { sub: { id: sub, title: subTitle || subName(selected, sub) } } : {}) };
 }
-/** Conversations récentes d'un projet, pour la barre latérale. */
-export function sideSessions(pid: string): { id: string; title: string; live: boolean; sel: boolean }[] {
-  const list = known.get(pid)?.list ?? [], sel = selFor === pid ? selected : null;
-  const top = list.slice(0, 6), extra = sel && !top.some(s => s.id === sel) ? list.find(s => s.id === sel) : undefined;
-  return [...top, ...(extra ? [extra] : [])].map(s => ({ id: s.id, title: s.id === sel && selTitle ? selTitle : nameOf(s), live: s.live || runs.some(r => r.session === s.id && live(r)), sel: s.id === sel }));
+export interface SideSub { id: string; title: string; live: boolean; sel: boolean }
+/** Conversations récentes d'un projet, pour la barre latérale, chacune avec ses sous-agents épinglés (et celui qui est ouvert). */
+export function sideSessions(pid: string): { id: string; title: string; live: boolean; sel: boolean; subs: SideSub[] }[] {
+  const list = known.get(pid)?.list ?? [], sel = selFor === pid ? selected : null, mine = pins.filter(x => x.p === pid);
+  const top = list.slice(0, 6), extra = list.slice(6).filter(s => s.id === sel || mine.some(x => x.s === s.id));
+  const subs = (sid: string): SideSub[] => {
+    const ids = mine.filter(x => x.s === sid).map(x => x.a);
+    if (sid === sel && sub && !ids.includes(sub)) ids.push(sub);
+    return ids.map(a => ({ id: a, title: sid === sel && a === sub && subTitle ? subTitle : subName(sid, a), live: !!subsOf.get(sid)?.find(x => x.id === a)?.live, sel: sid === sel && a === sub }));
+  };
+  return [...top, ...extra].map(s => ({ id: s.id, title: s.id === sel && selTitle ? selTitle : nameOf(s), live: s.live || runs.some(r => r.session === s.id && live(r)), sel: s.id === sel, subs: subs(s.id) }));
 }
 async function loadList(p: Project): Promise<Session[] | null> {
   const r = await bridge.call('project', 'sessions', { project: p.id }, 20000);
@@ -152,7 +201,7 @@ function attachable(p: Project): { id: string; title: string }[] {
   return model.notesOf(p).filter(n => n.id !== p.id && ai.shareable(n) && store.getBody(n) != null).map(n => ({ id: n.id, title: n.title.trim() || 'Sans titre' }));
 }
 /** Ouvre l'onglet Claude Code du projet avec des notes déjà jointes et, éventuellement, une consigne. */
-export function handoff(p: Project, { notes = [] as string[], prompt = '' } = {}): void { pending = { project: p.id, notes, prompt }; selected = null; }
+export function handoff(p: Project, { notes = [] as string[], prompt = '' } = {}): void { pending = { project: p.id, notes, prompt }; selected = null; sub = null; }
 /** Consigne finale : le texte de l'utilisateur, puis le contenu des notes jointes. */
 function withNotes(prompt: string, ids: string[]): { text: string; refused: string[] } {
   const parts: string[] = [], refused: string[] = []; let total = 0;
@@ -378,7 +427,9 @@ const answerHTML = (text: string): string => renderMarkdown(text)
   .replace(/<input type="checkbox"/g, '<input type="checkbox" disabled');
 
 /** Découpe les étapes en blocs de conversation : demandes, réponses, et outils consécutifs regroupés. */
-function feedBlocks(actions: Action[], root: string | null, working: boolean, waiting: Queued[] = [], stalled = false): Block[] {
+function feedBlocks(actions: Action[], root: string | null, working: boolean, waiting: Queued[] = [], stalled = false, sidechain = false): Block[] {
+  // Dans le fil d'un sous-agent, c'est Claude qui donne la consigne et le sous-agent qui répond.
+  const asker = sidechain ? 'Claude' : 'Toi', answerer = sidechain ? 'Sous-agent' : 'Claude';
   const out: Block[] = [], seen = new Map<string, number>();
   const key = (a: Action, c: string) => { const k = `${c}|${a.at}`, n = seen.get(k) ?? 0; seen.set(k, n + 1); return n ? `${k}|${n}` : k; };
   const toolRow = (a: Action) => `<li><b>${esc(a.kind.slice(5))}</b><span>${esc(short(a.text, root))}</span></li>`;
@@ -400,12 +451,12 @@ function feedBlocks(actions: Action[], root: string | null, working: boolean, wa
   for (const a of actions) {
     if (a.kind.startsWith('tool:')) { group.push(a); continue; }
     flush(false);
-    if (a.kind === 'prompt') out.push({ key: key(a, 'user'), html: `<div class="ss-msg user"><header><strong>Toi</strong><time>${esc(clock(a.at))}</time></header><p>${esc(a.text)}</p></div>` });
-    else out.push({ key: key(a, 'ai'), html: `<div class="ss-msg ai"><header><strong>Claude</strong><time>${esc(clock(a.at))}</time><button class="icon-btn ss-copy" data-ag="copy" title="Copier la réponse" aria-label="Copier la réponse">${icon('copy')}</button></header><div class="md">${answerHTML(a.text)}</div></div>` });
+    if (a.kind === 'prompt') out.push({ key: key(a, 'user'), html: `<div class="ss-msg user"><header><strong>${asker}</strong><time>${esc(clock(a.at))}</time></header><p>${esc(a.text)}</p></div>` });
+    else out.push({ key: key(a, 'ai'), html: `<div class="ss-msg ai"><header><strong>${answerer}</strong><time>${esc(clock(a.at))}</time><button class="icon-btn ss-copy" data-ag="copy" title="Copier la réponse" aria-label="Copier la réponse">${icon('copy')}</button></header><div class="md">${answerHTML(a.text)}</div></div>` });
   }
   flush(true);
   if (!actions.length) out.push({ key: 'empty', html: `<p class="ss-cut">${working ? 'La session démarre…' : 'Aucune étape dans cette session.'}</p>` });
-  if (working) out.push({ key: 'working', html: '<div class="ss-working"><span class="spin"></span>Claude travaille…</div>' });
+  if (working) out.push({ key: 'working', html: `<div class="ss-working"><span class="spin"></span>${sidechain ? 'Le sous-agent' : 'Claude'} travaille…</div>` });
   // Messages secondaires, pas encore lus par Claude : remis ensemble à la fin de son tour.
   for (const q of waiting) out.push({ key: `queued|${q.id}`, html: `<div class="ss-msg user queued"><header><strong>Toi</strong><em class="ss-wait">${icon('history')}en attente</em><time>${esc(clock(q.at))}</time><button class="icon-btn" data-ag="unqueue" data-q="${esc(q.id)}" title="Retirer ce message" aria-label="Retirer ce message">${icon('trash')}</button></header><p>${esc(q.text)}</p></div>` });
   // Le tour s'est fini sans eux (agent arrêté ou en erreur) : ils partent quand l'utilisateur le décide.
@@ -434,6 +485,21 @@ function syncFeed(feed: HTMLElement, blocks: Block[]): boolean {
   return changed;
 }
 
+/** Sous-agents de la conversation : chacun ouvre son fil ; celui qui est affiché est en surbrillance. */
+function subsHTML(session: string, curId = ''): string {
+  const list = subsOf.get(session) ?? []; if (!list.length) return '';
+  const running = list.filter(a => a.live).length, n = list.length;
+  return `<h3 class="ss-h">Sous-agents <span>${n} tâche${n > 1 ? 's' : ''} déléguée${n > 1 ? 's' : ''} par Claude${running ? ` · ${running} en cours` : ''}</span></h3>
+    <div class="ss-subs">${list.map(a => `<button class="ss-sub${a.id === curId ? ' sel' : ''}" data-sa="${esc(a.id)}"${a.id === curId ? ' aria-current="true"' : ''} title="${esc(a.title)}"><i class="ss-live${a.live ? ' on' : ''}"></i><span>${esc(a.title)}</span>${a.type ? `<em>${esc(a.type)}</em>` : ''}${pinned(session, a.id) ? icon('pin') : ''}</button>`).join('')}</div>`;
+}
+/** En-tête du fil d'un sous-agent : son nom, l'épingle, et ses voisins pour passer de l'un à l'autre. */
+function subTopHTML(s: Detail, a: SubAgent): string {
+  const mn = Math.max(0, Math.round((ms(s.updated) - ms(s.started)) / 6e4)), acts = Object.values(s.tools).reduce((x, y) => x + y, 0), pin = pinned(s.id, a.id);
+  return `<div class="ss-dhead"><i class="ss-live${a.live ? ' on' : ''}"></i><h2>${esc(a.title)}</h2>${a.type ? `<span class="ag-mode">${icon('bolt')}${esc(a.type)}</span>` : ''}<button class="btn ss-pin${pin ? ' on' : ''}" data-ag="pin-sub" aria-pressed="${pin}" title="${pin ? 'Retirer de la barre latérale' : 'Garder ce sous-agent dans la barre latérale, sous sa conversation'}">${icon('pin')}${pin ? 'Épinglé' : 'Épingler'}</button></div>
+    <p class="ss-meta">${icon('eye')}Fil d’un sous-agent, en lecture seule · ${s.models.length ? `${esc(s.models.map(modelName).join(', '))} · ` : ''}${mn} min · ${acts} action${acts > 1 ? 's' : ''} · ${usage.fmt(s.tokens.output)} tokens écrits</p>
+    ${subsHTML(s.id, a.id)}`;
+}
+
 function topHTML(s: Detail, root: string | null, open: boolean): string {
   const dur = ms(s.updated) - ms(s.started), h = Math.floor(dur / 36e5), mn = Math.round(dur % 36e5 / 6e4);
   const run = runs.find(r => r.session === s.id && live(r)), tree = s.worktree ? trees.find(t => t.name === s.worktree) : undefined;
@@ -441,6 +507,7 @@ function topHTML(s: Detail, root: string | null, open: boolean): string {
   return `<div class="ss-dhead"><i class="ss-live${s.live || run ? ' on' : ''}"></i><h2>${esc(nameOf(s))}</h2>${run ? `${pill(run.status)}<button class="btn" data-ag="stop" data-run="${esc(run.run)}">${icon('stop')}Arrêter</button>` : ''}${remote || !s.id ? '' : `<button class="icon-btn" data-ag="delete" title="Supprimer la conversation" aria-label="Supprimer la conversation">${icon('trash')}</button>`}</div>
     <p class="ss-meta">${s.worktree ? `${icon('pencil')}copie isolée <code>${esc(s.worktree)}</code> · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${s.models.length ? `${esc(s.models.map(modelName).join(', '))} · ` : ''}${h ? `${h} h ` : ''}${mn} min · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}</p>
     ${tree ? `<div class="ag-trees ss-tree">${treeRow(tree)}</div>` : remote ? '' : `<div class="ss-actions"><button class="btn" data-pj="review-working">${icon('sparkle')}Revue des changements en cours</button><button class="btn" data-pj="vscode">${icon('code')}Ouvrir dans VS Code</button></div>`}
+    ${subsHTML(s.id)}
     <details class="ss-more"${open ? ' open' : ''}><summary>${icon('chevron')}Détails<span>${usage.fmt(s.tokens.output)} tokens écrits · ${acts} action${acts > 1 ? 's' : ''}${s.files.length ? ` · ${s.files.length} fichier${s.files.length > 1 ? 's' : ''} modifié${s.files.length > 1 ? 's' : ''}` : ''}</span></summary>
       <div class="ss-totals"><div><strong>${usage.fmt(s.tokens.output)}</strong><span>tokens écrits</span></div><div><strong>${usage.fmt(s.tokens.input + s.tokens.cacheWrite)}</strong><span>tokens lus</span></div><div><strong>${usage.fmt(s.tokens.cacheRead)}</strong><span>relus du cache</span></div><div><strong>${acts}</strong><span>actions</span></div></div>
       ${s.files.length ? `<h3 class="ss-h">Fichiers modifiés <span>${s.files.length}</span></h3><div class="ss-files">${s.files.map(f => `<code>${esc(short(f, root))}</code>`).join('')}</div>` : ''}</details>`;
@@ -449,23 +516,26 @@ function topHTML(s: Detail, root: string | null, open: boolean): string {
 const atEnd = (feed: HTMLElement) => feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
 
 /** Affiche une session dans `zone` ; les appels suivants ne touchent que ce qui a changé. */
-function showDetail(zone: HTMLElement, raw: Partial<Session> & { actions?: Action[] }, root: string | null): void {
+function showDetail(zone: HTMLElement, raw: Partial<Session> & { actions?: Action[] }, root: string | null, agent?: SubAgent): void {
   // Une session qui vient de démarrer peut ne pas avoir encore toutes ses informations.
   const s: Detail = { id: '', title: 'Session qui démarre…', branch: '', worktree: '', started: '', updated: '', live: true, models: [], prompts: 0, lastPrompt: '', files: [], tools: {}, ...raw, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, ...raw.tokens }, actions: raw.actions ?? [] };
   let feed = $('.ss-feed', zone);
-  if (!feed || feed.dataset.id !== s.id) {
+  const feedId = agent ? `${s.id}/${agent.id}` : s.id;
+  if (!feed || feed.dataset.id !== feedId) {
     zone.innerHTML = `<div class="ss-top"></div><div class="ss-thread"><div class="ss-feed" role="log" aria-label="Fil de la session" tabindex="0"></div><button class="ss-jump" data-ag="end" hidden>${icon('chevron')}Nouvelles étapes</button></div>`;
     const f = need('.ss-feed', zone), jump = need('.ss-jump', zone);
-    f.dataset.id = s.id;
+    f.dataset.id = feedId;
     f.addEventListener('scroll', () => { if (atEnd(f)) jump.hidden = true; }, { passive: true });
     feed = f;
   }
-  const top = need('.ss-top', zone), html = topHTML(s, root, !!$<HTMLDetailsElement>('.ss-more', top)?.open);
+  const top = need('.ss-top', zone), html = agent ? subTopHTML(s, agent) : topHTML(s, root, !!$<HTMLDetailsElement>('.ss-more', top)?.open);
   if (drawn.get(top) !== html) { top.innerHTML = html; drawn.set(top, html); }
   // « En cours » : l'agent lancé depuis Studio tourne encore, ou une session du terminal vient d'agir sans avoir répondu.
-  const own = runs.filter(r => r.session === s.id), last = s.actions[s.actions.length - 1];
-  const working = own.length ? own.some(live) : s.live && !!last && last.kind !== 'text';
-  if (s.id === selected) {
+  // Un sous-agent, lui, travaille tant que son journal bouge et qu'il n'a pas rendu sa réponse.
+  const own = agent ? [] : runs.filter(r => r.session === s.id), last = s.actions[s.actions.length - 1];
+  const working = agent ? agent.live && !!last && last.kind !== 'text' : own.length ? own.some(live) : s.live && !!last && last.kind !== 'text';
+  if (agent) { subTitle = agent.title; notify(); }
+  else if (s.id === selected) {
     // Une session suivie par le flux de son agent (serveur) n'a pas de compteur de demandes : on les compte dans le fil.
     const named: Nameable = { ...s, prompts: s.prompts || s.actions.filter(a => a.kind === 'prompt').length };
     selTitle = nameOf(named); notify();
@@ -475,7 +545,7 @@ function showDetail(zone: HTMLElement, raw: Partial<Session> & { actions?: Actio
   // Messages en attente restés en plan : le dernier tour s'est terminé autrement que normalement (arrêt, erreur).
   const latest = own.reduce<AgentRun | undefined>((a, r) => !a || ms(r.started) > ms(a.started) ? r : a, undefined);
   const stalled = !working && !!latest && !live(latest) && latest.status !== 'done';
-  if (!syncFeed(feed, feedBlocks(s.actions, root, working, queued.filter(q => q.session === s.id), stalled))) return;
+  if (!syncFeed(feed, feedBlocks(s.actions, root, working, agent ? [] : queued.filter(q => q.session === s.id), stalled, !!agent))) return;
   if (first || end) feed.scrollTop = feed.scrollHeight;
   else need('.ss-jump', zone).hidden = false;
 }
@@ -741,13 +811,22 @@ async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
   // Fin d'une discussion avec un agent : l'état de sa copie (poussée, fusionnée…) est relu tout de suite.
   const ended = runs.some(r => wasLive.has(r.run) && !live(r));
   if (tick++ % 4 === 0 || ended || (tick % 2 === 0 && jobs.some(j => j.status === 'running'))) await refreshTrees(p);
-  const sel = selected;
+  const sel = selected, sb = sub;
   if (sel) {
     syncStop(box);
     // La liste sert encore à la barre latérale : on la relit de temps en temps, sans attendre.
     if (!known.has(p.id) || tick % 5 === 0) void loadList(p);
+    if (sb) {
+      // Fil d'un sous-agent de la conversation.
+      const a = await bridge.call('project', 'subagent', { project: p.id, session: sel, agent: sb }, 20000);
+      if (!box.isConnected || sel !== selected || sb !== sub) return;
+      if (!a.ok || !a.agent) { zone.innerHTML = `<p class="hm-empty">${esc(a.message === 'Action inconnue.' || a.message === 'Action non autorisée à distance.' ? 'Mets à jour l’app Studio pour Mac pour lire les fils des sous-agents.' : a.message ?? 'Sous-agent introuvable.')}</p>`; return; }
+      noteSubs(sel, a.subagents);
+      showDetail(zone, { ...(a as unknown as Partial<Session> & { actions?: Action[] }), id: sel }, folderPath, a.agent as SubAgent);
+      return;
+    }
     const d = await bridge.call('project', 'session', { project: p.id, session: sel }, 20000);
-    if (!box.isConnected || sel !== selected) return; // on a changé de conversation entre-temps
+    if (!box.isConnected || sel !== selected || sb !== sub) return; // on a changé de conversation entre-temps
     if (!d.ok) {
       // Agent sur un serveur : on suit les étapes reçues de son flux.
       const r = runs.find(x => x.session === selected);
@@ -758,6 +837,7 @@ async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
       }
       zone.innerHTML = `<p class="hm-empty">${esc(d.message ?? 'Session introuvable.')}</p>`; return;
     }
+    noteSubs(sel, d.subagents);
     showDetail(zone, { ...(d as unknown as Partial<Session> & { actions?: Action[] }), id: selected }, folderPath); // « id » de la réponse = numéro de demande
     return;
   }
@@ -773,7 +853,10 @@ async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
 let serverLabel = '';
 function shell(box: HTMLElement, p: Project): void {
   const selRun = selected ? runs.find(r => r.session === selected) : undefined;
-  box.innerHTML = (remote ? `<p class="ag-remote">${icon('devices')}Piloté à distance sur <strong>${esc(remote)}</strong> · relecture et publication depuis le Mac</p>` : '') + (selected
+  box.innerHTML = (remote ? `<p class="ag-remote">${icon('devices')}Piloté à distance sur <strong>${esc(remote)}</strong> · relecture et publication depuis le Mac</p>` : '') + (selected && sub
+    // Fil d'un sous-agent : en lecture seule (on répond à Claude dans la conversation, pas à ses sous-agents).
+    ? `<button class="lv-back" data-sa="">${icon('back')}${esc(current(p.id)?.title ?? 'Conversation')}</button><div class="ag-zone"><p class="hm-empty">Chargement…</p></div>`
+    : selected
     ? `<button class="lv-back" data-ss="">${icon('back')}Toutes les sessions</button><div class="ag-zone"><p class="hm-empty">Chargement…</p></div>${composerHTML(p, { session: selected, machine: selRun?.machine === 'server' ? 'server' : '' })}`
     : `${composerHTML(p)}<div class="ag-zone"><p class="hm-empty">Chargement…</p></div>`);
   const mc = $<HTMLSelectElement>('select[name=machine]', box);
@@ -782,8 +865,15 @@ function shell(box: HTMLElement, p: Project): void {
 
 /** Ouvre une conversation dans l'onglet affiché (`null` : retour à la liste). */
 export function open(id: string | null): void {
-  selected = id; selTitle = '';
+  selected = id; selTitle = ''; sub = null; subTitle = '';
   if (cur?.box.isConnected) { selFor = cur.p.id; shell(cur.box, cur.p); again = painting; void paint(cur.box, cur.p); }
+  notify();
+}
+/** Ouvre le fil d'un sous-agent de la conversation affichée (`null` : retour à la conversation). */
+export function openSub(agent: string | null): void {
+  if (!selected) return;
+  sub = agent; subTitle = '';
+  if (cur?.box.isConnected) { shell(cur.box, cur.p); again = painting; void paint(cur.box, cur.p); }
   notify();
 }
 
@@ -796,6 +886,8 @@ async function removeSession(p: Project, id: string): Promise<void> {
   const r = await native.call('project', 'deleteSession', { project: p.id, session: id }, 20000);
   if (!r.ok) { toast(r.message === 'Action inconnue.' ? 'Mets à jour l’app Studio pour Mac pour supprimer une conversation.' : r.message ?? 'Suppression impossible.'); return; }
   delete titles[id]; saveTitles();
+  if (pins.some(x => x.s === id)) { pins = pins.filter(x => x.s !== id); savePins(); }
+  subsOf.delete(id);
   const k = known.get(p.id); if (k) k.list = k.list.filter(s => s.id !== id);
   runs = runs.filter(x => x.session !== id || live(x));
   toast('Conversation supprimée');
@@ -806,7 +898,7 @@ async function removeSession(p: Project, id: string): Promise<void> {
 export function mount(box: HTMLElement, p: Project, folder: string | null): void {
   clearInterval(timer); folderPath = folder; tick = 0;
   // La conversation sélectionnée appartient à un projet : on ne la garde pas en changeant de projet.
-  if (selFor !== p.id) { selected = null; selTitle = ''; }
+  if (selFor !== p.id) { selected = null; selTitle = ''; sub = null; subTitle = ''; }
   selFor = p.id; cur = { box, p };
   const at = bridge.where();
   if (!at) { box.innerHTML = `<div class="ag-empty">${icon('terminal')}<h3>Claude Code tourne sur ton Mac</h3><p>Ouvre ce projet dans l’app Studio pour Mac. Pour le piloter d’ici, lie cet appareil au Mac (Réglages → Appareils) et autorise-le, sur le Mac, à piloter Claude Code.</p></div>`; return; }
@@ -822,10 +914,13 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
   bindComposer(box, p, r => { open(r.session || selected); });
   box.onclick = async e => {
     const t = e.target as HTMLElement;
+    const sa = t.closest<HTMLElement>('[data-sa]');
+    if (sa) { if ((sa.dataset.sa || null) !== sub) openSub(sa.dataset.sa || null); return; }
     const row = t.closest<HTMLElement>('[data-ss]');
     if (row) { open(row.dataset.ss || null); return; }
     const b = t.closest<HTMLElement>('[data-ag]'); if (!b) return;
     const wt = b.dataset.wt ?? '';
+    if (b.dataset.ag === 'pin-sub') { if (selected && sub) { togglePin(p.id, selected, sub); again = painting; void paint(box, p); } return; }
     if (b.dataset.ag === 'end') { const f = $('.ss-feed', box); f?.scrollTo({ top: f.scrollHeight, behavior: 'smooth' }); b.hidden = true; return; }
     if (b.dataset.ag === 'copy') {
       const text = b.closest('.ss-msg')?.querySelector<HTMLElement>('.md')?.innerText ?? '';
@@ -868,7 +963,7 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
       for (const r of runs.filter(x => live(x) && x.worktree === wt)) await bridge.call('agent', 'stop', { run: r.run }, 10000);
       const r = await native.call('agent', 'discard', { project: p.id, worktree: wt }, 30000);
       toast(r.ok ? 'Copie supprimée' : r.message ?? 'Impossible.');
-      if (r.ok && selected) { selected = null; shell(box, p); }
+      if (r.ok && selected) { selected = null; sub = null; shell(box, p); }
       await refreshTrees(p); void paint(box, p);
     }
   };
@@ -877,4 +972,4 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
 }
 export const stop = (): void => { clearInterval(timer); cur = null; };
 /** Choisit la conversation à afficher à la prochaine ouverture de l'onglet Claude Code du projet. */
-export const select = (id: string | null, pid: string): void => { selected = id; selFor = pid; selTitle = ''; notify(); };
+export const select = (id: string | null, pid: string, agent: string | null = null): void => { selected = id; selFor = pid; selTitle = ''; sub = id ? agent : null; subTitle = ''; notify(); };

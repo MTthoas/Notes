@@ -157,6 +157,7 @@ Dans l'onglet **Claude Code** d'un projet, tu écris une consigne, Claude Code t
 - **Analyser** : lecture seule, Claude Code explore et propose.
 - **Notes et tâches** : joins des notes du projet à une consigne (« Joindre une note »), ou confie directement une note (bouton **Claude Code** de l'éditeur, onglet Notes) ou une tâche (onglet Tâches).
 - **Sessions** : toutes les sessions Claude Code du projet, y compris celles lancées hors de Studio, avec leur fil, les fichiers touchés et les tokens ; chacune peut être **reprise**.
+- **Sous-agents** : les tâches que Claude délègue pendant une conversation apparaissent dans son en-tête. Un clic ouvre le fil du sous-agent (lecture seule), le fil d'Ariane suit (… › conversation › sous-agent), on passe d'un sous-agent à l'autre, et **Épingler** le garde dans la barre latérale, sous sa conversation.
 
 **Publier** transforme une copie en pull request, en un clic. Studio propose le message de commit au format [Conventional Commits](https://www.conventionalcommits.org/fr/) (`feat`, `fix`, `chore`…), rédigé par l'IA d'après la consigne, le compte rendu de l'agent et le diff, dans le style des commits récents, puis un nom de branche assorti (`feat/…`). Un orchestrateur enchaîne ensuite seul :
 

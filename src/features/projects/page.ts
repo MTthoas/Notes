@@ -321,10 +321,10 @@ export function toClaude(p: Project, what: { notes?: string[]; prompt?: string }
 /** Conversations Claude Code récentes d'un projet, pour la barre latérale. */
 export const sideSessions = (pid: string) => sessions.sideSessions(pid);
 /** Choisit la conversation à ouvrir dans l'onglet Claude Code du projet (`null` : la liste). */
-export const openSession = (pid: string, id: string | null): void => sessions.select(id, pid);
+export const openSession = (pid: string, id: string | null, agent: string | null = null): void => sessions.select(id, pid, agent);
 
 // ---------- Page ----------
-/** Fil d'Ariane : Projets › projet › onglet › conversation Claude Code, chaque niveau ramenant à sa page. */
+/** Fil d'Ariane : Projets › projet › onglet › conversation Claude Code › sous-agent, chaque niveau ramenant à sa page. */
 function trailHTML(): string {
   const p = model.byId(app.viewState().project), tab = curTab();
   const up: [string, string] = ['Projets', 'data-pj-open=""'];
@@ -332,7 +332,9 @@ function trailHTML(): string {
   if (tab === 'overview') return app.crumb(p.name, [up]);
   const home: [string, string] = [p.name, 'data-pj-tab="overview"'], label = TABS.find(x => x[0] === tab)?.[1] ?? '';
   const talk = tab === 'sessions' ? sessions.current(p.id) : null;
-  return talk ? app.crumb(talk.title, [up, home, [label, 'data-pj-tab="sessions"']]) : app.crumb(label, [up, home]);
+  if (!talk) return app.crumb(label, [up, home]);
+  const tabUp: [string, string] = [label, 'data-pj-tab="sessions"'];
+  return talk.sub ? app.crumb(talk.sub.title, [up, home, tabUp, [talk.title, 'data-pj-talk']]) : app.crumb(talk.title, [up, home, tabUp]);
 }
 
 export function mount(main: HTMLElement): void {
@@ -348,6 +350,7 @@ export function mount(main: HTMLElement): void {
     const t = target(e);
     if (!t.closest('.crumb')) return;
     if (t.closest('[data-pj-open]')) void go(null);
+    else if (p && t.closest('[data-pj-talk]')) sessions.openSub(null);
     else if (p && t.closest('[data-pj-tab="sessions"]')) sessions.open(null);
     else if (p && t.closest('[data-pj-tab]')) void go(p.id, 'overview');
   });
