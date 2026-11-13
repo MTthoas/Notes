@@ -4,7 +4,7 @@ Notes Markdown reliées entre elles, stockées uniquement sur tes appareils. Pas
 
 Connectées à Claude, OpenAI ou un modèle local, à Linear, à GitHub et à tes autres appareils — toujours sans backend, et chiffrées de bout en bout.
 
-[![Build](https://github.com/MTthoas/Studio/actions/workflows/build.yml/badge.svg)](https://github.com/MTthoas/Studio/actions/workflows/build.yml) · Licence [MIT](LICENSE)
+[![Build](https://github.com/MTthoas/Studio/actions/workflows/build.yml/badge.svg)](https://github.com/MTthoas/Studio/actions/workflows/build.yml) · Licence [AGPL-3.0](LICENSE)
 
 ## Applications Mac et iPhone
 
@@ -188,7 +188,17 @@ Règles : `lib/` et `core/` n'importent jamais `features/` ni `integrations/` ; 
 
 - **CI** ([`.github/workflows/build.yml`](.github/workflows/build.yml)) à chaque push et pull request : types TypeScript stricts, build, vérifications (cache hors ligne complet, aucune clé d'API dans le code), build de l'app Mac, compilation de l'app iPhone. En local : `npm run verify`.
 - **Publication** : chaque push sur `main` publie une Release (`v1.0.<n>`) avec `Studio-macOS.zip` et `Studio-web.zip`. Un tag `v…` fait de même avec son propre nom.
-- **Licence** : [MIT](LICENSE). Chacun peut lire, réutiliser et modifier le code.
+- **Licence** : [GNU AGPL-3.0](LICENSE), voir la section [Licence](#licence) ci-dessous.
 - **Contributions** : les pull requests sont bienvenues ; seul le mainteneur peut les accepter ([`CODEOWNERS`](.github/CODEOWNERS)).
 
 Les données vivent dans IndexedDB (base `carnet`). Vider les données du site efface les notes : l'export JSON (palette → « Exporter tout en JSON ») sert de sauvegarde.
+
+## Licence
+
+Copyright © 2026 Matthias ([@MTthoas](https://github.com/MTthoas)). Studio est un logiciel libre publié sous **[GNU AGPL-3.0](LICENSE)**.
+
+- Tu peux utiliser, étudier, modifier et redistribuer Studio, gratuitement.
+- Si tu distribues une version modifiée, ou si tu la proposes comme service en ligne, tu dois publier son code source complet sous la même licence. Impossible donc d'en faire un produit fermé.
+- Le propriétaire peut proposer Studio sous d'autres licences (double licence, par exemple pour un usage commercial fermé) : contact via GitHub.
+- Contribuer : voir [CONTRIBUTING.md](CONTRIBUTING.md) et son accord de contribution.
+- Les versions publiées avant ce changement (jusqu'à la release qui précède) restent disponibles sous licence MIT.

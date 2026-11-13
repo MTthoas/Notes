@@ -54,7 +54,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSHumanReadableCopyright</key><string>Vos notes restent sur vos appareils.</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 Matthias · Logiciel libre sous licence GNU AGPL-3.0. Vos notes restent sur vos appareils.</string>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>NSFaceIDUsageDescription</key><string>Studio utilise Face ID pour ouvrir ton coffre chiffré.</string>
   <key>NSMicrophoneUsageDescription</key><string>Studio utilise le micro pour tes notes vocales. La transcription est faite sur cet appareil.</string>
