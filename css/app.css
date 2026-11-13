@@ -118,6 +118,15 @@ button.side-label:hover { color: var(--text-2); }
 .side-foot span:first-of-type { flex: 1; }
 .side-foot .ic { width: 14px; height: 14px; }
 .side-foot:hover { background: var(--hover); color: var(--text-2); }
+.side-update { color: var(--c-blue); font-weight: 500; background: color-mix(in srgb, var(--c-blue) 9%, transparent); }
+.side-update:hover { color: var(--c-blue); background: color-mix(in srgb, var(--c-blue) 15%, transparent); }
+/* Réglages → Mises à jour */
+.up h4 .spin { margin-right: 2px; }
+.cx-sec .up-ver { margin: 8px 0 0; color: var(--text-2); font-size: var(--t-1); }
+.up-notes { margin-top: 10px; }
+.up-notes summary { cursor: pointer; color: var(--text-2); font-size: var(--t-1); font-weight: 500; }
+.up-notes pre { margin-top: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap; }
+.up a.btn { text-decoration: none; }
 
 /* ---------- Liste ---------- */
 .list-head { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 8px 0 14px; flex: none; border-bottom: 1px solid var(--border); }
@@ -1114,6 +1123,10 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .side-sub2 { height: 24px; padding-left: 38px; font-weight: 400; font-size: var(--t-1); color: var(--text-2); }
 .side-sub2 .ic { width: 12px; height: 12px; color: var(--text-3); }
 .side-sub2.sel .ic { color: var(--c-orange); }
+/* Conversations Claude Code du projet ouvert */
+.side-sub3 { height: 24px; gap: 8px; padding-left: 56px; font-weight: 400; font-size: var(--t-1); color: var(--text-2); }
+.side-sub3 .ss-live { width: 6px; height: 6px; }
+.side-sub3.sel { font-weight: 500; }
 .pj-tabs { margin: 6px 0 0; overflow-x: auto; scrollbar-width: none; }
 .pj-tabs::-webkit-scrollbar { display: none; }
 .pj-tabs button { flex: none; }
@@ -1183,11 +1196,6 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .fx-ab { font-variant-numeric: tabular-nums; }
 
 /* Sessions IA */
-.ss-quota { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 12px; margin-bottom: 14px; border-radius: 10px; font-size: var(--t-2); --c: var(--c-green); background: color-mix(in srgb, var(--c) 9%, transparent); border: 1px solid color-mix(in srgb, var(--c) 22%, transparent); }
-.ss-quota.warn { --c: var(--c-amber); } .ss-quota.err { --c: var(--c-red); }
-.ss-quota i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
-.ss-quota strong { color: var(--c); font-weight: 600; }
-.ss-quota span { color: var(--text-2); }
 .ss-totals, .us-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .ss-totals div, .us-sum div { display: flex; flex-direction: column; gap: 2px; padding: 11px 13px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
 .ss-totals strong, .us-sum strong { font-size: var(--t-5); font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
@@ -1434,6 +1442,22 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ag-hint .ic { flex: none; width: 13px; height: 13px; }
 .ag-opts .btn-primary { margin-left: auto; height: 32px; }
 .ag-opts kbd { margin-left: 6px; padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, currentColor 14%, transparent); font: 11px var(--mono); }
+/* Pied de la consigne : ce qu'il reste de l'abonnement Claude */
+.ag-lims { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; min-height: 36px; padding: 6px 8px 6px 14px; border-top: 1px solid var(--border); color: var(--text-3); font-size: var(--t-1); }
+.ag-lims:empty { display: none; }
+.ag-lims em { font-style: normal; }
+.ag-lims > em { display: inline-flex; align-items: center; gap: 8px; line-height: 1.45; }
+.ag-lim { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; --c: var(--c-green); }
+.ag-lim.warn { --c: var(--c-amber); } .ag-lim.err { --c: var(--c-red); }
+.ag-lim > span:first-child { color: var(--text-2); font-weight: 500; }
+.bar.ag-lim-bar { width: 56px; height: 5px; }
+.ag-lim-bar i { background: var(--c); transition: width .3s; }
+.ag-lim strong { color: var(--c); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ag-lim-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+.ag-lims .icon-btn { width: 24px; height: 24px; margin-left: auto; }
+.ag-lims .icon-btn .ic { width: 13px; height: 13px; }
+.ag-lims .link-btn { font-size: inherit; color: var(--text-2); }
+@media (max-width: 640px) { .ag-lim { white-space: normal; flex-wrap: wrap; } }
 .ag-continue { margin-top: 16px; }
 .ag-zone { display: flex; flex-direction: column; margin-top: 4px; }
 .ag-empty { max-width: 520px; margin: 24px auto; text-align: center; color: var(--text-2); }
@@ -1468,6 +1492,12 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ag-tree-act .btn { height: 28px; }
 .ss-box .ss-h:first-child { margin-top: 4px; }
 .ss-dhead .btn { height: 28px; }
+.ss-dhead .icon-btn { flex: none; width: 28px; height: 28px; color: var(--text-3); }
+.ss-dhead .icon-btn:hover { color: var(--danger); }
+.ag-opts .ag-stop { height: 32px; }
+.ag-opts .ag-stop[hidden] { display: none; }
+.ag-opts .ag-stop + .btn-primary { margin-left: 0; }
+.ag-opts .btn-primary:disabled { opacity: .45; cursor: default; }
 .modal.ag-pub { max-width: 560px; }
 .pub-type { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: var(--text-2); font-size: var(--t-1); font-weight: 500; }
 .pub-type .ag-seg { flex-wrap: wrap; }

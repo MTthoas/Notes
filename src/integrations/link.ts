@@ -41,7 +41,7 @@ type Wire =
 // ---------- Pilotage à distance ----------
 // Un appareil lié (l'iPhone) peut demander au Mac de lancer, suivre et arrêter les agents Claude Code de ses projets.
 // Le Mac ne répond qu'aux appareils explicitement autorisés, et seulement à cette liste fermée de demandes.
-const REMOTE_ALLOWED = new Set(['agent.list', 'agent.run', 'agent.server', 'agent.start', 'agent.stop', 'agent.worktrees', 'agent.daily', 'agent.commits', 'project.info', 'project.sessions', 'project.session', 'claude.status']);
+const REMOTE_ALLOWED = new Set(['agent.list', 'agent.run', 'agent.server', 'agent.start', 'agent.stop', 'agent.worktrees', 'agent.daily', 'agent.commits', 'project.info', 'project.sessions', 'project.session', 'claude.status', 'claude.limits']);
 const isMac = (): boolean => native.available() && document.documentElement.dataset.native === 'mac';
 const pending = new Map<number, (r: native.Reply) => void>();
 let rpcSeq = 0;
@@ -262,6 +262,8 @@ class Session {
     const params: Record<string, unknown> = { ...msg.params };
     delete params.type; delete params.action; delete params.id;
     if (key === 'agent.server' && (params.op ?? 'status') !== 'status') return deny('Le serveur se configure depuis le Mac.');
+    // Limites de l'abonnement : lecture seule des pourcentages. Les activer, les couper ou forcer une relecture se fait sur le Mac.
+    if (key === 'claude.limits') params.op = '';
     if (key === 'agent.start') {
       // À distance : jamais de commandes (tests npm), consigne bornée.
       params.tests = false;

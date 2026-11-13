@@ -91,6 +91,8 @@ studio update    # reconstruit l'app Mac depuis les sources et la réinstalle
 studio help      # aide
 ```
 
+**Mises à jour** — la version web se met à jour seule à chaque ouverture. L'app Mac, qui embarque ses fichiers, se met à jour depuis Réglages → **Mises à jour** : elle lit la dernière [Release](https://github.com/MTthoas/Studio/releases/latest) du dépôt (au lancement puis toutes les 6 heures, désactivable), le signale dans la barre latérale, et sur ton clic télécharge `Studio-macOS.zip`, vérifie le paquet (même identifiant, signature intacte), remplace l'app et la relance. Rien n'est installé sans clic. L'app n'étant pas signée par un compte développeur Apple, macOS peut redemander certains accords (trousseau, micro) après une mise à jour. `studio update` reste la voie pour installer ce que tu as modifié en local.
+
 ## Fonctionnalités
 
 Dans l'app, la page **Aide** (touche `?`) explique la prise en main en cartes courtes, et l'accueil propose des **premiers pas** qui se cochent d'eux-mêmes.
@@ -136,7 +138,7 @@ Une note ou une tâche y appartient avec le tag `#projet/studio` — posé par l
 | Onglet | Ce qu'on y trouve |
 | --- | --- |
 | **Vue d'ensemble** | Une carte par onglet, des graphiques (commits par jour, tokens Claude Code par jour, santé de la CI, avancement des tâches), une barre de consigne rapide et les agents en cours |
-| **Claude Code** | Les agents et les sessions menées dans le dossier, en direct : ce qu'elles font, fichiers modifiés, tokens consommés, état de la limite d'utilisation |
+| **Claude Code** | Les agents et les sessions menées dans le dossier, en direct : ce qu'elles font, fichiers modifiés, tokens consommés. Chaque conversation porte un nom court qui la résume (rédigé par l'IA branchée dans Studio, remis à jour quand elle avance), apparaît dans la barre latérale et le fil d'Ariane, et peut être arrêtée ou supprimée (son journal part à la corbeille du Mac). Sous la consigne, ce qu'il reste de ton abonnement Claude en pourcentage (session de 5 heures, semaine) et le délai avant réinitialisation |
 | **Code** | Dossier local, branches locales (avance / retard), PR et activité, **revue IA** des changements en cours ou de la branche ; ouverture dans VS Code, le Finder ou le Terminal |
 | **Flux** | Le parcours de chaque branche façon gitflow : en cours → PR ouverte → prête à fusionner → fusionnée → publiée (Release), avec CI et revues |
 | **Serveur** | L'état du VPS ou de la VM du projet, joint en SSH, et ses agents |
@@ -203,7 +205,7 @@ Studio se branche sur **Claude**, **OpenAI** ou un **modèle local** : les appel
 - Dans ce rôle, Claude Code tourne **sans ses propres outils** (`--tools ""`), sans serveur MCP, sans tes réglages ni tes hooks, sans session enregistrée, dans un dossier vide propre à Studio. Il ne lance aucune commande et ne lit aucun fichier.
 - Les automatisations gardent leurs outils (ranger une note, créer une tâche…) : Claude Code renvoie les appels sous forme structurée, Studio les exécute, avec ton accord pour toute modification.
 - La consommation passe par les limites de ton abonnement : elle est comptée à part du budget des clés API.
-- **Utilisation de l'abonnement** : les tokens consommés par Claude Code sur ce Mac (5 dernières heures, aujourd'hui, 7 jours, par modèle), lus dans ses journaux locaux, toutes sessions confondues. Sur demande (**Afficher mes limites**), la part utilisée de la session de 5 heures et de la semaine, comme `/usage` : Studio lit alors la connexion de Claude Code dans le trousseau (macOS demande ton accord) et interroge `api.anthropic.com`, en lecture seule. Le jeton ne quitte jamais l'app native et n'est jamais renouvelé par Studio.
+- **Utilisation de l'abonnement** : les tokens consommés par Claude Code sur ce Mac (5 dernières heures, aujourd'hui, 7 jours, par modèle), lus dans ses journaux locaux, toutes sessions confondues. Sur demande (**Afficher mes limites**), la part utilisée de la session de 5 heures et de la semaine, comme `/usage` : Studio lit alors la connexion de Claude Code dans le trousseau (macOS demande ton accord) et interroge `api.anthropic.com`, en lecture seule. Le jeton ne quitte jamais l'app native et n'est jamais renouvelé par Studio. Une fois activée, la part restante s'affiche aussi sous la consigne de l'onglet **Claude Code** de chaque projet, y compris depuis un appareil autorisé à piloter le Mac (il ne reçoit que les pourcentages).
 
 ### Synchronisation entre appareils
 
@@ -264,6 +266,7 @@ src/                               TypeScript strict
     biometric.ts      pont vers Touch ID / Face ID de l'app native
     events.ts         bus d'événements : les sources annoncent, les automatisations s'abonnent
     native.ts         pont générique vers l'app native (inactif dans un navigateur)
+    update.ts         mise à jour de l'app Mac depuis les Releases du dépôt
   features/         pages et fonctions de l'app
     home.ts           accueil
     tasks.ts          tâches, sous-tâches, échéances, tickets Linear
@@ -292,6 +295,7 @@ native/             apps Mac et iPhone (Swift) et leurs scripts de build
     Notify.swift        notifications système et pastille de l'icône
     ClaudeCode.swift    Claude Code comme moteur d'IA (sans outils)
     ClaudeUsage.swift   utilisation de l'abonnement Claude
+    Updater.swift       mise à jour de l'app Mac depuis les Releases
     Projects.swift      dossiers de projet, état Git, copies isolées
     Agents.swift        agents Claude Code et leurs garde-fous
     Orchestrator.swift  publication : mise à jour, conflits, commit, push

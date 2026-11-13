@@ -10,7 +10,7 @@ final class ClaudeSessions {
     struct Action { let at: String; let kind: String; let text: String }
     final class State {
         var offset: UInt64 = 0
-        var title = ""; var branch = ""; var started = ""; var updated = ""; var lastPrompt = ""
+        var title = ""; var branch = ""; var started = ""; var updated = ""; var lastPrompt = ""; var firstPrompt = ""
         var models = Set<String>(); var seen = Set<String>()
         var tokIn = 0, tokOut = 0, tokCacheRead = 0, tokCacheWrite = 0, prompts = 0
         var tools: [String: Int] = [:]; var files: [String] = []
@@ -59,6 +59,7 @@ final class ClaudeSessions {
             let text = c.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty, !text.hasPrefix("<") else { return }
             st.prompts += 1; st.lastPrompt = clip(text, 300)
+            if st.firstPrompt.isEmpty { st.firstPrompt = st.lastPrompt }
             push(st, Action(at: ts, kind: "prompt", text: clip(text, 4000)))
         case "assistant":
             guard let m = e["message"] as? [String: Any] else { return }
@@ -113,6 +114,8 @@ final class ClaudeSessions {
         let worktree = st.cwd.range(of: "/.claude/worktrees/").map { String(st.cwd[$0.upperBound...]) } ?? ""
         return ["id": url.deletingPathExtension().lastPathComponent, "worktree": worktree, "title": st.title.isEmpty ? (st.lastPrompt.isEmpty ? "Session" : clip(st.lastPrompt, 80)) : st.title,
                 "branch": st.branch, "started": st.started, "updated": st.updated, "live": Date().timeIntervalSince(mtime) < 45,
+                // Titre écrit par Claude Code lui-même (sessions du terminal), et première demande : Studio en tire le nom affiché.
+                "aiTitle": st.title, "firstPrompt": st.firstPrompt,
                 "models": Array(st.models).sorted(), "prompts": st.prompts, "lastPrompt": st.lastPrompt,
                 "tokens": ["input": st.tokIn, "output": st.tokOut, "cacheRead": st.tokCacheRead, "cacheWrite": st.tokCacheWrite],
                 "tools": st.tools, "files": Array(st.files.prefix(15))]
@@ -143,6 +146,18 @@ final class ClaudeSessions {
             r["ok"] = true
             r["actions"] = st.actions.suffix(80).map { ["at": $0.at, "kind": $0.kind, "text": $0.text] }
             done(r)
+        }
+    }
+
+    /// Supprime une session : son journal part à la corbeille du Mac (récupérable), jamais ailleurs que dans le dossier du projet.
+    func delete(project folder: String, session: String, done: @escaping ([String: Any]) -> Void) {
+        queue.async {
+            guard let f = self.file(folder, session) else { return done(["ok": false, "message": "Session introuvable."]) }
+            do {
+                try FileManager.default.trashItem(at: f, resultingItemURL: nil)
+                self.states[f.path] = nil
+                done(["ok": true])
+            } catch { done(["ok": false, "message": "Suppression impossible : \(error.localizedDescription)"]) }
         }
     }
 

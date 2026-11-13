@@ -123,6 +123,21 @@ final class Agents {
         return runs.values.contains { $0.project == project && $0.worktree == worktree && ($0.status == "running" || $0.status == "starting") }
     }
 
+    /// Un agent travaille-t-il encore dans cette session ?
+    func busy(project: String, session: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !session.isEmpty && runs.values.contains { $0.project == project && $0.session == session && ($0.status == "running" || $0.status == "starting") }
+    }
+
+    /// Oublie les agents terminés d'une session que l'utilisateur supprime. Renvoie leur nombre.
+    func forget(project: String, session: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        guard !session.isEmpty else { return 0 }
+        let ids = runs.filter { $0.value.project == project && $0.value.session == session && $0.value.status != "running" && $0.value.status != "starting" }.map { $0.key }
+        for id in ids { runs[id] = nil }
+        return ids.count
+    }
+
     /// Attend la fin d'un agent (pour l'orchestrateur). Renvoie son état final.
     func wait(_ id: String, timeout: TimeInterval) -> [String: Any] {
         let deadline = Date().addingTimeInterval(timeout)
