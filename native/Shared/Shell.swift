@@ -89,6 +89,7 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         if type == "project", let action = body["action"] as? String, let id = body["id"] as? Int { project(action, id: id, body: body) }
         if type == "agent", let action = body["action"] as? String, let id = body["id"] as? Int { agent(action, id: id, body: body) }
         if type == "claude", let action = body["action"] as? String, let id = body["id"] as? Int { claude(action, id: id, body: body) }
+        if type == "update", let action = body["action"] as? String, let id = body["id"] as? Int { update(action, id: id) }
         if type == "voice", let action = body["action"] as? String {
             Dictation.shared.send = { [weak self] payload in
                 guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
@@ -139,6 +140,14 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         case "session":
             guard let dir = folders.path(pid) else { answer(["id": id, "ok": false, "message": "Choisis d'abord le dossier du projet."]); return }
             ClaudeSessions.shared.detail(project: dir, session: body["session"] as? String ?? "") { var r = $0; r["id"] = id; self.answer(r) }
+        case "deleteSession":
+            // Supprime une conversation : son journal part dans la corbeille, et ses agents terminés sont oubliés.
+            let sid = body["session"] as? String ?? ""
+            if Agents.shared.busy(project: pid, session: sid) { answer(["id": id, "ok": false, "message": "Arrête d'abord l'agent qui travaille dans cette conversation."]); return }
+            let forgotten = Agents.shared.forget(project: pid, session: sid)
+            guard let dir = folders.path(pid) else { answer(["id": id, "ok": forgotten > 0, "message": "Choisis d'abord le dossier du projet."]); return }
+            // Session d'un agent sur serveur : pas de journal sur ce Mac, l'oublier suffit.
+            ClaudeSessions.shared.delete(project: dir, session: sid) { var r = $0; if forgotten > 0 { r["ok"] = true }; r["id"] = id; self.answer(r) }
         default:
             answer(["id": id, "ok": false, "message": "Action inconnue."])
         }
@@ -206,6 +215,20 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         }
         #else
         answer(["id": id, "ok": false, "message": "Claude Code s'utilise depuis l'app Mac."])
+        #endif
+    }
+
+    /// Mise à jour de l'app Mac depuis les Releases du dépôt (voir Updater.swift).
+    private func update(_ action: String, id: Int) {
+        #if os(macOS)
+        let send: ([String: Any]) -> Void = { var r = $0; r["id"] = id; self.answer(r) }
+        switch action {
+        case "check": Updater.shared.check(done: send)
+        case "install": Updater.shared.install(done: send)
+        default: send(["ok": false, "message": "Action inconnue."])
+        }
+        #else
+        answer(["id": id, "ok": false, "message": "La mise à jour depuis l'app concerne l'app Mac."])
         #endif
     }
 

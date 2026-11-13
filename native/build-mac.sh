@@ -8,6 +8,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/native/build"
 APP="$BUILD/Studio.app"
 VERSION="$(date +%Y.%m.%d)"
+# Commit et heure du build : l'app s'en sert pour savoir si une version plus récente est publiée (voir Updater.swift).
+COMMIT="${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)}"
+BUILT="$(date +%s)"
 
 echo "→ Préparation"
 [ -d "$APP" ] && rm -r "$APP"
@@ -50,6 +53,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>StudioCommit</key><string>$COMMIT</string>
+  <key>StudioBuilt</key><string>$BUILT</string>
   <key>CFBundleDevelopmentRegion</key><string>fr</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>

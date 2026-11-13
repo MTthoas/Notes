@@ -26,6 +26,7 @@ import { registerBuiltins } from './plugins/builtin.ts';
 import * as caret from './ui/caret.ts';
 import * as biometric from './core/biometric.ts';
 import * as native from './core/native.ts';
+import * as update from './core/update.ts';
 import * as linear from './integrations/linear/api.ts';
 import * as vault from './core/vault.ts';
 import * as link from './integrations/link.ts';
@@ -190,8 +191,11 @@ function renderSidebar() {
       <div class="side-label">Organisation</div>
       <div class="side-group">${item('projets')}${projectsModel.projects().slice(0, 8).map(p => {
         const open = v.type === 'projets' && v.project === p.id, tab = v.tab ?? 'overview';
+        // Sous « Claude Code » : les conversations récentes du projet, celle qui est ouverte en surbrillance.
+        const talks = open ? projectsPage.sideSessions(p.id) : [], talking = tab === 'sessions' && talks.some(s => s.sel);
         return `<button class="side-item side-sub${open && tab === 'overview' ? ' sel' : ''}${open ? ' open' : ''}" data-pj-open="${esc(p.id)}"><i class="tag-dot" style="--c:var(--c-${p.hue})"></i><span>${esc(p.name)}</span></button>`
-          + (open ? projectsPage.TABS.slice(1).map(([k, l, ic]) => `<button class="side-item side-sub2${tab === k ? ' sel' : ''}" data-pj-open="${esc(p.id)}" data-pj-tab="${k}">${icon(ic)}<span>${esc(l)}</span></button>`).join('') : '');
+          + (open ? projectsPage.TABS.slice(1).map(([k, l, ic]) => `<button class="side-item side-sub2${tab === k && !(k === 'sessions' && talking) ? ' sel' : ''}" data-pj-open="${esc(p.id)}" data-pj-tab="${k}"${k === 'sessions' ? ' data-pj-session=""' : ''}>${icon(ic)}<span>${esc(l)}</span></button>`
+            + (k === 'sessions' ? talks.map(s => `<button class="side-item side-sub3${tab === 'sessions' && s.sel ? ' sel' : ''}" data-pj-open="${esc(p.id)}" data-pj-tab="sessions" data-pj-session="${esc(s.id)}" title="${esc(s.title)}"><i class="ss-live${s.live ? ' on' : ''}"></i><span>${esc(s.title)}</span></button>`).join('') : '')).join('') : '');
       }).join('')}${item('tasks')}${item('agents')}</div>
       <div class="side-label">Connexions</div>
       <div class="side-group">${item('linear')}${item('github')}</div>
@@ -199,6 +203,7 @@ function renderSidebar() {
       <div class="side-label">Explorer</div>
       <div class="side-group">${item('graph')}${item('trash')}${item('help')}</div>
     </div>
+    ${update.available() ? `<button class="side-foot side-update" data-open-conn="maj" title="Une nouvelle version de Studio est prête à être installée">${icon('download')}<span>Mise à jour disponible</span></button>` : ''}
     <button class="side-foot" data-open-conn="${vault.enabled() ? 'appareils' : 'coffre'}" title="Réglages (${keys(SC.settings)})">${icon(vault.isOpen() ? 'shield' : 'unlock')}<span>${vault.isOpen() ? 'Chiffré de bout en bout' : 'Non chiffré'}</span>${devs ? `<span class="side-count">${icon('devices')}${devs}</span>` : ''}</button>`;
 }
 
@@ -992,7 +997,7 @@ async function onClick(e: MouseEvent): Promise<void> {
   }
   if (await hub.click(e)) return;
   let x: HTMLElement | null;
-  if ((x = t.closest('[data-pj-open], [data-project-open]')) && !t.closest('.pj')) { await setView({ type: 'projets', project: x.dataset.pjOpen || x.dataset.projectOpen || null, ...(x.dataset.pjTab ? { tab: x.dataset.pjTab } : {}) }); return; }
+  if ((x = t.closest('[data-pj-open], [data-project-open]')) && !t.closest('.pj')) { if (x.dataset.pjOpen && x.dataset.pjSession !== undefined) projectsPage.openSession(x.dataset.pjOpen, x.dataset.pjSession || null); await setView({ type: 'projets', project: x.dataset.pjOpen || x.dataset.projectOpen || null, ...(x.dataset.pjTab ? { tab: x.dataset.pjTab } : {}) }); return; }
   if ((x = t.closest('[data-view]'))) { await setView({ type: x.dataset.view ?? 'home' }); return; }
   if ((x = t.closest('[data-open-note]')) && store.get(x.dataset.openNote)) { await openNote(x.dataset.openNote ?? ''); return; }
   if ((x = t.closest('[data-tag]'))) { e.preventDefault(); await setView({ type: 'tag', tag: x.dataset.tag ?? '' }); return; }
@@ -1203,6 +1208,8 @@ async function start() {
     if (!out.length && !topLayer()) { renderList(); const chip = $('.chip-warn'); const n = store.get(ui.id); if (chip?.lastChild && n?.expiresAt) chip.lastChild.textContent = until(n.expiresAt); }
   }, 30000);
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
+  // L'app Mac embarque ses fichiers : elle cherche ses nouvelles versions dans les Releases du dépôt (voir core/update.ts).
+  update.start();
 }
 start().catch(e => { console.error(e); document.body.insertAdjacentHTML('beforeend', `<div class="fatal">Studio n’a pas pu démarrer : ${esc(e.message)}.<br>Le stockage local du navigateur est peut-être désactivé (navigation privée ?).</div>`); });
 

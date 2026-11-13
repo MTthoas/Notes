@@ -13,6 +13,7 @@ import * as schema from '../lib/schema.ts';
 import * as qr from '../lib/qr.ts';
 import * as events from '../core/events.ts';
 import * as usage from '../integrations/usage.ts';
+import * as update from '../core/update.ts';
 import type { AppEvent } from '../core/events.ts';
 import { renderMarkdown, esc, plain } from '../lib/markdown.ts';
 import { fold } from '../lib/fuzzy.ts';
@@ -58,6 +59,12 @@ const plural = (n: number, w: string) => `${n} ${w}${n > 1 ? 's' : ''}`;
 
 export function init(api: HubApi) {
   app = api;
+  // Mise à jour de l'app Mac : l'onglet des réglages suit la recherche, la barre latérale signale une version disponible.
+  let wasAvailable = false;
+  update.onChange(() => {
+    if (curTab === 'maj') refreshConnections();
+    if (update.available() !== wasAvailable) { wasAvailable = update.available(); app.renderSidebar?.(); }
+  });
   link.on(e => {
     if (e.type === 'synced' && (e.got || e.sent)) toast(`Synchronisé avec ${e.name} · ${e.got} reçue(s), ${e.sent} envoyée(s)`);
     if (e.type === 'paired') toast(`Appareil lié : ${e.name}`);
@@ -446,6 +453,7 @@ const TABS: [string, string, string, string][] = [
   ['appareils', 'devices', 'Appareils', 'Relie ton téléphone et tes ordinateurs, sans serveur, chiffré de bout en bout.'],
   ['apparence', 'palette', 'Apparence', 'Thème de l’interface.'],
   ['donnees', 'database', 'Données', 'Sauvegardes, import et export.'],
+  ['maj', 'download', 'Mises à jour', 'Version installée et nouvelles versions de Studio.'],
 ];
 let curTab = 'coffre';
 const root = () => $('#main .settings');
@@ -464,7 +472,7 @@ export function mountSettings(main: HTMLElement, tab: string): void {
   refreshConnections();
 }
 
-const TAB_BODY: Record<string, () => string> = { coffre: () => tabVault(), ia: () => tabAI(), linear: () => tabLinear(), github: () => tabGithub(), appareils: () => tabDevices(), apparence: () => tabLook(), donnees: () => tabData() };
+const TAB_BODY: Record<string, () => string> = { coffre: () => tabVault(), ia: () => tabAI(), linear: () => tabLinear(), github: () => tabGithub(), appareils: () => tabDevices(), apparence: () => tabLook(), donnees: () => tabData(), maj: () => tabUpdate() };
 function refreshConnections(): void {
   const r = root(); if (!r) return;
   const active = document.activeElement as HTMLInputElement | null;
@@ -476,6 +484,7 @@ function refreshConnections(): void {
   if (curTab === 'github' && github.connected()) github.viewer().then(v => { const x = $('[data-gh-who]', body); if (x) x.textContent = `Connecté : ${v.login}`; }).catch(e => { const x = $('[data-gh-who]', body); if (x) x.textContent = 'Erreur : ' + e.message; });
   if (curTab === 'linear' && linear.connected()) linear.viewer().then(v => { const x = $('.cx-who', body); if (x) x.textContent = `Connecté : ${v.viewer.name} · ${v.organization.name}`; }).catch(e => { const x = $('.cx-who', body); if (x) x.textContent = 'Erreur : ' + e.message; });
   if (curTab === 'ia') ccRefresh();
+  if (curTab === 'maj' && update.supported() && !update.current() && !update.working() && !update.outdatedShell()) void update.check();
   if (curTab === 'donnees') navigator.storage?.estimate?.().then(e => { const x = $('.cx-usage', body); if (x) x.textContent = `${((e.usage ?? 0) / 1048576).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo utilisés sur cet appareil.`; });
 }
 
@@ -483,6 +492,32 @@ function tabLook() {
   const t = app.theme();
   return `<section class="cx-sec"><h4>Thème</h4><div class="look">${[['auto', 'Système'], ['light', 'Clair'], ['dark', 'Sombre']].map(([k, l]) => `<label class="look-opt"><input type="radio" name="theme" value="${k}"${t === k ? ' checked' : ''}><span class="look-prev look-${k}"><i></i><i></i><i></i></span><span>${l}</span></label>`).join('')}</div></section>`;
 }
+// ---------- Mises à jour ----------
+// La version web se met à jour seule ; l'app Mac se met à jour d'ici, depuis les Releases du dépôt (voir core/update.ts).
+const RELEASES = 'https://github.com/MTthoas/Studio/releases/latest';
+function tabUpdate(): string {
+  if (!update.supported()) return `<section class="cx-sec"><h4>${icon('check')}Rien à faire ici</h4><p>${document.documentElement.dataset.native === 'ios'
+    ? 'L’app iPhone se met à jour en la réinstallant depuis Xcode, comme à la première installation.'
+    : 'La version web se met à jour toute seule : à chaque ouverture en ligne, Studio charge la dernière version, puis la garde pour le hors ligne.'}</p></section>`;
+  if (update.outdatedShell()) return `<section class="cx-sec"><h4>${icon('download')}Une dernière mise à jour à la main</h4>
+    <p>L’app installée sur ce Mac date d’avant les mises à jour intégrées. Installe la version actuelle une dernière fois à la main : <code>studio update</code> dans le Terminal, ou <code>Studio-macOS.zip</code> depuis les <a href="${RELEASES}" target="_blank" rel="noopener">Releases</a>. Les suivantes s’installeront d’ici.</p></section>`;
+  const s = update.current(), w = update.working();
+  const installed = s ? `<p class="up-ver">Version installée : <strong>${esc(s.current || 'inconnue')}</strong>${s.commit ? ` <code>${esc(s.commit)}</code>` : ''}</p>` : '';
+  const date = s?.published ? new Date(s.published).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  const page = s?.page?.startsWith('https://github.com/') ? s.page : RELEASES;
+  const again = `<button class="btn" data-v="update-check"${w ? ' disabled' : ''}>${icon('refresh')}Chercher maintenant</button>`;
+  const body = w === 'install' ? `<h4><span class="spin"></span>Installation de ${esc(s?.tag ?? 'la mise à jour')}…</h4><p>Téléchargement, vérification du paquet, puis Studio se relance tout seul. Tes notes sont enregistrées avant.</p>`
+    : !s ? '<p class="cc-wait"><span class="spin"></span>Recherche de la dernière version…</p>'
+    : !s.ok ? `<h4>${icon('shield')}Recherche impossible</h4><p>${esc(s.message ?? 'La dernière version n’a pas pu être lue.')}</p>${installed}<div class="cx-grid">${again}</div>`
+    : s.available ? `<h4>${icon('download')}Studio ${esc(s.tag ?? '')} est disponible</h4><p>${date ? `Publiée le ${esc(date)}. ` : ''}L’app est téléchargée depuis les Releases du dépôt, vérifiée, remplacée, puis relancée.</p>${installed}
+        ${s.notes?.trim() ? `<details class="up-notes"><summary>Ce qui change</summary><pre class="cx-code">${esc(s.notes.trim())}</pre></details>` : ''}
+        <div class="cx-grid"><button class="btn btn-primary" data-v="update-install">${icon('download')}Mettre à jour et relancer</button><a class="btn" href="${esc(page)}" target="_blank" rel="noopener">${icon('github')}Voir sur GitHub</a></div>`
+    : `<h4>${icon('check')}Studio est à jour</h4>${installed}${s.tag ? `<p>Dernière version publiée : ${esc(s.tag)}${date ? `, le ${esc(date)}` : ''}.</p>` : '<p>Aucune version publiée pour l’instant.</p>'}<div class="cx-grid">${again}</div>`;
+  return `<section class="cx-sec up">${body}</section>
+    <section class="cx-sec"><label class="cx-check"><input type="checkbox" data-update-auto${update.auto() ? ' checked' : ''}> Chercher les mises à jour automatiquement</label>
+    <p class="modal-hint">Au lancement puis toutes les 6 heures, Studio demande à <code>api.github.com</code> la dernière version publiée du dépôt. Rien n’est installé sans ton clic. Après une mise à jour, macOS peut redemander certains accords (trousseau, micro) : l’app n’est pas signée par un compte développeur Apple.</p></section>`;
+}
+
 function tabData() {
   const n = store.index().live.length;
   return `<section class="cx-sec"><h4>Sauvegarde</h4><p>${plural(n, 'note')}. <span class="cx-usage"></span></p>
@@ -668,6 +703,13 @@ async function onConnClick(e: MouseEvent) {
     try { const s = await ai.cc.login(); toast(s?.loggedIn ? 'Claude Code est connecté' : 'Connexion non terminée'); } catch (err) { toast(errMsg(err)); }
     refreshConnections();
   }
+  if (v === 'update-check') void update.check();
+  if (v === 'update-install') {
+    await app.flushAll();
+    const r = await update.install();
+    if (!r.ok) toast(r.message ?? 'Mise à jour impossible.');
+    else if (!r.restarting) toast('Mise à jour installée : quitte puis rouvre Studio.');
+  }
   if (v === 'export-json') void app.exportJSON();
   if (v === 'export-md') void app.exportZip();
   if (v === 'import') app.pickFiles();
@@ -710,6 +752,7 @@ function onConnChange(e: Event): void {
   else if (t.dataset.cfg) ai.setConfig({ [t.dataset.cfg]: t.value.trim() });
   else if (t.matches('[data-autolock]')) vault.setSetting('autolock', Number(t.value));
   else if (t.matches('[data-lan]')) link.setLanOnly(t.checked);
+  else if (t.matches('[data-update-auto]')) update.setAuto(t.checked);
   else if (t.dataset.devRemote) void link.setRemote(t.dataset.devRemote, t.checked).then(() => toast(t.checked ? 'Cet appareil peut piloter Claude Code sur ce Mac' : 'Pilotage à distance retiré'));
   else if (t.matches('[data-nf-sys]')) { notifs.setSystem(t.checked); if (t.checked && notifs.systemState() === 'default') void notifs.askPermission().then(refreshConnections); }
 }

@@ -15,7 +15,7 @@ import { menu } from '../../ui/kit.ts';
 import type { Project } from './model.ts';
 
 interface Tokens { input: number; output: number; cacheRead: number; cacheWrite: number }
-interface Session { id: string; title: string; branch: string; worktree: string; started: string; updated: string; live: boolean; models: string[]; prompts: number; lastPrompt: string; tokens: Tokens; tools: Record<string, number>; files: string[] }
+interface Session { id: string; title: string; /** Titre écrit par Claude Code lui-même, s'il y en a un. */ aiTitle?: string; firstPrompt?: string; branch: string; worktree: string; started: string; updated: string; live: boolean; models: string[]; prompts: number; lastPrompt: string; tokens: Tokens; tools: Record<string, number>; files: string[] }
 interface Quota { status?: string; resetsAt?: number; rateLimitType?: string; isUsingOverage?: boolean }
 interface Action { at: string; kind: string; text: string }
 export interface AgentRun { machine?: string; host?: string; run: string; mode: string; prompt: string; status: string; session: string; worktree: string; started: string; finished: string; result: string; lastText: string; turns: number; denials: string[]; quota?: Quota | null }
@@ -32,6 +32,104 @@ const live = (r: AgentRun) => r.status === 'running' || r.status === 'starting';
 const elapsed = (r: AgentRun) => { const s = Math.max(0, Math.round(((r.finished ? ms(r.finished) : Date.now()) - ms(r.started)) / 1000)); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')}`; };
 const STATUS: Record<string, [string, string]> = { starting: ['amber', 'Démarrage'], running: ['amber', 'En cours'], done: ['green', 'Terminé'], error: ['red', 'Erreur'], stopped: ['gray', 'Arrêté'] };
 const pill = (s: string) => { const [c, l] = STATUS[s] ?? ['gray', s]; return `<span class="ag-pill${s === 'running' || s === 'starting' ? ' live' : ''}" style="--c:var(--c-${c})">${l}</span>`; };
+
+// ---------- Conversation ouverte, et ce qu'en montrent la barre latérale et le fil d'Ariane ----------
+/** Onglet affiché (pour le redessiner d'ailleurs : fil d'Ariane, suppression). */
+let cur: { box: HTMLElement; p: Project } | null = null;
+/** Projet de la conversation sélectionnée, et son nom une fois connu. */
+let selFor = '', selTitle = '';
+/** Dernières sessions lues, par projet. */
+const known = new Map<string, { list: Session[]; at: number }>();
+let listener: (() => void) | null = null, lastSig = '';
+/** Prévient l'application quand la liste des conversations, leurs noms ou la sélection changent. */
+export const onChange = (f: () => void): void => { listener = f; };
+function notify(): void {
+  const sig = JSON.stringify([selFor, selected, selTitle, [...known].map(([k, v]) => [k, v.list.slice(0, 8).map(s => [s.id, nameOf(s), s.live])]), runs.filter(live).map(r => r.session)]);
+  if (sig === lastSig) return;
+  lastSig = sig; listener?.();
+}
+/** Conversation ouverte dans ce projet, s'il y en a une. */
+export function current(pid: string): { id: string; title: string } | null {
+  if (!selected || selFor !== pid) return null;
+  const s = known.get(pid)?.list.find(x => x.id === selected);
+  return { id: selected, title: selTitle || (s ? nameOf(s) : 'Conversation') };
+}
+/** Conversations récentes d'un projet, pour la barre latérale. */
+export function sideSessions(pid: string): { id: string; title: string; live: boolean; sel: boolean }[] {
+  const list = known.get(pid)?.list ?? [], sel = selFor === pid ? selected : null;
+  const top = list.slice(0, 6), extra = sel && !top.some(s => s.id === sel) ? list.find(s => s.id === sel) : undefined;
+  return [...top, ...(extra ? [extra] : [])].map(s => ({ id: s.id, title: s.id === sel && selTitle ? selTitle : nameOf(s), live: s.live || runs.some(r => r.session === s.id && live(r)), sel: s.id === sel }));
+}
+async function loadList(p: Project): Promise<Session[] | null> {
+  const r = await bridge.call('project', 'sessions', { project: p.id }, 20000);
+  if (!r.ok) return null;
+  const list = r.found ? (r.sessions as Session[] | undefined) ?? [] : [];
+  known.set(p.id, { list, at: Date.now() });
+  quota = (r.quota as Quota | null | undefined) ?? runs.find(x => x.quota)?.quota ?? null;
+  notify();
+  return list;
+}
+/** Lit les conversations du projet si on ne les connaît pas encore (pour la barre latérale, hors de l'onglet Claude Code). */
+export function preload(p: Project): void {
+  if (!bridge.where() || Date.now() - (known.get(p.id)?.at ?? 0) < 30000) return;
+  void loadList(p);
+}
+
+// ---------- Nom des conversations ----------
+// Comme sur les sites d'IA : un nom court qui résume toute la conversation, rédigé par l'IA branchée dans Studio et
+// remis à jour quand la conversation avance. Sans IA, on garde le titre de Claude Code, sinon la première demande.
+const TITLES = 'studio.cc.titles';
+/** Nom donné par Studio, et nombre de demandes de la conversation à ce moment-là. */
+interface Named { t: string; n: number }
+let titles: Record<string, Named> = (() => { try { const v = JSON.parse(localStorage.getItem(TITLES) || '{}') as unknown; return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, Named> : {}; } catch { return {}; } })();
+function saveTitles(): void {
+  titles = Object.fromEntries(Object.entries(titles).slice(-300));
+  try { localStorage.setItem(TITLES, JSON.stringify(titles)); } catch { /* stockage plein */ }
+}
+/** Première ligne d'un texte, nettoyée et coupée à un mot près. */
+function neat(text: string, max = 60): string {
+  const c = (text.split('\n').map(x => x.trim()).find(Boolean) ?? '').replace(/[#*`>"«»]/g, '').replace(/\s+/g, ' ').trim();
+  if (c.length <= max) return c;
+  const cut = c.slice(0, max), sp = cut.lastIndexOf(' ');
+  return `${(sp > max / 2 ? cut.slice(0, sp) : cut).replace(/[\s,;:.]+$/, '')}…`;
+}
+type Nameable = Pick<Session, 'id' | 'title' | 'aiTitle' | 'firstPrompt' | 'prompts'>;
+const nameOf = (s: Nameable): string => titles[s.id]?.t || s.aiTitle || (s.firstPrompt ? neat(s.firstPrompt) : '') || neat(s.title) || 'Conversation';
+
+const TITLE_SYSTEM = `Tu donnes un nom à une conversation entre un développeur et un agent de code, comme dans la liste des conversations d’un assistant IA.
+Réponds uniquement par le nom : 3 à 7 mots, dans la langue des demandes, sans guillemets, sans point final, sans préfixe.
+Il résume le sujet de toute la conversation, pas seulement la dernière demande. Ignore les demandes de pure forme (« continue », « ok », « résous le conflit »).`;
+let naming = false;
+const nameFailed = new Map<string, number>();
+/** Faut-il (re)nommer cette conversation ? Oui si elle n'a pas de nom, ou si elle a avancé depuis et que l'agent a fini de répondre. */
+function wantsName(s: Nameable, working: boolean): boolean {
+  if (!s.id || s.aiTitle || !s.prompts || !ai.ready()) return false;
+  const have = titles[s.id];
+  if (have && (s.prompts <= have.n || working)) return false;
+  return Date.now() - (nameFailed.get(s.id) ?? 0) > 3e5;
+}
+/** Demande un nom à l'IA, d'après les demandes de l'utilisateur et la dernière réponse. Une conversation à la fois. */
+async function nameSession(p: Project, s: Nameable, actions?: Action[]): Promise<void> {
+  if (naming) return;
+  naming = true;
+  try {
+    if (!actions) { const d = await bridge.call('project', 'session', { project: p.id, session: s.id }, 20000); actions = d.ok ? (d.actions as Action[] | undefined) ?? [] : []; }
+    // Les notes jointes à une consigne ne font pas partie de la demande.
+    const asks = actions.filter(a => a.kind === 'prompt').map(a => (a.text.split('\n---\nNotes du projet')[0] ?? '').trim().slice(0, 400)).filter(Boolean);
+    const first = (s.firstPrompt ?? '').replace(/…$/, '').slice(0, 400);
+    if (first && !asks.some(a => a.startsWith(first.slice(0, 120)))) asks.unshift(first);
+    if (!asks.length) { nameFailed.set(s.id, Date.now()); return; }
+    const picked = asks.length > 7 ? [...asks.slice(0, 2), ...asks.slice(-5)] : asks;
+    const last = [...actions].reverse().find(a => a.kind === 'text')?.text.slice(0, 600) ?? '', have = titles[s.id];
+    const user = `Demandes de l’utilisateur, dans l’ordre :\n${picked.map((a, i) => `${i + 1}. ${a}`).join('\n')}${last ? `\n\nDernière réponse de l’agent (extrait) :\n${last}` : ''}${have ? `\n\nNom actuel : ${have.t}\nGarde-le tel quel s’il résume toujours la conversation ; sinon adapte-le.` : ''}`;
+    const t = neat((await ai.complete(TITLE_SYSTEM, user)).replace(/^(nom|titre)\s*:\s*/i, ''), 70).replace(/[.\s]+$/, '');
+    if (!t) { nameFailed.set(s.id, Date.now()); return; }
+    delete titles[s.id]; titles[s.id] = { t, n: s.prompts }; saveTitles();
+    if (s.id === selected) selTitle = t;
+    notify();
+  } catch { nameFailed.set(s.id, Date.now()); }
+  finally { naming = false; }
+}
 
 // ---------- Notes jointes ----------
 // Une note du projet peut servir de contexte ou de cahier des charges : son contenu est ajouté à la consigne.
@@ -60,11 +158,89 @@ function withNotes(prompt: string, ids: string[]): { text: string; refused: stri
   return { text: parts.length ? `${head}\n\n---\nNotes du projet jointes par l’utilisateur (contexte et cahier des charges) :\n\n${parts.join('\n\n')}` : head, refused };
 }
 
+// ---------- Abonnement : ce qu'il reste ----------
+// Bandeau au pied de la consigne : part restante de la session de 5 heures et de la semaine, comme « /usage » dans
+// Claude Code. Les chiffres viennent du Mac (voir ClaudeUsage.swift), si l'utilisateur a accepté leur lecture.
+// À défaut, on affiche l'état de la limite que Claude Code note lui-même quand elle approche ou est atteinte.
+const LIMS: Record<string, [string, string]> = { five_hour: ['Session 5 h', 'Session de 5 heures'], seven_day: ['Semaine', 'Semaine, tous les modèles'], seven_day_opus: ['Semaine · Opus', 'Semaine, modèle Opus'], seven_day_sonnet: ['Semaine · Sonnet', 'Semaine, modèle Sonnet'], extra: ['Crédit supp.', 'Crédit supplémentaire'] };
+let limits: ai.CcLimits | null = null, limitsAt = 0, limitsBusy = false, limitsWait = false, quota: Quota | null = null;
+
+/** Délai avant une réinitialisation : « dans 2 h 14 », ou le jour et l'heure au-delà d'une journée. */
+function resetIn(sec: number): string {
+  const d = sec * 1000 - Date.now();
+  if (d < 6e4) return 'dans un instant';
+  if (d < 36e5) return `dans ${Math.ceil(d / 6e4)} min`;
+  if (d < 864e5) { const m = Math.round(d / 6e4); return `dans ${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}`; }
+  return new Date(sec * 1000).toLocaleString('fr-FR', { weekday: 'long', hour: '2-digit', minute: '2-digit' });
+}
+const resetAt = (sec: number) => new Date(sec * 1000).toLocaleString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+
+function limsHTML(): string {
+  const l = limits, here = bridge.local();
+  // Claude Code n'écrit l'état de la limite que lorsqu'elle approche : passé l'heure de réinitialisation, il est périmé.
+  const q = quota?.status && !(quota.resetsAt && quota.resetsAt * 1000 <= Date.now()) ? quota : null;
+  const refresh = `<button type="button" class="icon-btn" data-ag-lim="refresh" title="Actualiser" aria-label="Actualiser l’utilisation de l’abonnement">${icon('refresh')}</button>`;
+  if (limitsWait) return '<em><span class="spin"></span>Lecture de ton abonnement…</em>';
+  if (l?.enabled && l.ready && l.windows?.length) {
+    return l.windows.map(w => {
+      const [label, full] = LIMS[w.key] ?? [w.key, w.key];
+      const used = Math.round(w.pct), left = Math.max(0, 100 - used), tone = used >= 90 ? ' err' : used >= 70 ? ' warn' : '';
+      const reset = w.resetsAt && w.resetsAt * 1000 > Date.now() ? w.resetsAt : 0;
+      return `<span class="ag-lim${tone}" title="${esc(`${full} : ${used} % utilisés${reset ? ` · se réinitialise ${resetAt(reset)}` : ''}`)}"><span>${esc(label)}</span><span class="bar ag-lim-bar"><i style="width:${left}%"></i></span><strong>${left} %</strong><em>restant${left > 1 ? 's' : ''}${reset ? ` · réinit. ${esc(resetIn(reset))}` : ''}</em></span>`;
+    }).join('') + (q?.isUsingOverage && !l.windows.some(w => w.key === 'extra') ? '<em>crédit supplémentaire en cours d’utilisation</em>' : '') + refresh;
+  }
+  let out = '';
+  if (q && q.status !== 'allowed') {
+    const kind = LIMS[q.rateLimitType ?? '']?.[1] ?? 'Limite d’utilisation';
+    out += `<span class="ag-lim ${q.status === 'rejected' ? 'err' : 'warn'}"><i class="ag-lim-dot"></i><strong>${esc(kind)} : ${q.status === 'rejected' ? 'limite atteinte' : 'limite bientôt atteinte'}</strong>${q.resetsAt ? `<em>réinit. ${esc(resetIn(q.resetsAt))}</em>` : ''}${q.isUsingOverage ? '<em>· crédit supplémentaire en cours d’utilisation</em>' : ''}</span>`;
+  }
+  if (!l) return out;
+  if (!l.enabled) return out + (here ? `<button type="button" class="link-btn" data-ag-lim="on">Afficher ce qu’il reste de mon abonnement</button>` : '<em>Pour voir ici ce qu’il reste de ton abonnement, active la lecture des limites sur le Mac (Réglages → Intelligence artificielle).</em>');
+  return out + `<em>${esc(l.message ?? 'Utilisation de l’abonnement illisible pour l’instant.')}</em>${here ? refresh : ''}`;
+}
+/** Redessine le bandeau de toutes les consignes affichées, seulement s'il a changé. */
+function paintLimits(): void {
+  const html = limsHTML();
+  document.querySelectorAll<HTMLElement>('.ag-lims').forEach(x => { if (drawn.get(x) !== html) { x.innerHTML = html; drawn.set(x, html); } });
+}
+/** Lit l'utilisation de l'abonnement, au plus une fois par minute. `op` : 'enable' (accord donné) ou 'refresh' (sans cache), sur le Mac seulement. */
+async function loadLimits(op = ''): Promise<void> {
+  if (limitsBusy || !bridge.where() || (!op && Date.now() - limitsAt < 55000)) return;
+  const here = bridge.local();
+  limitsBusy = true; limitsAt = Date.now();
+  if (op) { limitsWait = true; paintLimits(); }
+  try {
+    const r = await bridge.call('claude', 'limits', here ? { op } : {}, here ? 180000 : 30000);
+    if (r.ok) { limits = r as unknown as ai.CcLimits; if (here) ai.cc.limits = limits; }
+  } finally { limitsBusy = false; limitsWait = false; paintLimits(); }
+}
+async function limitsAction(op: string): Promise<void> {
+  if (op === 'refresh') { await loadLimits('refresh'); return; }
+  if (op !== 'on' || !bridge.local()) return;
+  if (await confirmBox({ title: 'Afficher ce qu’il reste de ton abonnement ?', text: 'Anthropic ne donne l’utilisation qu’au compte connecté : Studio lira la connexion de Claude Code dans le trousseau de ce Mac (macOS te demandera ton accord) et interrogera api.anthropic.com, rien d’autre. Tu peux revenir en arrière dans Réglages → Intelligence artificielle.', ok: 'Afficher' })) await loadLimits('enable');
+}
+
 // ---------- Consigne ----------
+const HINT_IDLE = `${icon('history')}Reprend la conversation là où elle s’est arrêtée, dans le même dossier.`;
+const HINT_BUSY = '<span class="spin"></span>Claude travaille : arrête-le pour corriger le tir, ou attends la fin pour lui répondre.';
+/** Zone de réponse d'une conversation : tant que son agent travaille, on peut l'arrêter mais pas lui écrire. */
+function syncStop(box: HTMLElement): void {
+  const f = $('.ag-continue', box); if (!f) return;
+  const run = runs.find(r => r.session === selected && live(r)), state = run ? run.run : '';
+  if (f.dataset.busy === state) return;
+  f.dataset.busy = state;
+  const stopBtn = $<HTMLButtonElement>('.ag-stop', f), send = $<HTMLButtonElement>('button.btn-primary', f), hint = $('[data-hint]', f);
+  if (stopBtn) { stopBtn.hidden = !run; stopBtn.dataset.run = state; }
+  if (send) send.disabled = !!run;
+  if (hint) hint.innerHTML = run ? HINT_BUSY : HINT_IDLE;
+}
+
 export function composerHTML(p: Project, { session = '', compact = false, machine = '' } = {}): string {
   const models = ai.CC_MODELS.map(([v, l]) => `<option value="${v}">${v ? l : 'Modèle par défaut'}</option>`).join('');
+  // Un agent lancé sur un serveur utilise la connexion Claude du serveur, pas l'abonnement lu sur le Mac.
+  const lims = machine === 'server' ? '' : `<div class="ag-lims" aria-label="Utilisation de l’abonnement Claude">${limsHTML()}</div>`;
   if (session) return `<form class="ag-compose ag-continue" data-session="${esc(session)}"${machine ? ` data-machine="${esc(machine)}"` : ''}><textarea name="prompt" rows="2" placeholder="Réponds à Claude : précise, corrige, tranche, demande la suite…" aria-label="Répondre dans la session"></textarea>
-    <div class="ag-opts"><span class="ag-hint">${icon('history')}Reprend la session là où elle s’est arrêtée, dans le même dossier.</span><button class="btn btn-primary">${icon('play')}Envoyer<kbd>⌘↩</kbd></button></div></form>`;
+    <div class="ag-opts"><span class="ag-hint" data-hint>${HINT_IDLE}</span><button type="button" class="btn btn-danger ag-stop" data-ag="stop" hidden>${icon('stop')}Arrêter</button><button class="btn btn-primary">${icon('play')}Envoyer<kbd>⌘↩</kbd></button></div>${lims}</form>`;
   const pre = pending?.project === p.id ? pending : null; if (pre && !compact) pending = null;
   const notes = pre && !compact ? pre.notes : [];
   return `<form class="ag-compose${compact ? ' compact' : ''}" data-notes="${esc(notes.join(','))}"><textarea name="prompt" rows="${compact ? 1 : 3}" placeholder="Que doit faire Claude Code dans ${esc(p.name)} ? Ex. « Ajoute des tests au parseur de dates »" aria-label="Consigne pour Claude Code">${pre && !compact ? esc(pre.prompt) : ''}</textarea>
@@ -75,11 +251,12 @@ export function composerHTML(p: Project, { session = '', compact = false, machin
       <select class="field" name="machine" aria-label="Où travailler"${machine === 'server' ? '' : ' hidden'}><option value="mac">Sur le Mac</option>${machine === 'server' ? '<option value="server" selected>Sur le serveur</option>' : ''}</select>
       <select class="field" name="model" aria-label="Modèle">${models}</select>
       <span class="ag-hint" data-hint>${icon('shield')}Copie isolée du dépôt : ton dossier reste intact.</span>
-      <button class="btn btn-primary">${icon('play')}Lancer<kbd>⌘↩</kbd></button></div></form>`;
+      <button class="btn btn-primary">${icon('play')}Lancer<kbd>⌘↩</kbd></button></div>${lims}</form>`;
 }
 
 /** Branche les formulaires de consigne présents dans `root` (lancement, reprise, raccourci ⌘↩). */
 export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: AgentRun) => void): void {
+  void loadLimits();
   if (root.dataset.agBound) return;
   root.dataset.agBound = '1';
   root.addEventListener('change', e => {
@@ -90,6 +267,8 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
   });
   root.addEventListener('click', e => {
     const t = e.target as HTMLElement, f = t.closest<HTMLFormElement>('.ag-compose'); if (!f) return;
+    const lim = t.closest<HTMLElement>('[data-ag-lim]');
+    if (lim) { void limitsAction(lim.dataset.agLim ?? ''); return; }
     const ids = () => (f.dataset.notes || '').split(',').filter(Boolean);
     const un = t.closest<HTMLElement>('[data-ag-unnote]');
     if (un) { f.dataset.notes = ids().filter(x => x !== un.dataset.agUnnote).join(','); un.closest('.ag-note')?.remove(); return; }
@@ -104,6 +283,7 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
   root.addEventListener('submit', async e => {
     const f = (e.target as HTMLElement).closest<HTMLFormElement>('.ag-compose'); if (!f) return;
     e.preventDefault(); e.stopPropagation();
+    if (f.querySelector<HTMLButtonElement>('button.btn-primary')?.disabled) return; // agent en cours, ou envoi déjà parti
     const ta = need<HTMLTextAreaElement>('textarea', f), noteIds = (f.dataset.notes || '').split(',').filter(Boolean);
     if (!ta.value.trim() && !noteIds.length) { ta.focus(); return; }
     const built = withNotes(ta.value.trim(), noteIds), prompt = built.text;
@@ -115,7 +295,7 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
     else { body.mode = f.querySelector<HTMLInputElement>('[name=mode]:checked')?.value ?? 'edit'; body.tests = !!val('tests')?.checked; body.model = val('model')?.value ?? ''; const mc = val('machine'); if (mc && !mc.hidden) body.machine = mc.value; }
     btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Démarrage…';
     const r = await bridge.call('agent', 'start', body, 60000);
-    btn.disabled = false; btn.innerHTML = label;
+    btn.disabled = false; btn.innerHTML = label; delete f.dataset.busy;
     if (!r.ok) { toast(r.message ?? 'Lancement impossible.'); return; }
     ta.value = ''; f.dataset.notes = ''; f.querySelectorAll('.ag-note').forEach(x => x.remove());
     toast(f.dataset.session ? 'Session reprise' : 'Claude Code est au travail');
@@ -124,16 +304,6 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
 }
 
 // ---------- Vues ----------
-function quotaHTML(q: Quota | null): string {
-  // Claude Code n'écrit l'état de la limite que lorsqu'elle est atteinte : passé l'heure de réinitialisation, il est périmé.
-  if (!q?.status || (q.resetsAt && q.resetsAt * 1000 <= Date.now())) return '';
-  const kind = q.rateLimitType === 'five_hour' ? 'Limite des 5 heures' : q.rateLimitType === 'seven_day' ? 'Limite de la semaine' : q.rateLimitType === 'seven_day_opus' ? 'Limite Opus de la semaine' : 'Limite d’utilisation';
-  const at = q.resetsAt ? new Date(q.resetsAt * 1000) : null;
-  const when = at ? at.toLocaleString('fr-FR', { weekday: at.getTime() - Date.now() > 864e5 ? 'long' : undefined, hour: '2-digit', minute: '2-digit' }) : '';
-  const state = q.status === 'rejected' ? ['err', 'atteinte'] : q.status === 'allowed_warning' ? ['warn', 'bientôt atteinte'] : ['ok', 'disponible'];
-  return `<div class="ss-quota ${state[0]}"><i></i><strong>${kind} : ${state[1]}</strong>${at && q.status !== 'allowed' ? `<span>se réinitialise ${esc(when)}</span>` : ''}${q.isUsingOverage ? '<span>· crédit supplémentaire en cours d’utilisation</span>' : ''}</div>`;
-}
-
 function runCard(r: AgentRun): string {
   return `<article class="ag-run${live(r) ? ' live' : ''}">
     <header>${pill(r.status)}${r.machine === 'server' ? `<span class="ag-mode">${icon('server')}${esc(r.host ?? 'serveur')}</span>` : ''}<span class="ag-mode">${r.mode === 'edit' ? `${icon('pencil')}Modifier` : `${icon('search')}Analyser`}</span><time>${esc(elapsed(r))}${r.turns ? ` · ${r.turns} étape${r.turns > 1 ? 's' : ''}` : ''}</time></header>
@@ -152,18 +322,17 @@ function treeRow(w: Worktree): string {
     <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `${w.behind && !busy ? `<button class="btn" data-ag="sync" data-wt="${esc(w.name)}" title="Remettre la copie sur la dernière version de la branche principale ; l'agent résout les conflits éventuels">${icon('refresh')}Mettre à jour</button>` : ''}<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${(w.changes || w.ahead) && !busy ? '' : ' disabled'}>${icon('upload')}Publier</button>${w.pushed ? `<button class="btn" data-ag="pr" data-wt="${esc(w.name)}" title="Ouvrir la page de la pull request sur GitHub">${icon('github')}PR</button>` : ''}<button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
 }
 
-function listHTML(list: Session[], quota: Quota | null): string {
+function listHTML(list: Session[]): string {
   const running = runs.filter(live), recent = runs.filter(r => !live(r)).slice(0, 4);
   const tot = list.reduce((t, s) => ({ input: t.input + s.tokens.input + s.tokens.cacheWrite, output: t.output + s.tokens.output, cacheRead: t.cacheRead + s.tokens.cacheRead }), { input: 0, output: 0, cacheRead: 0 });
-  return `${quotaHTML(quota)}
-    ${running.length || recent.length ? `<h3 class="ss-h">Agents <span>${running.length ? `${running.length} en cours` : 'lancés depuis Studio'}</span></h3><div class="ag-runs">${[...running, ...recent].map(runCard).join('')}</div>` : ''}
+  return `${running.length || recent.length ? `<h3 class="ss-h">Agents <span>${running.length ? `${running.length} en cours` : 'lancés depuis Studio'}</span></h3><div class="ag-runs">${[...running, ...recent].map(runCard).join('')}</div>` : ''}
     ${trees.length ? `<h3 class="ss-h">Copies à relire <span>travail des agents, isolé de ton dossier</span></h3><div class="ag-trees">${trees.map(treeRow).join('')}</div>` : ''}
     <h3 class="ss-h">Sessions <span>tout ce que Claude Code a fait dans ce projet</span></h3>
     <div class="ss-totals"><div><strong>${list.length}</strong><span>session${list.length > 1 ? 's' : ''}</span></div><div><strong>${usage.fmt(tot.output)}</strong><span>tokens écrits</span></div><div><strong>${usage.fmt(tot.input)}</strong><span>tokens lus</span></div><div><strong>${usage.fmt(tot.cacheRead)}</strong><span>relus du cache</span></div></div>
     <div class="ss-list">${list.map(s => {
       const top = Object.entries(s.tools).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${esc(k)} ${v}`).join(' · ');
       return `<button class="ss-row${s.id === selected ? ' sel' : ''}" data-ss="${esc(s.id)}"><i class="ss-live${s.live ? ' on' : ''}" title="${s.live ? 'En cours' : 'Inactive'}"></i>
-        <span class="ss-main"><strong>${esc(s.title)}</strong><em>${s.worktree ? `${icon('pencil')}copie · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${esc(s.models.map(modelName).join(', '))} · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}${top ? ` · ${top}` : ''}</em></span>
+        <span class="ss-main"><strong>${esc(nameOf(s))}</strong><em>${s.worktree ? `${icon('pencil')}copie · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${esc(s.models.map(modelName).join(', '))} · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}${top ? ` · ${top}` : ''}</em></span>
         <span class="ss-tok">${usage.fmt(s.tokens.output)}<small>écrits</small></span><time>${esc(rel(ms(s.updated)))}</time></button>`;
     }).join('') || '<p class="hm-empty">Aucune session Claude Code dans ce dossier pour l’instant. Donne une consigne ci-dessus pour lancer la première.</p>'}</div>`;
 }
@@ -242,7 +411,7 @@ function topHTML(s: Detail, root: string | null, open: boolean): string {
   const dur = ms(s.updated) - ms(s.started), h = Math.floor(dur / 36e5), mn = Math.round(dur % 36e5 / 6e4);
   const run = runs.find(r => r.session === s.id && live(r)), tree = s.worktree ? trees.find(t => t.name === s.worktree) : undefined;
   const acts = Object.values(s.tools).reduce((a, b) => a + b, 0);
-  return `<div class="ss-dhead"><i class="ss-live${s.live || run ? ' on' : ''}"></i><h2>${esc(s.title)}</h2>${run ? `${pill(run.status)}<button class="btn" data-ag="stop" data-run="${esc(run.run)}">${icon('stop')}Arrêter</button>` : ''}</div>
+  return `<div class="ss-dhead"><i class="ss-live${s.live || run ? ' on' : ''}"></i><h2>${esc(nameOf(s))}</h2>${run ? `${pill(run.status)}<button class="btn" data-ag="stop" data-run="${esc(run.run)}">${icon('stop')}Arrêter</button>` : ''}${remote || !s.id ? '' : `<button class="icon-btn" data-ag="delete" title="Supprimer la conversation" aria-label="Supprimer la conversation">${icon('trash')}</button>`}</div>
     <p class="ss-meta">${s.worktree ? `${icon('pencil')}copie isolée <code>${esc(s.worktree)}</code> · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${s.models.length ? `${esc(s.models.map(modelName).join(', '))} · ` : ''}${h ? `${h} h ` : ''}${mn} min · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}</p>
     ${tree ? `<div class="ag-trees ss-tree">${treeRow(tree)}</div>` : remote ? '' : `<div class="ss-actions"><button class="btn" data-pj="review-working">${icon('sparkle')}Revue des changements en cours</button><button class="btn" data-pj="vscode">${icon('code')}Ouvrir dans VS Code</button></div>`}
     <details class="ss-more"${open ? ' open' : ''}><summary>${icon('chevron')}Détails<span>${usage.fmt(s.tokens.output)} tokens écrits · ${acts} action${acts > 1 ? 's' : ''}${s.files.length ? ` · ${s.files.length} fichier${s.files.length > 1 ? 's' : ''} modifié${s.files.length > 1 ? 's' : ''}` : ''}</span></summary>
@@ -269,6 +438,12 @@ function showDetail(zone: HTMLElement, raw: Partial<Session> & { actions?: Actio
   // « En cours » : l'agent lancé depuis Studio tourne encore, ou une session du terminal vient d'agir sans avoir répondu.
   const own = runs.filter(r => r.session === s.id), last = s.actions[s.actions.length - 1];
   const working = own.length ? own.some(live) : s.live && !!last && last.kind !== 'text';
+  if (s.id === selected) {
+    // Une session suivie par le flux de son agent (serveur) n'a pas de compteur de demandes : on les compte dans le fil.
+    const named: Nameable = { ...s, prompts: s.prompts || s.actions.filter(a => a.kind === 'prompt').length };
+    selTitle = nameOf(named); notify();
+    if (cur && wantsName(named, working)) void nameSession(cur.p, named, s.actions);
+  }
   const first = !feed.children.length, end = atEnd(feed);
   if (!syncFeed(feed, feedBlocks(s.actions, root, working))) return;
   if (first || end) feed.scrollTop = feed.scrollHeight;
@@ -506,24 +681,32 @@ async function refreshTrees(p: Project): Promise<void> {
 // ---------- Montage ----------
 let folderPath: string | null = null, remote = '';
 /** Un seul rafraîchissement à la fois : si le Mac répond lentement, les requêtes ne s'empilent plus toutes les 3 secondes. */
-let painting = false;
+let painting = false, again = false;
 async function paint(box: HTMLElement, p: Project): Promise<void> {
   if (painting) return;
   painting = true;
   try { await paintOnce(box, p); } finally { painting = false; }
+  // On a changé de conversation pendant la lecture : on redessine tout de suite, sans attendre le prochain tour.
+  if (again) { again = false; void paint(box, p); }
 }
 async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
   const zone = $('.ag-zone', box); if (!zone || !box.isConnected) { clearInterval(timer); return; }
+  void loadLimits(); paintLimits(); // le bandeau de l'abonnement suit son propre rythme (une lecture par minute)
   const l = await bridge.call('agent', 'list', { project: p.id }, 10000); runs = l.ok ? (l.runs as AgentRun[]) : runs;
   if (tick++ % 4 === 0 || (tick % 2 === 0 && jobs.some(j => j.status === 'running'))) await refreshTrees(p);
-  if (selected) {
-    const d = await bridge.call('project', 'session', { project: p.id, session: selected }, 20000);
-    if (!box.isConnected) return;
+  const sel = selected;
+  if (sel) {
+    syncStop(box);
+    // La liste sert encore à la barre latérale : on la relit de temps en temps, sans attendre.
+    if (!known.has(p.id) || tick % 5 === 0) void loadList(p);
+    const d = await bridge.call('project', 'session', { project: p.id, session: sel }, 20000);
+    if (!box.isConnected || sel !== selected) return; // on a changé de conversation entre-temps
     if (!d.ok) {
       // Agent sur un serveur : on suit les étapes reçues de son flux.
       const r = runs.find(x => x.session === selected);
       if (r) {
         const rd = await bridge.call('agent', 'run', { run: r.run }, 10000);
+        if (sel !== selected) return;
         if (rd.ok && box.isConnected) { showDetail(zone, { id: selected, title: r.prompt, worktree: r.worktree, branch: r.host ? `sur ${r.host}` : '', started: r.started, updated: r.finished || new Date(Math.floor(Date.now() / 6e4) * 6e4).toISOString(), live: live(r), actions: (rd.actions as Action[]) ?? [] }, folderPath); return; }
       }
       zone.innerHTML = `<p class="hm-empty">${esc(d.message ?? 'Session introuvable.')}</p>`; return;
@@ -531,9 +714,13 @@ async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
     showDetail(zone, { ...(d as unknown as Partial<Session> & { actions?: Action[] }), id: selected }, folderPath); // « id » de la réponse = numéro de demande
     return;
   }
-  const r = await bridge.call('project', 'sessions', { project: p.id }, 20000);
-  if (!box.isConnected) return;
-  zone.innerHTML = listHTML(r.found ? (r.sessions as Session[]) ?? [] : [], (r.quota as Quota | null) ?? runs.find(x => x.quota)?.quota ?? null);
+  const list = await loadList(p) ?? [];
+  if (!box.isConnected || selected) return;
+  paintLimits();
+  zone.innerHTML = listHTML(list);
+  // Les conversations récentes sans nom en reçoivent un, une à la fois.
+  const unnamed = list.slice(0, 8).find(s => wantsName(s, s.live || runs.some(r => r.session === s.id && live(r))));
+  if (unnamed) void nameSession(p, unnamed);
 }
 
 let serverLabel = '';
@@ -546,9 +733,34 @@ function shell(box: HTMLElement, p: Project): void {
   if (mc && serverLabel && !selected) { mc.insertAdjacentHTML('beforeend', `<option value="server">Sur ${esc(serverLabel)}</option>`); mc.hidden = false; }
 }
 
+/** Ouvre une conversation dans l'onglet affiché (`null` : retour à la liste). */
+export function open(id: string | null): void {
+  selected = id; selTitle = '';
+  if (cur?.box.isConnected) { selFor = cur.p.id; shell(cur.box, cur.p); again = painting; void paint(cur.box, cur.p); }
+  notify();
+}
+
+/** Supprime la conversation ouverte : son agent est arrêté s'il tourne, son journal part dans la corbeille du Mac. */
+async function removeSession(p: Project, id: string): Promise<void> {
+  const busy = runs.filter(r => r.session === id && live(r));
+  if (!await confirmBox({ title: 'Supprimer cette conversation ?', text: `${busy.length ? 'L’agent qui y travaille sera arrêté. ' : ''}Elle disparaît de Studio et son journal part dans la corbeille du Mac. La copie du dépôt et ses changements ne sont pas touchés.`, ok: 'Supprimer', danger: true })) return;
+  for (const r of busy) await bridge.call('agent', 'stop', { run: r.run }, 10000);
+  if (busy.length) await new Promise(r => setTimeout(r, 1500)); // le temps que Claude Code rende la main
+  const r = await native.call('project', 'deleteSession', { project: p.id, session: id }, 20000);
+  if (!r.ok) { toast(r.message === 'Action inconnue.' ? 'Mets à jour l’app Studio pour Mac pour supprimer une conversation.' : r.message ?? 'Suppression impossible.'); return; }
+  delete titles[id]; saveTitles();
+  const k = known.get(p.id); if (k) k.list = k.list.filter(s => s.id !== id);
+  runs = runs.filter(x => x.session !== id || live(x));
+  toast('Conversation supprimée');
+  if (selected === id) open(null); else notify();
+}
+
 /** Dessine l'onglet et le garde à jour toutes les 3 secondes tant qu'il est affiché. */
 export function mount(box: HTMLElement, p: Project, folder: string | null): void {
   clearInterval(timer); folderPath = folder; tick = 0;
+  // La conversation sélectionnée appartient à un projet : on ne la garde pas en changeant de projet.
+  if (selFor !== p.id) { selected = null; selTitle = ''; }
+  selFor = p.id; cur = { box, p };
   const at = bridge.where();
   if (!at) { box.innerHTML = `<div class="ag-empty">${icon('terminal')}<h3>Claude Code tourne sur ton Mac</h3><p>Ouvre ce projet dans l’app Studio pour Mac. Pour le piloter d’ici, lie cet appareil au Mac (Réglages → Appareils) et autorise-le, sur le Mac, à piloter Claude Code.</p></div>`; return; }
   remote = at.kind === 'remote' ? at.name : '';
@@ -560,11 +772,11 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
     const mc = $<HTMLSelectElement>('.ag-compose:not(.ag-continue) select[name=machine]', box);
     if (mc && serverLabel && !mc.querySelector('[value=server]')) { mc.insertAdjacentHTML('beforeend', `<option value="server">Sur ${esc(serverLabel)}</option>`); mc.hidden = false; }
   });
-  bindComposer(box, p, r => { if (r.session) selected = r.session; shell(box, p); void paint(box, p); });
+  bindComposer(box, p, r => { open(r.session || selected); });
   box.onclick = async e => {
     const t = e.target as HTMLElement;
     const row = t.closest<HTMLElement>('[data-ss]');
-    if (row) { selected = row.dataset.ss || null; shell(box, p); void paint(box, p); return; }
+    if (row) { open(row.dataset.ss || null); return; }
     const b = t.closest<HTMLElement>('[data-ag]'); if (!b) return;
     const wt = b.dataset.wt ?? '';
     if (b.dataset.ag === 'end') { const f = $('.ss-feed', box); f?.scrollTo({ top: f.scrollHeight, behavior: 'smooth' }); b.hidden = true; return; }
@@ -574,6 +786,7 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
       return;
     }
     if (b.dataset.ag === 'stop') { const r = await bridge.call('agent', 'stop', { run: b.dataset.run }, 10000); toast(r.ok ? 'Agent arrêté' : r.message ?? 'Impossible.'); void paint(box, p); }
+    if (b.dataset.ag === 'delete' && selected) { await removeSession(p, selected); return; }
     if (b.dataset.ag === 'review') await review.review(p, 'working', wt);
     if (b.dataset.ag === 'vscode') { const r = await native.call('project', 'open', { project: p.id, app: 'vscode', worktree: wt }, 15000); if (!r.ok) toast(r.message ?? 'Impossible d’ouvrir.'); }
     if (b.dataset.ag === 'push') await publish(p, wt, box);
@@ -594,5 +807,6 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
   void paint(box, p);
   timer = setInterval(() => { if (!document.hidden) void paint(box, p); }, 3000);
 }
-export const stop = (): void => { clearInterval(timer); };
-export const select = (id: string | null): void => { selected = id; };
+export const stop = (): void => { clearInterval(timer); cur = null; };
+/** Choisit la conversation à afficher à la prochaine ouverture de l'onglet Claude Code du projet. */
+export const select = (id: string | null, pid: string): void => { selected = id; selFor = pid; selTitle = ''; notify(); };

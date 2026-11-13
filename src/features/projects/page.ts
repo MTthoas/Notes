@@ -19,7 +19,15 @@ import * as bridge from '../../integrations/remote.ts';
 import { shareable } from '../../integrations/ai.ts';
 
 let app!: AppShell;
-export const init = (shell: AppShell): void => { app = shell; };
+export const init = (shell: AppShell): void => {
+  app = shell;
+  // Une conversation Claude Code a été ouverte, renommée ou supprimée : la barre latérale et le fil d'Ariane suivent.
+  sessions.onChange(() => {
+    app.renderSidebar();
+    const c = $('#main .toolbar .crumb');
+    if (c && app.view() === 'projets') c.outerHTML = trailHTML();
+  });
+};
 
 const titleOf = (n: Note) => n.title.trim() || 'Sans titre';
 const go = (id: string | null, tab?: string) => app.setView({ type: 'projets', project: id, ...(tab ? { tab } : {}) });
@@ -159,7 +167,7 @@ async function server(root: HTMLElement, p: Project): Promise<void> {
   }
   box.innerHTML = serverHTML(st);
   box.dataset.st = JSON.stringify(st);
-  sessions.bindComposer(box, p, r => { sessions.select(r.session || null); void go(p.id, 'sessions'); });
+  sessions.bindComposer(box, p, r => { sessions.select(r.session || null, p.id); void go(p.id, 'sessions'); });
 }
 
 // ---------- Tableau de bord ----------
@@ -238,7 +246,7 @@ async function hydrate(root: HTMLElement, p: Project, tab: string): Promise<void
   if (tab === 'server') void server(root, p);
   if (tab === 'overview') {
     void overview(root, p, f); void dashboard(root, p, f); void agentsStrip(root, p);
-    sessions.bindComposer(root, p, r => { sessions.select(r.session || null); void go(p.id, 'sessions'); });
+    sessions.bindComposer(root, p, r => { sessions.select(r.session || null, p.id); void go(p.id, 'sessions'); });
   }
 }
 
@@ -310,21 +318,37 @@ export function toClaude(p: Project, what: { notes?: string[]; prompt?: string }
   return go(p.id, 'sessions');
 }
 
+/** Conversations Claude Code récentes d'un projet, pour la barre latérale. */
+export const sideSessions = (pid: string) => sessions.sideSessions(pid);
+/** Choisit la conversation à ouvrir dans l'onglet Claude Code du projet (`null` : la liste). */
+export const openSession = (pid: string, id: string | null): void => sessions.select(id, pid);
+
 // ---------- Page ----------
+/** Fil d'Ariane : Projets › projet › onglet › conversation Claude Code, chaque niveau ramenant à sa page. */
+function trailHTML(): string {
+  const p = model.byId(app.viewState().project), tab = curTab();
+  const up: [string, string] = ['Projets', 'data-pj-open=""'];
+  if (!p) return app.crumb('Projets');
+  if (tab === 'overview') return app.crumb(p.name, [up]);
+  const home: [string, string] = [p.name, 'data-pj-tab="overview"'], label = TABS.find(x => x[0] === tab)?.[1] ?? '';
+  const talk = tab === 'sessions' ? sessions.current(p.id) : null;
+  return talk ? app.crumb(talk.title, [up, home, [label, 'data-pj-tab="sessions"']]) : app.crumb(label, [up, home]);
+}
+
 export function mount(main: HTMLElement): void {
   sessions.stop();
   const p = model.byId(app.viewState().project), tab = curTab();
-  // Fil d'Ariane : Projets › projet › onglet, chaque niveau ramenant à sa page.
-  const up: [string, string] = ['Projets', 'data-pj-open=""'];
-  const trail = !p ? app.crumb('Projets') : tab === 'overview' ? app.crumb(p.name, [up])
-    : app.crumb(TABS.find(x => x[0] === tab)?.[1] ?? '', [up, [p.name, 'data-pj-tab="overview"']]);
-  main.innerHTML = `<header class="toolbar">${app.tbLeft()}${trail}<div class="tb-side tb-right">${p ? '' : `<button class="btn btn-ghost" data-pj="new">${icon('plus')}<span>Nouveau projet</span></button>`}</div></header>
+  if (p) sessions.preload(p);
+  main.innerHTML = `<header class="toolbar">${app.tbLeft()}${trailHTML()}<div class="tb-side tb-right">${p ? '' : `<button class="btn btn-ghost" data-pj="new">${icon('plus')}<span>Nouveau projet</span></button>`}</div></header>
     <div class="todo pj"><div class="todo-in pj-in">${p ? detailHTML(p, tab) : `<div class="td-head"><h1>Projets</h1><p class="td-sub">Un projet réunit son dossier, son dépôt, ses PR, ses tickets, ses tâches et ses notes.</p></div><div class="pj-list">${listHTML()}</div>`}</div></div>`;
   const root = need('.pj', main);
   $('.toolbar [data-pj=new]', main)?.addEventListener('click', () => void createDialog());
-  $('.toolbar .crumb', main)?.addEventListener('click', e => {
+  // Écouté sur la barre d'outils : le fil d'Ariane est redessiné quand la conversation change de nom.
+  $('.toolbar', main)?.addEventListener('click', e => {
     const t = target(e);
+    if (!t.closest('.crumb')) return;
     if (t.closest('[data-pj-open]')) void go(null);
+    else if (p && t.closest('[data-pj-tab="sessions"]')) sessions.open(null);
     else if (p && t.closest('[data-pj-tab]')) void go(p.id, 'overview');
   });
   if (p) void hydrate(root, p, tab);
@@ -367,7 +391,7 @@ export function mount(main: HTMLElement): void {
       return;
     }
     const ag = t.closest('[data-pj-agent]');
-    if (ag && p) { sessions.select(ag.dataset.pjAgent || null); await go(p.id, 'sessions'); return; }
+    if (ag && p) { sessions.select(ag.dataset.pjAgent || null, p.id); await go(p.id, 'sessions'); return; }
     const issue = t.closest('.lv-row[data-issue]');
     if (issue) { void import('../../integrations/linear/page.ts').then(m => m.openTicket(issue.dataset.issue ?? '')); return; }
     const b = t.closest('[data-pj]'); if (!b) return;
