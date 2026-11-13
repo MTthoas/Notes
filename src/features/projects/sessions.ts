@@ -77,7 +77,8 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
 
 // ---------- Vues ----------
 function quotaHTML(q: Quota | null): string {
-  if (!q?.status) return '';
+  // Claude Code n'écrit l'état de la limite que lorsqu'elle est atteinte : passé l'heure de réinitialisation, il est périmé.
+  if (!q?.status || (q.resetsAt && q.resetsAt * 1000 <= Date.now())) return '';
   const kind = q.rateLimitType === 'five_hour' ? 'Limite des 5 heures' : q.rateLimitType === 'seven_day' ? 'Limite de la semaine' : q.rateLimitType === 'seven_day_opus' ? 'Limite Opus de la semaine' : 'Limite d’utilisation';
   const at = q.resetsAt ? new Date(q.resetsAt * 1000) : null;
   const when = at ? at.toLocaleString('fr-FR', { weekday: at.getTime() - Date.now() > 864e5 ? 'long' : undefined, hour: '2-digit', minute: '2-digit' }) : '';
