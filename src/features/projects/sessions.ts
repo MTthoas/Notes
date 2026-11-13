@@ -19,7 +19,8 @@ interface Session { id: string; title: string; branch: string; worktree: string;
 interface Quota { status?: string; resetsAt?: number; rateLimitType?: string; isUsingOverage?: boolean }
 interface Action { at: string; kind: string; text: string }
 export interface AgentRun { machine?: string; host?: string; run: string; mode: string; prompt: string; status: string; session: string; worktree: string; started: string; finished: string; result: string; lastText: string; turns: number; denials: string[]; quota?: Quota | null }
-interface Worktree { name: string; branch: string; changes: number; ahead: number; pushed: boolean }
+/** `target` : branche existante que la copie continue (publication sur cette branche), sinon vide. */
+interface Worktree { name: string; branch: string; changes: number; ahead: number; pushed: boolean; target?: string }
 
 let selected: string | null = null, timer: ReturnType<typeof setInterval> | undefined, tick = 0;
 let runs: AgentRun[] = [], trees: Worktree[] = [];
@@ -72,8 +73,22 @@ export function composerHTML(p: Project, { session = '', compact = false, machin
       ${bridge.local() && machine !== 'server' ? '<label class="ag-check" title="Autorise npm test et npm run … : le code du projet peut alors s’exécuter"><input type="checkbox" name="tests">Tests npm</label>' : ''}
       <select class="field" name="machine" aria-label="Où travailler"${machine === 'server' ? '' : ' hidden'}><option value="mac">Sur le Mac</option>${machine === 'server' ? '<option value="server" selected>Sur le serveur</option>' : ''}</select>
       <select class="field" name="model" aria-label="Modèle">${models}</select>
+      ${compact ? '' : `<select class="field ag-from" name="branch" aria-label="Branche de départ" title="Partir d’une nouvelle branche, ou continuer une branche existante (PR en conflit, travail à reprendre)" hidden><option value="">Nouvelle branche</option></select>
+      <label class="ag-check" data-merge hidden title="La branche principale est fusionnée dans la copie : s’il y a des conflits, Claude Code les résout dans les fichiers"><input type="checkbox" name="merge" checked>Fusionner <span data-base>main</span></label>`}
       <span class="ag-hint" data-hint>${icon('shield')}Copie isolée du dépôt : ton dossier reste intact.</span>
       <button class="btn btn-primary">${icon('play')}Lancer<kbd>⌘↩</kbd></button></div></form>`;
+}
+
+/** Remplit le choix « branche de départ » : les branches du dépôt qu'un agent peut continuer (app Mac seulement). */
+async function fillBranches(root: HTMLElement, p: Project): Promise<void> {
+  if (!bridge.local() || !$('.ag-compose select[name=branch]', root)) return;
+  const r = await native.call('agent', 'branches', { project: p.id }, 20000);
+  const sel = $<HTMLSelectElement>('.ag-compose select[name=branch]', root), list = r.ok && Array.isArray(r.branches) ? (r.branches as unknown[]).filter((b): b is string => typeof b === 'string') : [];
+  if (!sel || !list.length || sel.options.length > 1) return;
+  sel.insertAdjacentHTML('beforeend', `<optgroup label="Continuer une branche">${list.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('')}</optgroup>`);
+  sel.hidden = false;
+  const base = $('[data-base]', sel.closest('.ag-compose') ?? root);
+  if (base && typeof r.base === 'string' && r.base) base.textContent = r.base;
 }
 
 /** Branche les formulaires de consigne présents dans `root` (lancement, reprise, raccourci ⌘↩). */
@@ -81,10 +96,18 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
   if (root.dataset.agBound) return;
   root.dataset.agBound = '1';
   root.addEventListener('change', e => {
-    const t = e.target as HTMLInputElement, f = t.closest('.ag-compose'); if (!f || t.name !== 'mode') return;
+    const t = e.target as HTMLInputElement, f = t.closest<HTMLElement>('.ag-compose'); if (!f || !['mode', 'branch', 'machine'].includes(t.name)) return;
+    const edit = (f.querySelector<HTMLInputElement>('[name=mode]:checked')?.value ?? 'edit') === 'edit';
     const hint = $('[data-hint]', f), tests = $<HTMLInputElement>('[name=tests]', f);
-    if (hint) hint.innerHTML = t.value === 'edit' ? `${icon('shield')}Copie isolée du dépôt : ton dossier reste intact.` : `${icon('eye')}Lecture seule : analyse et propose, sans rien modifier.`;
-    if (tests) { tests.disabled = t.value !== 'edit'; if (tests.disabled) tests.checked = false; }
+    // Continuer une branche existante : en mode « modifier », sur le Mac seulement.
+    const from = $<HTMLSelectElement>('[name=branch]', f), merge = $('[data-merge]', f), mc = $<HTMLSelectElement>('[name=machine]', f);
+    if (from) { from.disabled = !edit || mc?.value === 'server'; if (from.disabled) from.value = ''; }
+    const branch = from?.value ?? '';
+    if (merge) merge.hidden = !branch;
+    if (hint) hint.innerHTML = !edit ? `${icon('eye')}Lecture seule : analyse et propose, sans rien modifier.`
+      : branch ? `${icon('shield')}Copie isolée de <code>${esc(branch)}</code> : publication sur cette branche.`
+        : `${icon('shield')}Copie isolée du dépôt : ton dossier reste intact.`;
+    if (tests && t.name === 'mode') { tests.disabled = !edit; if (tests.disabled) tests.checked = false; }
   });
   root.addEventListener('click', e => {
     const t = e.target as HTMLElement, f = t.closest<HTMLFormElement>('.ag-compose'); if (!f) return;
@@ -110,12 +133,13 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
     const val = (n: string) => (f.elements.namedItem(n) as HTMLInputElement | null);
     const body: Record<string, unknown> = { project: p.id, prompt };
     if (f.dataset.session) { body.session = f.dataset.session; if (f.dataset.machine) body.machine = f.dataset.machine; }
-    else { body.mode = f.querySelector<HTMLInputElement>('[name=mode]:checked')?.value ?? 'edit'; body.tests = !!val('tests')?.checked; body.model = val('model')?.value ?? ''; const mc = val('machine'); if (mc && !mc.hidden) body.machine = mc.value; }
+    else { body.mode = f.querySelector<HTMLInputElement>('[name=mode]:checked')?.value ?? 'edit'; body.tests = !!val('tests')?.checked; body.model = val('model')?.value ?? ''; const mc = val('machine'); if (mc && !mc.hidden) body.machine = mc.value; const from = val('branch')?.value ?? ''; if (from && body.mode === 'edit' && body.machine !== 'server') { body.branch = from; body.merge = !!val('merge')?.checked; } }
     btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Démarrage…';
     const r = await bridge.call('agent', 'start', body, 60000);
     btn.disabled = false; btn.innerHTML = label;
     if (!r.ok) { toast(r.message ?? 'Lancement impossible.'); return; }
     ta.value = ''; f.dataset.notes = ''; f.querySelectorAll('.ag-note').forEach(x => x.remove());
+    const from = val('branch'); if (from?.value) { from.value = ''; from.dispatchEvent(new Event('change', { bubbles: true })); }
     toast(f.dataset.session ? 'Session reprise' : 'Claude Code est au travail');
     onStarted(r as unknown as AgentRun);
   });
@@ -143,7 +167,7 @@ function runCard(r: AgentRun): string {
 }
 
 function treeRow(w: Worktree): string {
-  return `<div class="ag-tree"><span class="ag-tree-main"><code>${esc(w.branch || w.name)}</code><em>${w.changes ? `${w.changes} fichier${w.changes > 1 ? 's' : ''} modifié${w.changes > 1 ? 's' : ''}` : 'aucun changement en attente'}${w.ahead ? ` · ${w.ahead} commit${w.ahead > 1 ? 's' : ''}` : ''}${w.pushed ? ' · poussée' : ''}</em></span>
+  return `<div class="ag-tree"><span class="ag-tree-main"><code>${esc(w.target || w.branch || w.name)}</code><em>${w.target ? 'continue cette branche · ' : ''}${w.changes ? `${w.changes} fichier${w.changes > 1 ? 's' : ''} modifié${w.changes > 1 ? 's' : ''}` : 'aucun changement en attente'}${w.ahead ? ` · ${w.ahead} commit${w.ahead > 1 ? 's' : ''}` : ''}${w.pushed ? ' · poussée' : ''}</em></span>
     <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${w.changes || w.ahead ? '' : ' disabled'}>${icon('upload')}Publier</button>${w.pushed ? `<button class="btn" data-ag="pr" data-wt="${esc(w.name)}" title="Ouvrir la page de la pull request sur GitHub">${icon('github')}PR</button>` : ''}<button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
 }
 
@@ -337,21 +361,25 @@ const prBody = (run: AgentRun | undefined, detail: string) => `${detail ? `${det
 
 async function publish(p: Project, wt: string, root: HTMLElement): Promise<void> {
   const run = runs.find(r => r.worktree === wt), repo = p.repos[0];
+  // Copie qui continue une branche existante : on publie sur cette branche, qui a souvent déjà sa pull request.
+  const target = trees.find(t => t.name === wt)?.target ?? '';
   const canPR = !!repo && github.connected();
   const m = modal({ cls: 'ag-pub', title: 'Publier le travail de l’agent', html: `
     <div class="pub-type"><span>Type</span><div class="ag-seg" role="radiogroup" aria-label="Type de changement">${KINDS.map(([k, l]) => `<label title="${esc(l)}"><input type="radio" name="ctype" value="${k}"><span>${k}</span></label>`).join('')}</div></div>
     <label class="pj-field"><span class="ag-msg-h">Message de commit<em class="ag-sug" hidden>${icon('sparkle')}proposé par l’IA</em></span><textarea class="field ag-msg" name="msg" rows="3" spellcheck="false" required></textarea></label>
     <div class="ag-sug-row"><span class="ag-sug-st"><span class="spin"></span>Lecture des changements…</span><button type="button" class="link-btn" data-resug hidden>${icon('refresh')}Reproposer</button></div>
     <label class="pj-field"><span>Branche</span><input class="field ag-branch" name="branch" spellcheck="false" autocomplete="off" required></label>
-    ${repo ? `<label class="cx-check"><input type="checkbox" name="pr" checked> Ouvrir une pull request sur <strong>${esc(repo)}</strong></label>
+    ${repo ? `<label class="cx-check"><input type="checkbox" name="pr"${target ? '' : ' checked'}> Ouvrir une pull request sur <strong>${esc(repo)}</strong></label>
     <label class="pj-field"><span>Titre de la PR</span><input class="field" name="title"></label>` : '<p class="modal-hint">Associe un dépôt GitHub au projet pour ouvrir une pull request.</p>'}
+    ${target ? `<p class="modal-hint">${icon('pr')}Cette copie continue <code>${esc(target)}</code> : le commit est ajouté à cette branche (et valide la fusion en cours, s’il y en a une). Sa pull request, si elle existe, se met à jour toute seule. Change le nom pour publier sur une nouvelle branche.</p>` : ''}
     <p class="modal-hint">${icon('shield')}Les changements de la copie sont validés puis la branche est poussée avec tes identifiants Git habituels. Ton dossier de travail n’est pas touché.</p>
     <div class="rv-status"></div>
     <div class="modal-actions"><button class="btn" data-x>Annuler</button><button class="btn btn-primary" data-go>${icon('upload')}Publier</button></div>` });
   const msg = need<HTMLTextAreaElement>('[name=msg]', m.node), title = m.node.querySelector<HTMLInputElement>('[name=title]');
   const sugSt = need('.ag-sug-st', m.node), sugTag = need('.ag-sug', m.node), resug = need<HTMLButtonElement>('[data-resug]', m.node);
   const branchIn = need<HTMLInputElement>('[name=branch]', m.node);
-  let editedMsg = false, editedTitle = false, editedBranch = false;
+  let editedMsg = false, editedTitle = false, editedBranch = !!target;
+  if (target) branchIn.value = target;
   const subject = () => msg.value.split('\n')[0]?.trim() ?? '';
   const typeOf = () => new RegExp(`^(${TYPES})`).exec(subject())?.[1] ?? '';
   const sync = () => {
@@ -390,7 +418,7 @@ async function publish(p: Project, wt: string, root: HTMLElement): Promise<void>
     const prTitle = title?.value.trim() || subject(), detail = message.split('\n').slice(1).join('\n').trim();
     go.disabled = true; st.innerHTML = '<p class="rv-status"><span class="spin"></span>Commit et push…</p>';
     const wanted = branchIn.value.trim();
-    if (!/^[a-z0-9][a-z0-9._/-]{0,89}$/.test(wanted) || wanted.includes('..') || wanted.endsWith('/')) { st.innerHTML = '<p class="rv-status err">Nom de branche invalide : minuscules, chiffres, - _ . / (ex. feat/export-pdf).</p>'; branchIn.focus(); return; }
+    if (wanted !== target && (!/^[a-z0-9][a-z0-9._/-]{0,89}$/.test(wanted) || wanted.includes('..') || wanted.endsWith('/'))) { go.disabled = false; st.innerHTML = '<p class="rv-status err">Nom de branche invalide : minuscules, chiffres, - _ . / (ex. feat/export-pdf).</p>'; branchIn.focus(); return; }
     const r = await native.call('agent', 'push', { project: p.id, worktree: wt, message, branch: wanted }, 120000);
     if (!r.ok) { st.innerHTML = `<p class="rv-status err">${esc(r.message ?? 'Échec.')}</p>`; go.disabled = false; return; }
     const branch = String(r.branch);
@@ -420,7 +448,7 @@ async function openPR(p: Project, w: Worktree): Promise<void> {
   let base = 'main';
   try { if (github.connected()) base = (await github.project(repo)).info.default_branch; } catch { /* main par défaut */ }
   const run = runs.find(r => r.worktree === w.name), t = draftMessage(run?.prompt ?? w.name, []);
-  window.open(compareURL(repo, base, w.branch, t, prBody(run, '')), '_blank', 'noopener');
+  window.open(compareURL(repo, base, w.target || w.branch, t, prBody(run, '')), '_blank', 'noopener');
 }
 
 async function refreshTrees(p: Project): Promise<void> {
@@ -462,6 +490,7 @@ function shell(box: HTMLElement, p: Project): void {
     : `${composerHTML(p)}<div class="ag-zone"><p class="hm-empty">Chargement…</p></div>`);
   const mc = $<HTMLSelectElement>('select[name=machine]', box);
   if (mc && serverLabel && !selected) { mc.insertAdjacentHTML('beforeend', `<option value="server">Sur ${esc(serverLabel)}</option>`); mc.hidden = false; }
+  if (!selected) void fillBranches(box, p);
 }
 
 /** Dessine l'onglet et le garde à jour toutes les 3 secondes tant qu'il est affiché. */

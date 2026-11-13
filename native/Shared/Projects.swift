@@ -157,6 +157,101 @@ final class ProjectFolders {
     }
     func isRepo(_ dir: String) -> Bool { git(["rev-parse", "--is-inside-work-tree"], in: dir)?.hasPrefix("true") == true }
 
+    // MARK: Continuer une branche existante
+
+    /// Branche principale du dépôt distant, sans « origin/ » (« main » à défaut).
+    func defaultBranch(_ dir: String) -> String {
+        let ref = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], in: dir)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return ref.hasPrefix("origin/") && ref.count > 7 ? String(ref.dropFirst(7)) : "main"
+    }
+    /// Nom de branche existante passé tel quel à Git : jamais une option, un chemin ni une expression de révision.
+    static func validRef(_ b: String) -> Bool {
+        !b.isEmpty && b.count <= 200 && !b.contains("..") && !b.contains("//") && b.first != "/" && b.first != "-" && b.first != "."
+            && b.last != "/" && b.last != "." && !b.hasSuffix(".lock") && b != "HEAD"
+            && b.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._-/".contains($0)) }
+    }
+    private func refExists(_ ref: String, in dir: String) -> Bool { gitRun(["rev-parse", "--verify", "--quiet", ref + "^{commit}"], in: dir).ok }
+
+    /// Branches qu'un agent peut continuer : locales et distantes, les plus récentes d'abord,
+    /// hors branche principale et branches de travail des copies.
+    func agentBranches(_ id: String) -> [String: Any] {
+        guard let dir = path(id), isRepo(dir) else { return ["ok": true, "branches": [], "base": ""] }
+        let base = defaultBranch(dir), remotePrefix = "refs/remotes/origin/"
+        let raw = git(["for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/heads/", remotePrefix], in: dir) ?? ""
+        var seen = Set<String>(), out: [String] = []
+        for line in raw.split(separator: "\n") {
+            let ref = String(line)
+            let name = ref.hasPrefix("refs/heads/") ? String(ref.dropFirst(11)) : ref.hasPrefix(remotePrefix) ? String(ref.dropFirst(remotePrefix.count)) : ""
+            guard name != base, !name.hasPrefix("worktree-"), Self.validRef(name), seen.insert(name).inserted else { continue }
+            out.append(name)
+            if out.count >= 40 { break }
+        }
+        return ["ok": true, "branches": out, "base": base]
+    }
+
+    /// Prépare une copie isolée qui continue une branche existante. La copie reçoit sa propre branche de travail
+    /// (la branche d'origine peut rester ouverte ailleurs), partant de la version la plus avancée de la branche,
+    /// locale ou distante. Avec `merge`, la branche principale y est fusionnée sans validation : en cas de conflit,
+    /// les fichiers gardent leurs marqueurs pour que l'agent les résolve, et la publication valide la fusion.
+    /// `message` : l'erreur en cas d'échec, sinon l'état de la copie à transmettre à l'agent.
+    func prepareWorktree(_ dir: String, name: String, branch: String, merge: Bool) -> (ok: Bool, path: String, message: String) {
+        guard Self.validWorktree(name), Self.validRef(branch) else { return (false, "", "Nom de branche non pris en charge (lettres, chiffres, . _ - / uniquement).") }
+        let base = defaultBranch(dir)
+        if branch == base { return (false, "", "« \(branch) » est la branche principale : lance une consigne sans branche, Studio en créera une nouvelle.") }
+        // Dernier état du dépôt distant ; hors ligne, on continue avec ce qui est déjà sur le Mac.
+        let fetched = gitRun(["fetch", "--quiet", "origin"], in: dir, timeout: 25).ok
+        let local = "refs/heads/" + branch, remote = "refs/remotes/origin/" + branch
+        let hasLocal = refExists(local, in: dir), hasRemote = refExists(remote, in: dir)
+        guard hasLocal || hasRemote else { return (false, "", "Branche « \(branch) » introuvable dans ce dépôt.") }
+        // La version locale n'est retenue que si elle contient déjà la version distante (commits pas encore poussés).
+        let start = hasLocal && (!hasRemote || gitRun(["merge-base", "--is-ancestor", remote, local], in: dir).ok) ? local : remote
+        let wt = dir + "/.claude/worktrees/" + name, work = "worktree-" + name
+        let add = gitRun(["worktree", "add", "--quiet", "--no-track", "-b", work, wt, start], in: dir, timeout: 60)
+        guard add.ok else { return (false, "", "Impossible de créer la copie : \(Self.gitError(add.err))") }
+        _ = gitRun(["config", "branch.\(work).studiotarget", branch], in: wt)
+        var note = fetched ? "" : "Le dépôt distant n'a pas pu être consulté : la copie part de l'état connu sur ce Mac. "
+        guard merge else { return (true, wt, note) }
+
+        let onto = refExists("refs/remotes/origin/" + base, in: dir) ? "origin/" + base : base
+        let m = gitRun(["merge", "--no-commit", "--no-ff", onto], in: wt, timeout: 60)
+        let conflicts = (git(["diff", "--name-only", "--diff-filter=U"], in: wt) ?? "").split(separator: "\n").map(String.init)
+        if !conflicts.isEmpty {
+            note += "Une fusion de « \(onto) » dans cette branche est en cours, pas encore validée. Fichiers en conflit : \(conflicts.prefix(40).joined(separator: ", ")). "
+                + "Chacun contient les marqueurs de conflit de Git (<<<<<<<, =======, >>>>>>>) : résous-les en éditant les fichiers, en gardant ce qui doit l'être "
+                + "des deux côtés, sans laisser aucun marqueur. Ne lance aucune commande Git : Studio validera la fusion à la publication."
+        } else if !m.ok {
+            // Fusion impossible pour une autre raison : on ne laisse pas une copie à moitié préparée.
+            _ = git(["worktree", "remove", "--force", wt], in: dir, timeout: 30)
+            _ = git(["branch", "-D", work], in: dir)
+            return (false, "", "La fusion de « \(onto) » a échoué : \(Self.gitError(m.err.isEmpty ? m.out : m.err))")
+        } else if gitRun(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], in: wt).ok {
+            note += "« \(onto) » a été fusionnée dans cette branche sans conflit ; la fusion sera validée à la publication."
+        } else {
+            note += "La branche contient déjà « \(onto) » : il n'y a rien à fusionner ni aucun conflit à résoudre."
+        }
+        return (true, wt, note)
+    }
+
+    /// Branche existante que continue une copie (voir prepareWorktree), ou chaîne vide.
+    func worktreeTarget(_ wt: String) -> String {
+        guard let b = git(["rev-parse", "--abbrev-ref", "HEAD"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines), !b.isEmpty, b != "HEAD" else { return "" }
+        let t = git(["config", "--get", "branch.\(b).studiotarget"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return Self.validRef(t) ? t : ""
+    }
+
+    /// Fichiers où `git diff --check` signale encore un marqueur de conflit (début ou fin de bloc).
+    static func leftoverConflicts(_ check: String) -> [String] {
+        let lines = check.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var out: [String] = []
+        for (i, l) in lines.enumerated() where l.hasSuffix(": leftover conflict marker") && i + 1 < lines.count {
+            let next = lines[i + 1]
+            guard next.hasPrefix("+<<<<<<<") || next.hasPrefix("+>>>>>>>") || next.hasPrefix("+|||||||") else { continue }
+            let file = String(l.split(separator: ":", omittingEmptySubsequences: false).first ?? "")
+            if !file.isEmpty && !out.contains(file) { out.append(file) }
+        }
+        return out
+    }
+
     /// Copies isolées du projet : branche, changements, commits d'avance sur la branche principale.
     func worktrees(_ id: String) -> [String: Any] {
         guard let dir = path(id) else { return ["ok": true, "worktrees": []] }
@@ -175,7 +270,7 @@ final class ProjectFolders {
             let changes = (git(["status", "--porcelain"], in: wtPath) ?? "").split(separator: "\n").count
             let ahead = Int(git(["rev-list", "--count", "\(base)..HEAD"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
             let upstream = git(["rev-parse", "--abbrev-ref", "@{upstream}"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            out.append(["name": name, "branch": branch, "changes": changes, "ahead": ahead, "pushed": !upstream.isEmpty])
+            out.append(["name": name, "branch": branch, "changes": changes, "ahead": ahead, "pushed": !upstream.isEmpty, "target": worktreeTarget(wtPath)])
         }
         return ["ok": true, "worktrees": out, "base": base]
     }
@@ -189,11 +284,18 @@ final class ProjectFolders {
 
     func commitPush(_ id: String, name: String, message: String, branch wanted: String = "") -> [String: Any] {
         guard let wt = worktreeDir(id, name) else { return ["ok": false, "message": "Copie introuvable."] }
-        if !wanted.isEmpty && !Self.validBranch(wanted) { return ["ok": false, "message": "Nom de branche invalide : minuscules, chiffres, - _ . / (ex. feat/export-pdf)."] }
+        // Copie qui continue une branche existante : sans autre nom demandé, le travail est poussé sur cette branche.
+        let target = worktreeTarget(wt), onTarget = !target.isEmpty && (wanted.isEmpty || wanted == target)
+        if !wanted.isEmpty && !onTarget && !Self.validBranch(wanted) { return ["ok": false, "message": "Nom de branche invalide : minuscules, chiffres, - _ . / (ex. feat/export-pdf)."] }
         let msg = String(message.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2000))
         if !(git(["status", "--porcelain"], in: wt) ?? "").isEmpty {
             guard !msg.isEmpty else { return ["ok": false, "message": "Message de commit vide."] }
             let add = gitRun(["add", "-A"], in: wt, timeout: 30)
+            // Fusion en cours : pas de validation tant qu'un fichier contient encore un marqueur de conflit.
+            if add.ok && gitRun(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], in: wt).ok {
+                let left = Self.leftoverConflicts(gitRun(["diff", "--cached", "--check"], in: wt, timeout: 30).out)
+                if !left.isEmpty { return ["ok": false, "message": "Il reste des marqueurs de conflit dans : \(left.prefix(8).joined(separator: ", ")). Reprends la session pour finir de les résoudre."] }
+            }
             let commit = add.ok ? gitRun(["commit", "-q", "-m", msg], in: wt, timeout: 30) : add
             guard commit.ok else { return ["ok": false, "message": "Le commit a échoué : \(Self.gitError(commit.err))"] }
         }
@@ -201,18 +303,24 @@ final class ProjectFolders {
             return ["ok": false, "message": "Branche introuvable."]
         }
         // Nom lisible (feat/…, fix/…) à la place de « worktree-studio-… » donné par Claude Code.
-        if !wanted.isEmpty && wanted != branch {
+        if !onTarget && !wanted.isEmpty && wanted != branch {
             let mv = gitRun(["branch", "-m", wanted], in: wt)
             guard mv.ok else { return ["ok": false, "message": "Renommage de la branche impossible : \(Self.gitError(mv.err))"] }
             branch = wanted
+            // Publiée sous un autre nom : la copie ne suit plus la branche d'origine.
+            if !target.isEmpty { _ = gitRun(["config", "--unset", "branch.\(branch).studiotarget"], in: wt) }
         }
-        let push = gitRun(["push", "-u", "origin", branch], in: wt, timeout: 90)
+        // Sur une branche existante, la branche de travail de la copie est poussée vers elle (jamais de push forcé).
+        let push = gitRun(["push", "-u", "origin", onTarget ? "HEAD:refs/heads/\(target)" : branch], in: wt, timeout: 90)
         guard push.ok else {
             let why = Self.gitError(push.err)
             let auth = why.lowercased().contains("auth") || why.contains("403") || why.contains("could not read") || why.contains("Permission denied")
-            return ["ok": false, "message": "Le push a échoué" + (why.isEmpty ? "." : " : \(why)") + (auth ? " — dans le Terminal, lance une fois « git push » dans ce dépôt pour enregistrer tes identifiants." : "")]
+            let moved = onTarget && (why.contains("rejected") || why.contains("non-fast-forward") || why.contains("fetch first"))
+            return ["ok": false, "message": "Le push a échoué" + (why.isEmpty ? "." : " : \(why)")
+                + (moved ? " — la branche « \(target) » a avancé sur GitHub depuis le lancement de l'agent : publie sous un autre nom de branche, ou relance l'agent sur la branche." : "")
+                + (auth ? " — dans le Terminal, lance une fois « git push » dans ce dépôt pour enregistrer tes identifiants." : "")]
         }
-        return ["ok": true, "branch": branch]
+        return ["ok": true, "branch": onTarget ? target : branch]
     }
 
     /// Supprime une copie isolée et sa branche locale (la branche poussée sur GitHub reste).

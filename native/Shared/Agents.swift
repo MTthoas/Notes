@@ -4,6 +4,8 @@
 // - « analyse » : lecture seule (Read, Glob, Grep) dans le dossier du projet ;
 // - « modifier » : dans une copie isolée du dépôt (worktree créé par Claude Code dans .claude/worktrees/),
 //   avec lecture et écriture de fichiers seulement, confinées à cette copie ;
+//   sur demande, cette copie part d'une branche existante, avec une fusion de la branche principale en attente
+//   (les conflits restent dans les fichiers, l'agent les résout en les éditant, Studio valide à la publication) ;
 // - option « tests » : autorise en plus `npm test` et `npm run …` (le code du projet peut alors s'exécuter).
 //
 // Garde-fous : programme à un emplacement connu, aucun shell, --restricted (outils de fichiers confinés au
@@ -90,6 +92,9 @@ final class Agents {
 
         let resume = body["session"] as? String ?? ""
         var cwd = dir, mode = body["mode"] as? String == "edit" ? "edit" : "read"
+        // Branche existante à continuer (mode « modifier », sur ce Mac) : voir ProjectFolders.prepareWorktree.
+        let branch = (body["branch"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var branchNote = ""
         var args = ["-p", "--output-format", "stream-json", "--verbose", "--restricted", "--permission-mode", "dontAsk",
                     "--setting-sources", "", "--strict-mcp-config", "--disable-slash-commands"]
         if !resume.isEmpty {
@@ -99,6 +104,7 @@ final class Agents {
             cwd = c; mode = c.contains("/.claude/worktrees/") ? "edit" : "read"
             args += ["--resume", resume]
         } else if mode == "edit" && onServer {
+            if !branch.isEmpty { return done(["ok": false, "message": "Continuer une branche existante n'est possible que sur le Mac pour l'instant."]) }
             let stamp = DateFormatter(); stamp.dateFormat = "MMdd-HHmm"
             let base = Self.slug(body["name"] as? String ?? prompt)
             args += ["--worktree", "studio-" + (base.isEmpty ? "agent" : base) + "-" + stamp.string(from: Date())]
@@ -108,7 +114,15 @@ final class Agents {
             let stamp = DateFormatter(); stamp.dateFormat = "MMdd-HHmm"
             let base = Self.slug(body["name"] as? String ?? prompt)
             let name = "studio-" + (base.isEmpty ? "agent" : base) + "-" + stamp.string(from: Date())
-            args += ["--worktree", name]
+            if branch.isEmpty {
+                args += ["--worktree", name]
+            } else {
+                // Studio crée lui-même la copie, à partir de la branche demandée ; Claude Code y est lancé directement.
+                let prep = folders.prepareWorktree(dir, name: name, branch: branch, merge: body["merge"] as? Bool == true)
+                guard prep.ok else { return done(["ok": false, "message": prep.message]) }
+                cwd = prep.path
+                branchNote = "Cette copie continue la branche existante « \(branch) » : tes changements seront publiés sur cette branche. " + prep.message
+            }
         }
         let tests = mode == "edit" && body["tests"] as? Bool == true && !onServer
         let tools = (mode == "edit" ? Self.editTools : Self.readTools) + (tests ? ["Bash"] : [])
@@ -119,6 +133,7 @@ final class Agents {
             Tu es lancé depuis Studio. L'utilisateur lit tes messages dans un fil de discussion et peut te répondre ensuite \
             en reprenant la session, mais personne ne répond pendant que tu travailles. \
             \(mode == "edit" ? "Tu travailles dans une copie isolée du dépôt ; ne fais pas de commit, l'utilisateur relira tes changements." : "Tu es en lecture seule : analyse et propose, sans modifier de fichier.") \
+            \(branchNote) \
             Si l'utilisateur demande une tâche précise, mène-la de façon autonome jusqu'au bout, puis termine par un compte rendu \
             court en Markdown : ce qui a été fait, les fichiers touchés, ce qui reste à décider. \
             S'il veut au contraire réfléchir, discuter, comparer des options ou avoir ton avis, ne te lance pas dans la réalisation : \
