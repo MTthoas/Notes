@@ -1457,7 +1457,7 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ag-seg input:focus-visible + span { outline: 2px solid var(--text-3); }
 .ag-check { display: inline-flex; align-items: center; gap: 6px; height: 30px; color: var(--text-2); font-size: var(--t-1); }
 .ag-check:has(input:disabled) { opacity: .45; }
-.ag-opts select.field { width: auto; height: 30px; margin: 0; padding: 0 28px 0 10px; font-size: var(--t-1); }
+.ag-opts select.field { width: auto; max-width: 200px; height: 30px; margin: 0; padding: 0 28px 0 10px; font-size: var(--t-1); text-overflow: ellipsis; }
 .ag-hint { flex: 1; min-width: 160px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: var(--t-1); }
 .ag-hint .ic { flex: none; width: 13px; height: 13px; }
 .ag-opts .btn-primary { margin-left: auto; height: 32px; }
