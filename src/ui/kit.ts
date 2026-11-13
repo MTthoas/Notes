@@ -74,6 +74,8 @@ const I: Record<string, string> = {
   pause: '<path d="M8.5 5.5v13M15.5 5.5v13"/>',
   next: '<path d="M6 5.5v13l9.5-6.5zM18 5.5v13"/>',
   prev: '<path d="M18 5.5v13L8.5 12zM6 5.5v13"/>',
+  volume: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+  mute: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>',
   music: '<path d="M9 17.5V5.5l10-2v12"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>',
   server: '<rect x="4" y="4.5" width="16" height="6" rx="1.5"/><rect x="4" y="13.5" width="16" height="6" rx="1.5"/><path d="M7.5 7.5h.01M7.5 16.5h.01"/>',
   refresh: '<path d="M19.5 12a7.5 7.5 0 11-2.2-5.3L19.5 9"/><path d="M19.5 4.5V9H15"/>',

@@ -1033,6 +1033,7 @@ document.addEventListener('click', e => { onClick(e).catch(err => { console.erro
 
 document.addEventListener('change', e => {
   const t = target(e);
+  if (plugins.change(t)) return;
   if (t.matches('.md input[type=checkbox][data-line]') && ed) void toggleTask(ed.note, num(t, 'line'));
   else if (t.matches('.tg-task input')) { const n = store.get(t.dataset.note); if (n) void toggleTask(n, num(t, 'line')); }
   else if (t instanceof HTMLInputElement && t.id === 'file' && t.files) { void importFiles([...t.files]); t.value = ''; }

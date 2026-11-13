@@ -38,6 +38,10 @@ interface Item {
 
 // Les plus récentes d'abord.
 const NEWS: Item[] = [
+  { id: 'spotify-volume', date: '2026-11-14', icon: 'volume', hue: 'green',
+    title: 'Le volume de Spotify',
+    text: 'Sous le titre en cours, un curseur règle le volume de l’appareil qui joue, et le haut-parleur coupe ou remet le son. Aussi dans la palette. Si tu avais déjà connecté Spotify, reconnecte-le une fois pour l’activer.',
+    points: ['Curseur', 'Couper le son', 'Palette'] },
   { id: 'extensions', date: '2026-11-14', icon: 'plug', hue: 'green',
     title: 'Des extensions : Spotify, n8n…',
     text: 'Active ce dont tu as besoin dans Réglages → Extensions. Spotify affiche le titre en cours et ses commandes dans la barre latérale ; n8n reçoit tes captures, tes tâches terminées et tes notes. Toujours sans serveur.',

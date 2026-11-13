@@ -96,7 +96,7 @@ export interface Plugin {
   panel?(api: PluginAPI): string;
   /** HTML du bloc en bas de la barre latérale ; '' pour ne rien afficher. */
   sidebar?(api: PluginAPI): string;
-  /** Réponses aux clics sur `data-plug="<id>:<action>"` et aux formulaires `data-plug-form="<id>:<action>"`. */
+  /** Réponses aux clics sur `data-plug="<id>:<action>"`, aux formulaires `data-plug-form="<id>:<action>"` et aux champs `data-plug-change="<id>:<action>"`. */
   actions?: Record<string, (api: PluginAPI, el: HTMLElement) => unknown>;
 }
 
@@ -201,5 +201,11 @@ export async function run(ref: string, el: HTMLElement): Promise<void> {
 export async function click(t: HTMLElement): Promise<boolean> {
   const x = t.closest<HTMLElement>('[data-plug]'); if (!x) return false;
   await run(x.dataset.plug ?? '', x);
+  return true;
+}
+/** Changement délégué d'un champ `data-plug-change="<id>:<action>"` (curseur…) : renvoie true s'il visait un plugin. */
+export function change(t: HTMLElement): boolean {
+  const ref = t.dataset.plugChange; if (!ref) return false;
+  void run(ref, t);
   return true;
 }

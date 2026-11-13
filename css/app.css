@@ -127,7 +127,10 @@ button.side-label:hover { color: var(--text-2); }
 .plug-np strong { font-weight: 500; }
 .plug-np em { font-style: normal; color: var(--text-3); }
 .plug-np .icon-btn { width: 24px; height: 24px; }
-.plug-np .icon-btn .ic { width: 13px; height: 13px; }
+.plug-np .icon-btn .ic, .plug-vol .icon-btn .ic { width: 13px; height: 13px; }
+.plug-vol { margin: -2px 8px 4px 10px; padding: 0 8px 0 2px; display: flex; align-items: center; gap: 6px; color: var(--text-2); }
+.plug-vol .icon-btn { width: 24px; height: 24px; flex: none; }
+.plug-vol input[type=range] { flex: 1; min-width: 0; height: 14px; margin: 0; accent-color: var(--c-green); cursor: pointer; }
 /* Réglages → Extensions. */
 .px-head { display: flex; align-items: flex-start; gap: 10px; }
 .px-head > .ic { width: 18px; height: 18px; margin-top: 1px; flex: none; color: var(--text-3); }
