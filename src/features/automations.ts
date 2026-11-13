@@ -47,7 +47,7 @@ function card(a: ReturnType<typeof hub.agentList>[number]): string {
 
 function body(): string {
   const list = hub.agentList(), log = hub.runLog().slice(0, 12), ready = ai.ready();
-  return `${ready ? '' : `<div class="au-banner">${icon('sparkle')}<div><strong>Connecte une IA pour lancer tes automatisations</strong><span>Claude, OpenAI ou un modèle local qui tourne sur ton Mac. Ta clé reste chiffrée dans le coffre.</span></div><button class="btn btn-primary" data-open-conn="ia">Connecter</button></div>`}
+  return `${ready ? '' : `<div class="au-banner">${icon('sparkle')}<div><strong>Connecte une IA pour lancer tes automatisations</strong><span>Le plus simple sur Mac : ton abonnement Claude via Claude Code, sans clé. Sinon une clé Claude ou OpenAI, gardée chiffrée dans le coffre.</span></div><button class="btn btn-primary" data-open-conn="ia">Connecter</button></div>`}
     <section class="td-sec"><h2>Tes automatisations<span>${list.length}</span></h2>
       ${list.length ? `<div class="au-grid">${list.map(card).join('')}</div>` : '<p class="nf-empty">Aucune pour l’instant. Choisis un modèle ci-dessous : il se crée en un clic, et tu peux ensuite le modifier comme une note.</p>'}</section>
     <section class="td-sec"><h2>Modèles prêts à l’emploi</h2><div class="au-tpl">${TEMPLATES.map((t, i) => `<button class="au-t" data-tpl="${i}" style="--c:var(--c-${t.hue})"><span class="au-ic">${icon(t.ic)}</span><strong>${esc(t.name)}</strong><span>${esc(t.pitch)}</span></button>`).join('')}

@@ -25,12 +25,17 @@ export function record(provider: string, model: string, c: Partial<Counts>): voi
   listeners.forEach(f => f());
 }
 
-/** Consommation du mois (par modèle et totale). */
-export function month(m = monthKey()): { rows: [string, Counts][]; total: Counts } {
+const sum = (rows: [string, Counts][]): Counts => rows.reduce((t, [, c]) => ({ input: t.input + c.input, output: t.output + c.output, cacheRead: t.cacheRead + c.cacheRead, cacheWrite: t.cacheWrite + c.cacheWrite, calls: t.calls + c.calls }), zero());
+/** Fournisseurs inclus dans un abonnement (pas de facturation au token) : comptés à part du budget. */
+const SUBSCRIPTION = /^claudecode:/;
+
+/** Consommation du mois : par modèle, totale facturée au token (clés API) et via l'abonnement (Claude Code). */
+export function month(m = monthKey()): { rows: [string, Counts][]; total: Counts; subscription: Counts } {
   const cur = read().find(x => x.month === m), rows = Object.entries(cur?.byModel ?? {}).sort((a, b) => (b[1].input + b[1].output) - (a[1].input + a[1].output));
-  const total = rows.reduce((t, [, c]) => ({ input: t.input + c.input, output: t.output + c.output, cacheRead: t.cacheRead + c.cacheRead, cacheWrite: t.cacheWrite + c.cacheWrite, calls: t.calls + c.calls }), zero());
-  return { rows, total };
+  return { rows, total: sum(rows.filter(([k]) => !SUBSCRIPTION.test(k))), subscription: sum(rows.filter(([k]) => SUBSCRIPTION.test(k))) };
 }
+/** Tous les tokens du mois, abonnement compris. */
+export const all = (): number => { const { total, subscription } = month(); return billable(total) + billable(subscription); };
 /** Tokens comptés dans le budget : entrée, sortie et écriture en cache (les relectures du cache sont comptées à part). */
 export const billable = (c: Counts): number => c.input + c.output + c.cacheWrite;
 

@@ -87,6 +87,7 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         if type == "badge", let n = body["count"] as? Int { Notifier.shared.badge(max(0, n)) }
         if type == "bio", let action = body["action"] as? String, let id = body["id"] as? Int { biometric(action, id: id, body: body) }
         if type == "project", let action = body["action"] as? String, let id = body["id"] as? Int { project(action, id: id, body: body) }
+        if type == "claude", let action = body["action"] as? String, let id = body["id"] as? Int { claude(action, id: id, body: body) }
         if type == "voice", let action = body["action"] as? String {
             Dictation.shared.send = { [weak self] payload in
                 guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
@@ -141,6 +142,23 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         }
         #else
         answer(["id": id, "ok": false, "message": "Disponible dans l'app Mac."])
+        #endif
+    }
+
+    /// Claude Code installé sur ce Mac, utilisé comme fournisseur d'IA (voir ClaudeCode.swift).
+    private func claude(_ action: String, id: Int, body: [String: Any]) {
+        #if os(macOS)
+        let cc = ClaudeCode.shared
+        let send: ([String: Any]) -> Void = { var r = $0; r["id"] = id; self.answer(r) }
+        switch action {
+        case "status": cc.status(done: send)
+        case "login": cc.login(done: send)
+        case "run": cc.run(body, done: send)
+        case "cancel": cc.cancel(body["run"] as? String ?? ""); send(["ok": true])
+        default: send(["ok": false, "message": "Action inconnue."])
+        }
+        #else
+        answer(["id": id, "ok": false, "message": "Claude Code s'utilise depuis l'app Mac."])
         #endif
     }
 

@@ -13,6 +13,7 @@ import * as notifs from './integrations/linear/notifications.ts';
 import * as linearView from './integrations/linear/page.ts';
 import * as github from './integrations/github/api.ts';
 import * as usage from './integrations/usage.ts';
+import * as ai from './integrations/ai.ts';
 import * as githubPage from './integrations/github/page.ts';
 import * as voice from './features/voice.ts';
 import * as home from './features/home.ts';
@@ -1200,4 +1201,4 @@ async function start() {
 start().catch(e => { console.error(e); document.body.insertAdjacentHTML('beforeend', `<div class="fatal">Studio n’a pas pu démarrer : ${esc(e.message)}.<br>Le stockage local du navigateur est peut-être désactivé (navigation privée ?).</div>`); });
 
 // Build de test uniquement (retiré du build normal) : accès direct aux modules pour les tests automatisés.
-if (__TEST__) Object.assign(window, { __studio: { store, vault, todo, notifs, hub, github, linear, link, biometric, usage } });
+if (__TEST__) Object.assign(window, { __studio: { store, vault, todo, notifs, hub, github, linear, link, biometric, usage, ai, app: { setView } } });

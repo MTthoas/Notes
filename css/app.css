@@ -1230,7 +1230,12 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .us-row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: var(--t-2); }
 .us-row:last-child { border-bottom: 0; }
 .us-row em { font-style: normal; color: var(--text-3); font-size: var(--t-1); font-variant-numeric: tabular-nums; }
-.us-budget input { width: 90px; }
+.us-budget { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.us-budget > span:first-child { font-weight: 500; }
+.us-budget > span:last-child { color: var(--text-3); font-size: var(--t-1); }
+.cx-row.us-budget .field { flex: none; width: 110px; }
+.us-sum em { font-style: normal; color: var(--text-3); font-size: var(--t-1); opacity: .8; }
+.us-rows + .cx-row, .us-sum + .cx-row { margin-top: 14px; }
 
 /* Revue IA */
 .modal.rv { max-width: 760px; }
@@ -1238,3 +1243,59 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .rv-out { margin-top: 14px; max-height: 50vh; overflow-y: auto; padding: 4px 2px; }
 .rv-status { margin: 10px 0 0; color: var(--text-3); font-size: var(--t-1); }
 @media (max-width: 640px) { .ss-step { grid-template-columns: minmax(0, 1fr); gap: 2px; } .ss-row time, .pj-br time { display: none; } }
+
+/* ---------- Réglages : Claude Code ---------- */
+.cc-head { display: flex; align-items: center; gap: 12px; }
+.cc-logo { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; color: var(--c-orange); background: color-mix(in srgb, var(--c-orange) 13%, transparent); }
+.cc-logo .ic { width: 18px; height: 18px; }
+.cc-title { flex: 1; min-width: 0; }
+.cx-sec .cc-title h4 { margin: 0; font-size: var(--t-3); }
+.cx-sec .cc-title p { margin: 1px 0 0; color: var(--text-3); font-size: var(--t-1); line-height: 1.4; }
+.cc-pill { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 12px; font-size: var(--t-1); font-weight: 500; color: var(--c); background: color-mix(in srgb, var(--c) 13%, transparent); }
+.cc-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.cc-pill:has(.spin)::before { display: none; }
+.cc-pill .spin { width: 10px; height: 10px; margin: 0; }
+.cx-sec .cc-text { margin: 14px 0 0; }
+.cc-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 16px 0 0; }
+.cc-facts div { padding: 9px 12px; border-radius: var(--r); border: 1px solid var(--border); background: var(--bg); }
+.cc-facts dt { color: var(--text-3); font-size: var(--t-1); }
+.cc-facts dd { margin: 2px 0 0; font-weight: 500; font-variant-numeric: tabular-nums; }
+.cc-act { display: flex; align-items: center; gap: 16px; margin-top: 14px; }
+.cx-sec .cc-act p { flex: 1; display: flex; align-items: center; gap: 8px; margin: 0; }
+.cc-act p .ic { flex: none; width: 15px; height: 15px; color: var(--c-green); }
+.cc-act .btn { flex: none; }
+.cc-model { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); font-weight: 500; }
+.cc-model span { flex: none; width: 70px; }
+.cc-model .field { flex: 1; margin: 0; }
+.cc .modal-hint { margin-top: 12px; }
+.cc-steps { margin: 16px 0 0; padding: 0; list-style: none; counter-reset: cc; display: flex; flex-direction: column; gap: 14px; }
+.cc-steps li { counter-increment: cc; display: grid; grid-template-columns: 24px minmax(0, 1fr); column-gap: 10px; row-gap: 8px; align-items: center; }
+.cc-steps li::before { content: counter(cc); display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--btn); color: var(--text-2); font-size: var(--t-1); font-weight: 600; }
+.cc-steps li > :not(:first-child) { grid-column: 2; justify-self: start; }
+.cc-cmd { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 6px 6px 12px; border-radius: var(--r); border: 1px solid var(--border); background: var(--bg); }
+.cc-cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 12px var(--mono); }
+@media (max-width: 560px) { .cc-act { flex-direction: column; align-items: stretch; } .cc-head { flex-wrap: wrap; } }
+
+/* ---------- Harmonisation de la mise en page ---------- */
+/* Toutes les pages larges partagent la même colonne : le titre ne bouge plus d'une page à l'autre. */
+.home-in, .todo-in, .todo.wide .todo-in, .lv-in, .hp-in, .au-in, .pj-in { max-width: 1120px; }
+/* Actions d'une tâche : superposées au survol, elles ne décalent plus les étiquettes. */
+.td-row { position: relative; }
+.td-acts { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 2px; padding: 0 4px 0 20px; border-radius: 0 5px 5px 0; background: linear-gradient(to right, transparent, var(--hover) 18px); opacity: 0; pointer-events: none; transition: opacity .1s; }
+.td-acts .td-del { opacity: 1; }
+.td-row:hover .td-acts, .td-row:focus-within .td-acts { opacity: 1; pointer-events: auto; }
+@media (hover: none) { .td-acts { position: static; transform: none; padding: 0; background: none; opacity: .6; pointer-events: auto; } }
+/* Carte Kanban sans étiquette : pas de ligne vide, les flèches restent accessibles au survol. */
+.kb-card { position: relative; }
+.kb-card footer:not(:has(> :not(.kb-move))) { height: 0; margin-top: -8px; }
+.kb-card footer:not(:has(> :not(.kb-move))) .kb-move { position: absolute; top: 6px; right: 6px; padding-left: 14px; background: linear-gradient(to right, transparent, var(--bg) 12px); }
+/* Carte d'automatisation : la dernière exécution a sa propre ligne, les boutons restent alignés à droite. */
+.au-card footer { flex-wrap: wrap; row-gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+.au-card footer .au-last { flex: 1 1 100%; }
+.au-card footer .au-last + * { margin-left: auto; }
+.pj-folder { margin: 0; }
+/* Séparateurs de lignes alignés sur les titres : la zone de survol déborde, pas le trait. */
+.td-row, .pj-pr { border-bottom: 0; background: linear-gradient(var(--border), var(--border)) 6px 100% / calc(100% - 12px) 1px no-repeat; }
+.ss-row { border-bottom: 0; background: linear-gradient(var(--border), var(--border)) 8px 100% / calc(100% - 16px) 1px no-repeat; }
+.td-row:last-child, .pj-pr:last-of-type, .ss-row:last-child { background-image: none; }
+.td-row:hover, .pj-pr:hover, .ss-row:hover, .ss-row.sel { background-color: var(--hover); }

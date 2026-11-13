@@ -109,12 +109,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try { r.github = (await fetch('https://api.github.com/zen', { credentials: 'omit' })).status; } catch (e) { r.github = String(e); }
         const pid = '\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_PROJECT"] ?? "")';
         let seq = 424240;
-        const ask = (action, extra) => new Promise(res => {
+        const ask = (action, extra, type = 'project', wait = 15000) => new Promise(res => {
           const id = ++seq, prev = window.carnet.reply;
           window.carnet.reply = p => { if (p && p.id === id) { window.carnet.reply = prev; res(p); } else prev(p); };
-          window.webkit.messageHandlers.carnet.postMessage({ type: 'project', action, id, project: pid, ...extra });
-          setTimeout(() => res('pas de réponse'), 15000);
+          window.webkit.messageHandlers.carnet.postMessage({ type, action, id, project: pid, ...extra });
+          setTimeout(() => res('pas de réponse'), wait);
         });
+        if ('\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_CLAUDE"] ?? "")') {
+          const st = await ask('status', {}, 'claude', 40000); r.claudeStatus = { installed: st.installed, loggedIn: st.loggedIn, plan: st.plan, version: st.version, source: st.source, path: st.path };
+          const t0 = Date.now(), x = await ask('run', { run: 'selftest-1', system: 'Tu es concis.', prompt: 'Réponds uniquement : ok', model: 'haiku' }, 'claude', 120000);
+          r.claudeRun = { ok: x.ok, text: x.text, models: x.models, message: x.message, ms: Date.now() - t0 };
+          const y = await ask('run', { run: 'selftest-2', system: 'Outils : creer_tache(texte).', prompt: 'Crée la tâche « Tester Studio ». Si tu appelles un outil, laisse reponse vide.', model: 'haiku', tools: true }, 'claude', 120000);
+          r.claudeTools = { ok: y.ok, structured: y.structured, message: y.message };
+        }
         if (pid) {
           r.project = await ask('info', {});
           const b = await ask('branches', {}); r.branches = b.ok ? (b.branches || []).length : b;

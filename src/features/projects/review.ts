@@ -33,12 +33,12 @@ export async function review(p: Project, scope: 'working' | 'branch'): Promise<v
   need('[data-go]', m.node).onclick = async () => {
     const go = need<HTMLButtonElement>('[data-go]', m.node), status = need('.rv-status', m.node), out = need('.rv-out', m.node);
     go.disabled = true; status.innerHTML = '<span class="spin"></span> Relecture en cours…';
-    const before = usage.billable(usage.month().total);
+    const before = usage.all();
     try {
       const r = await ai.run({ prompt: PROMPT, tools: [], context: `Projet : ${p.name}\nChangements (${scope === 'working' ? 'non commités' : 'de la branche'}) :\n\n${stat}\n\n\`\`\`diff\n${patch}\n\`\`\`` });
       text = r.text;
       out.innerHTML = renderMarkdown(text || '*(réponse vide)*'); out.hidden = false;
-      status.textContent = `Relu par ${ai.PROVIDERS[r.provider]} · ${usage.fmt(usage.billable(usage.month().total) - before)} tokens`;
+      status.textContent = `Relu par ${ai.PROVIDERS[r.provider]} · ${usage.fmt(usage.all() - before)} tokens`;
       need('[data-save]', m.node).hidden = false; go.hidden = true;
     } catch (e) { status.innerHTML = `<span class="err">${esc(errMsg(e))}</span>`; go.disabled = false; }
   };

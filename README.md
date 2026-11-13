@@ -25,6 +25,16 @@ npm run serve        # build en continu + http://localhost:8000
 
 Les modules JavaScript et le chiffrement demandent `http://localhost` ou HTTPS : ouvrir `index.html` directement ne suffit pas.
 
+### Commande `studio`
+
+```bash
+ln -sf "$PWD/bin/studio" ~/.local/bin/studio   # une seule fois (un dossier présent dans le PATH)
+
+studio           # ouvre l'app Mac (la construit et l'installe si elle manque)
+studio web       # version web en local, reconstruite à chaque modification
+studio update    # reconstruit l'app Mac depuis les sources et la réinstalle
+```
+
 | Commande | Rôle |
 |---|---|
 | `npm run build` | Compile `src/` dans `dist/` : un seul `app.js` minifié, CSS minifié, service worker avec la liste des fichiers et une version de cache calculée sur leur contenu |
@@ -96,6 +106,14 @@ Chaque projet a ses **sous-menus**, aussi listés dans la barre latérale :
 - **Sessions IA** : l'app Mac lit les journaux locaux de Claude Code (`~/.claude/projects/…`), en lecture seule ; rien ne quitte la machine.
 - **Revue IA** : le diff est lu en local, montré, puis envoyé à l'IA branchée seulement après ton clic ; la revue peut être enregistrée comme note du projet.
 - **Consommation** (Réglages → IA) : tokens du mois par fournisseur et modèle, et ce qu'il reste sur le budget mensuel que tu fixes.
+
+## Claude Code (ton abonnement, sans clé API)
+
+Sur Mac, Studio peut passer par le **Claude Code** installé sur la machine, connecté à ton abonnement Claude : Réglages → Intelligence artificielle → carte **Claude Code**. Studio le détecte, guide l'installation et la connexion si besoin, puis un clic sur **Utiliser Claude Code** en fait le fournisseur par défaut.
+
+- Claude Code tourne **sans ses propres outils** (`--tools ""`), sans serveur MCP, sans tes réglages ni tes hooks, sans session enregistrée, dans un dossier vide propre à Studio. Il ne lance aucune commande et ne lit aucun fichier.
+- Les automatisations gardent leurs outils (ranger une note, créer une tâche…) : Claude Code renvoie les appels sous forme structurée, Studio les exécute, avec ton accord pour toute modification.
+- La consommation passe par les limites de ton abonnement : elle est comptée à part du budget des clés API.
 
 ## Plugins
 

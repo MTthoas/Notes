@@ -1,0 +1,49 @@
+#!/bin/sh
+# studio — lance Studio depuis le terminal.
+#   studio            ouvre l'app Mac (la construit et l'installe si elle manque)
+#   studio web        version web en local, reconstruite à chaque modification (http://localhost:8000)
+#   studio update     reconstruit l'app Mac depuis les sources et la réinstalle
+#   studio help       cette aide
+set -eu
+
+# Dossier du dépôt, même quand la commande est un lien symbolique (ex. ~/.local/bin/studio).
+SELF=$0
+while [ -L "$SELF" ]; do
+  LINK=$(readlink "$SELF")
+  case $LINK in /*) SELF=$LINK ;; *) SELF=$(dirname "$SELF")/$LINK ;; esac
+done
+ROOT=$(cd "$(dirname "$SELF")/.." && pwd)
+APP=/Applications/Studio.app
+
+install_app() {
+  echo "→ Construction de l'app Mac…"
+  "$ROOT/native/build-mac.sh"
+  osascript -e 'quit app "Studio"' >/dev/null 2>&1 || true
+  sleep 1
+  rm -rf "$APP"
+  cp -R "$ROOT/native/build/Studio.app" "$APP"
+  echo "✓ Installée dans $APP"
+}
+
+case "${1:-open}" in
+  open)
+    [ -d "$APP" ] || install_app
+    open "$APP"
+    ;;
+  web)
+    cd "$ROOT"
+    [ -d node_modules ] || npm install
+    exec npm run serve
+    ;;
+  update)
+    install_app
+    open "$APP"
+    ;;
+  help|-h|--help)
+    sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    echo "Commande inconnue : $1 (voir « studio help »)" >&2
+    exit 1
+    ;;
+esac
