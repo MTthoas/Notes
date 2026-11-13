@@ -1644,3 +1644,48 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ag-steps { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: var(--t-2); color: var(--text-3); }
 .ag-steps li.on { color: var(--text-2); font-weight: 500; }
 .ag-steps .spin { margin-right: 6px; vertical-align: -2px; }
+
+/* ---------- Journal ----------
+   Réutilise la liste des notes (.list-head, .note-item, .list-label) et la page d'Accueil (.home, .hm-*, .seg, .md).
+   Ici, seulement la mise en place et ce qui n'existe pas ailleurs (cases d'activité, demande dépliable). */
+.jr { flex: 1; min-height: 0; display: flex; }
+.jr-side { width: var(--list-w); flex: none; display: flex; flex-direction: column; min-height: 0; background: var(--bg-list); border-right: 1px solid var(--border); -webkit-user-select: none; user-select: none; }
+.jr-search { padding: 4px 8px 0; }
+.jr-search .field { margin: 0; }
+.jr-heat { display: grid; grid-template-rows: repeat(7, 1fr); grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; padding: 8px 9px 4px; }
+.jr-hc { aspect-ratio: 1; border-radius: 2px; padding: 0; }
+.jr-hc.l0 { background: var(--btn); }
+.jr-hc.l1 { background: color-mix(in srgb, var(--text) 18%, transparent); }
+.jr-hc.l2 { background: color-mix(in srgb, var(--text) 34%, transparent); }
+.jr-hc.l3 { background: color-mix(in srgb, var(--text) 52%, transparent); }
+.jr-hc.l4 { background: color-mix(in srgb, var(--text) 72%, transparent); }
+.jr-hc.sel { outline: 1.5px solid var(--accent); outline-offset: 1px; }
+.jr-busy .ic { animation: spin .9s linear infinite; }
+.jr-next .ic { transform: scaleX(-1); }
+.jr .home-in { max-width: 780px; }
+.jr .hm-col { gap: 32px; }
+.jr .hm-sec > header .seg { margin: -4px 0; }
+.jr-proj { display: inline-flex; align-items: center; color: var(--text-2); }
+.jr-headline { margin: 0 0 6px; font-size: var(--t-4); font-weight: 600; letter-spacing: -.01em; }
+.jr-sum { font-size: var(--t-2); }
+.jr-sum.busy { opacity: .5; }
+.jr-group > summary { display: flex; align-items: center; gap: 2px; padding-left: 0; cursor: pointer; list-style: none; }
+.jr-group > summary::-webkit-details-marker { display: none; }
+.jr-group > summary em { margin-left: 8px; font-style: normal; font-weight: 400; }
+.jr-group > summary:hover { color: var(--text-2); }
+.jr-files { margin: 0 0 6px; }
+.jr-files code { font: var(--t-1) var(--mono); }
+.jr-ses { margin: 6px 0 10px; }
+.jr-ses > .hm-meta { margin: 0 0 2px; }
+.jr-p { position: relative; cursor: default; }
+.jr-p > span small { display: flex; align-items: center; color: var(--text-3); font-size: var(--t-1); }
+.jr-p.open > span { display: block; -webkit-line-clamp: unset; white-space: pre-wrap; overflow-wrap: anywhere; }
+.jr-p mark { background: color-mix(in srgb, #f2c94c 35%, transparent); color: inherit; border-radius: 3px; }
+.jr-copy { position: absolute; right: 4px; top: 4px; opacity: 0; background: var(--bg); }
+.jr-copy .ic { width: 13px; height: 13px; }
+.jr-p:hover .jr-copy, .jr-copy:focus-visible { opacity: 1; }
+@media (max-width: 900px) {
+  .jr { flex-direction: column; overflow: auto; }
+  .jr-side { width: auto; max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--border); }
+  .jr .home { overflow: visible; }
+}

@@ -143,6 +143,13 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         case "subagent":
             guard let dir = folders.path(pid) else { answer(["id": id, "ok": false, "message": "Choisis d'abord le dossier du projet."]); return }
             ClaudeSessions.shared.subagent(project: dir, session: body["session"] as? String ?? "", agent: body["agent"] as? String ?? "") { var r = $0; r["id"] = id; self.answer(r) }
+        case "journal":
+            // Journal des demandes : seulement les projets dont le dossier a été choisi sur ce Mac.
+            let ids = (body["projects"] as? [String] ?? []).prefix(60)
+            let list = ids.compactMap { p in folders.path(p).map { (id: p, dir: $0) } }
+            let since = body["since"] as? String ?? ""
+            guard since.count == 10 else { answer(["id": id, "ok": false, "message": "Date invalide."]); return }
+            ClaudeSessions.shared.journal(projects: list, since: since) { var r = $0; r["id"] = id; self.answer(r) }
         case "deleteSession":
             // Supprime une conversation : son journal part dans la corbeille, et ses agents terminés sont oubliés.
             let sid = body["session"] as? String ?? ""

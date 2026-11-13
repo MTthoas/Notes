@@ -4,11 +4,18 @@
 #   ios     → vérifie que l'app iPhone compile (sans signature : non installable, voir README)
 #   release → à chaque push sur main (et sur un tag v…), publie une Release avec l'app Mac et l'app web,
 #             et le paquet @mtthoas/studio (app web compilée) dans les Packages du dépôt
+#
+# Quand le build se lance :
+#   - push sur main ou tag v…  → build complet + publication ;
+#   - pull request (ouverte, ou branche re-poussée) → build de vérification, une seule fois par push ;
+#   - push sur une autre branche → rien (avant, chaque push d'agent lançait deux builds : « push » ET « pull_request »,
+#     dans deux groupes de concurrence différents ; le second annulait parfois le premier, d'où des builds « au hasard »).
+#   Une branche poussée sans PR se vérifie à la main : Actions → Build → Run workflow.
 name: Build
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -17,9 +24,11 @@ on:
 permissions:
   contents: read
 
+# Un seul build à la fois par PR (ou par branche) : un nouveau push annule le build devenu périmé.
+# Jamais sur main ni sur un tag : chaque fusion doit aller jusqu'à sa publication.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:

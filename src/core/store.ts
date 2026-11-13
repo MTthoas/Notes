@@ -286,11 +286,11 @@ export async function decryptNote(n: Note): Promise<void> {
 
 // ---------- Import / export ----------
 export async function exportJSON(): Promise<string> {
-  return JSON.stringify({ app: 'carnet', format: 1, exportedAt: new Date().toISOString(), notes: await db.all('notes'), versions: await db.all('versions') }, null, 2);
+  return JSON.stringify({ app: 'carnet', format: 1, exportedAt: new Date().toISOString(), notes: await db.all('notes'), versions: await db.all('versions'), journal: await db.all('journal') }, null, 2);
 }
 
 export async function importJSON(text: string): Promise<number> {
-  const data = JSON.parse(text) as { app?: unknown; notes?: unknown; versions?: unknown };
+  const data = JSON.parse(text) as { app?: unknown; notes?: unknown; versions?: unknown; journal?: unknown };
   if (data.app !== 'carnet' || !Array.isArray(data.notes)) throw new Error('Ce fichier n’est pas une sauvegarde Studio.');
   let count = 0;
   for (const rec of data.notes as unknown[]) {
@@ -300,6 +300,11 @@ export async function importJSON(text: string): Promise<number> {
     await db.put('notes', rec); count++;
   }
   if (Array.isArray(data.versions)) await db.putMany('versions', (data.versions as Version[]).filter(v => v && typeof v.id === 'string' && typeof v.noteId === 'string'));
+  // Journal : les journées absentes de cet appareil sont reprises telles quelles (celles qui existent déjà sont gardées).
+  if (Array.isArray(data.journal)) {
+    const have = new Set((await db.all<{ id: string }>('journal')).map(d => d.id));
+    await db.putMany('journal', (data.journal as { id?: unknown; prompts?: unknown }[]).filter((d): d is { id: string; prompts: unknown[] } => !!d && typeof d.id === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.id) && Array.isArray(d.prompts) && !have.has(d.id)));
+  }
   await load(); emit('import', null);
   return count;
 }

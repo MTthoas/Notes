@@ -3,9 +3,11 @@
 // seuls les identifiants nécessaires aux index restent lisibles sur le disque.
 import type { Box } from '../types.ts';
 
-const NAME = 'carnet', VERSION = 1;
-export type StoreName = 'notes' | 'versions';
-const CLEAR: Record<StoreName, string[]> = { notes: ['id'], versions: ['id', 'noteId'] };
+// Version 2 : ajoute « journal » (une fiche par jour : demandes faites à Claude Code, activité, résumé).
+const NAME = 'carnet', VERSION = 2;
+export type StoreName = 'notes' | 'versions' | 'journal';
+const STORES: StoreName[] = ['notes', 'versions', 'journal'];
+const CLEAR: Record<StoreName, string[]> = { notes: ['id'], versions: ['id', 'noteId'], journal: ['id'] };
 
 /** Chiffrement appliqué aux enregistrements quand le coffre est ouvert. */
 export interface Cipher { seal(text: string): Promise<Box>; open(box: Box): Promise<string> }
@@ -26,8 +28,11 @@ function open(): Promise<IDBDatabase> {
       if (!d.objectStoreNames.contains('versions')) {
         d.createObjectStore('versions', { keyPath: 'id' }).createIndex('noteId', 'noteId');
       }
+      if (!d.objectStoreNames.contains('journal')) d.createObjectStore('journal', { keyPath: 'id' });
     };
-    r.onsuccess = () => res(r.result);
+    // Une autre fenêtre ouvre une version plus récente de la base : on lui laisse la place.
+    r.onblocked = () => console.warn('Base locale : mise à jour en attente d’une autre fenêtre de Studio.');
+    r.onsuccess = () => { const d = r.result; d.onversionchange = () => { d.close(); dbp = undefined; }; res(d); };
     r.onerror = () => rej(r.error);
   });
 }
@@ -67,6 +72,7 @@ export const put = async <T extends { id: string }>(store: StoreName, v: T): Pro
   const rec = await seal(store, v as unknown as Row);
   await tx(store, 'readwrite', s => { s.put(rec); });
 };
+export const get = async <T>(store: StoreName, id: string): Promise<T | null> => unseal<T>(await tx(store, 'readonly', s => s.get(id)));
 export const del = (store: StoreName, id: string): Promise<void> => tx(store, 'readwrite', s => { s.delete(id); });
 export const byIndex = async <T>(store: StoreName, index: string, key: IDBValidKey): Promise<T[]> =>
   unsealAll<T>(await tx(store, 'readonly', s => s.index(index).getAll(key)));
@@ -79,7 +85,7 @@ export const delMany = (store: StoreName, ids: string[]): Promise<void> => tx(st
 // Réécrit toute la base avec le chiffrement courant (activation / désactivation du coffre).
 // `prev` : chiffrement en vigueur avant le changement, pour relire l'existant.
 export async function reseal(prev: Cipher | null): Promise<void> {
-  for (const store of ['notes', 'versions'] as const) {
+  for (const store of STORES) {
     const raw = await tx(store, 'readonly', s => s.getAll());
     const next = cipher; cipher = prev;
     const plain = await unsealAll<Row>(raw);

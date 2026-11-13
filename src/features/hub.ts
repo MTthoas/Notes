@@ -15,6 +15,7 @@ import * as events from '../core/events.ts';
 import * as usage from '../integrations/usage.ts';
 import * as update from '../core/update.ts';
 import * as news from './news.ts';
+import * as journal from './journal.ts';
 import type { AppEvent } from '../core/events.ts';
 import { renderMarkdown, esc, plain } from '../lib/markdown.ts';
 import { fold } from '../lib/fuzzy.ts';
@@ -381,6 +382,7 @@ export function askAI(prefill = ''): void {
     const opt = (k: string) => !!$<HTMLInputElement>(`[data-o="${k}"]`, m.node)?.checked;
     try {
       const ctx = n && opt('ctx') ? `Note ouverte : « ${titleOf(n)} »\n\n${store.getBody(n) ?? ''}` : '';
+      void journal.record(ta.value, n && opt('ctx') ? `Demander à l’IA · ${titleOf(n)}` : 'Demander à l’IA');
       const r = await ai.run({ prompt: ta.value, provider: p, context: ctx, tools: ['notes', 'linear', 'agents'].filter(opt) },
         { approve, onWrite: app.refreshNote, onStep: e => steps.insertAdjacentHTML('beforeend', `<div>${icon('bolt')}${esc(stepLabel(e))}</div>`) });
       text = r.text; out.innerHTML = renderMarkdown(text || '*(réponse vide)*'); out.hidden = false;
