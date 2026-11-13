@@ -112,7 +112,10 @@ final class ProjectFolders {
         let stat = git(["diff", "--stat", "HEAD"], in: dir, timeout: 15) ?? ""
         let patch = git(["diff", "--unified=3", "HEAD"], in: dir, timeout: 15) ?? ""
         let untracked = git(["ls-files", "--others", "--exclude-standard"], in: dir) ?? ""
-        return ["ok": true, "base": "HEAD", "stat": stat, "patch": patch, "untracked": untracked, "truncated": patch.utf8.count >= 400_000]
+        var r: [String: Any] = ["ok": true, "base": "HEAD", "stat": stat, "patch": patch, "untracked": untracked, "truncated": patch.utf8.count >= 400_000]
+        // Copie d'agent : les derniers messages de commit du dépôt, pour proposer un message dans le même style.
+        if worktree != nil { r["log"] = git(["log", "-10", "--format=%s"], in: dir) ?? "" }
+        return r
     }
 
     /// Branches locales et leur position par rapport à la branche principale (pour le suivi du flux).
@@ -178,8 +181,15 @@ final class ProjectFolders {
     }
 
     /// Valide les changements d'une copie isolée et pousse sa branche (identifiants Git habituels de l'utilisateur).
-    func commitPush(_ id: String, name: String, message: String) -> [String: Any] {
+    /// Nom de branche accepté : feat/mon-sujet, fix/…, minuscules, chiffres, « . _ - / », sans « .. » ni « / » en bord.
+    static func validBranch(_ b: String) -> Bool {
+        !b.isEmpty && b.count <= 90 && !b.contains("..") && !b.contains("//") && b.first != "/" && b.first != "-" && b.last != "/" && !b.hasSuffix(".lock")
+            && b.allSatisfy { ($0.isASCII && ($0.isLowercase || $0.isNumber)) || "._-/".contains($0) }
+    }
+
+    func commitPush(_ id: String, name: String, message: String, branch wanted: String = "") -> [String: Any] {
         guard let wt = worktreeDir(id, name) else { return ["ok": false, "message": "Copie introuvable."] }
+        if !wanted.isEmpty && !Self.validBranch(wanted) { return ["ok": false, "message": "Nom de branche invalide : minuscules, chiffres, - _ . / (ex. feat/export-pdf)."] }
         let msg = String(message.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2000))
         if !(git(["status", "--porcelain"], in: wt) ?? "").isEmpty {
             guard !msg.isEmpty else { return ["ok": false, "message": "Message de commit vide."] }
@@ -187,8 +197,14 @@ final class ProjectFolders {
             let commit = add.ok ? gitRun(["commit", "-q", "-m", msg], in: wt, timeout: 30) : add
             guard commit.ok else { return ["ok": false, "message": "Le commit a échoué : \(Self.gitError(commit.err))"] }
         }
-        guard let branch = git(["rev-parse", "--abbrev-ref", "HEAD"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty, branch != "HEAD" else {
+        guard var branch = git(["rev-parse", "--abbrev-ref", "HEAD"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty, branch != "HEAD" else {
             return ["ok": false, "message": "Branche introuvable."]
+        }
+        // Nom lisible (feat/…, fix/…) à la place de « worktree-studio-… » donné par Claude Code.
+        if !wanted.isEmpty && wanted != branch {
+            let mv = gitRun(["branch", "-m", wanted], in: wt)
+            guard mv.ok else { return ["ok": false, "message": "Renommage de la branche impossible : \(Self.gitError(mv.err))"] }
+            branch = wanted
         }
         let push = gitRun(["push", "-u", "origin", branch], in: wt, timeout: 90)
         guard push.ok else {
@@ -205,7 +221,8 @@ final class ProjectFolders {
         let branch = git(["rev-parse", "--abbrev-ref", "HEAD"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         _ = git(["worktree", "unlock", wt], in: dir)
         guard git(["worktree", "remove", "--force", wt], in: dir, timeout: 30) != nil else { return ["ok": false, "message": "Suppression impossible."] }
-        if branch.hasPrefix("worktree-studio-") { _ = git(["branch", "-D", branch], in: dir) }
+        // La copie « studio-… » a été créée par Studio : sa branche locale aussi (même renommée en feat/…).
+        if name.hasPrefix("studio-") && !branch.isEmpty && branch != "HEAD" { _ = git(["branch", "-D", branch], in: dir) }
         return ["ok": true]
     }
 

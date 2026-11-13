@@ -128,6 +128,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
           const df = await ask('diff', { scope: 'working', worktree: st.worktree }); r.wtDiff = df.ok ? { untracked: df.untracked } : df.message;
           if (st.worktree) { const del = await ask('discard', { worktree: st.worktree }, 'agent'); r.discard = del.ok; }
         }
+        if ('\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_PUSH"] ?? "")') {
+          const bad = await ask('push', { project: 'selftest-push', worktree: 'studio-test-1113-2210', message: 'x', branch: '../evil' }, 'agent', 60000); r.pushRefusesBadBranch = !bad.ok;
+          const ok = await ask('push', { project: 'selftest-push', worktree: 'studio-test-1113-2210', message: 'feat(test): add b file\\n\\nDetail line.', branch: 'feat/test-add-b-file' }, 'agent', 60000); r.push = { ok: ok.ok, branch: ok.branch, message: ok.message };
+          const del = await ask('discard', { project: 'selftest-push', worktree: 'studio-test-1113-2210' }, 'agent', 60000); r.discardAfterPush = del.ok;
+        }
         if ('\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_CLAUDE"] ?? "")') {
           const st = await ask('status', {}, 'claude', 40000); r.claudeStatus = { installed: st.installed, loggedIn: st.loggedIn, plan: st.plan, version: st.version, source: st.source, path: st.path };
           const t0 = Date.now(), x = await ask('run', { run: 'selftest-1', system: 'Tu es concis.', prompt: 'Réponds uniquement : ok', model: 'haiku' }, 'claude', 120000);

@@ -144,7 +144,7 @@ function runCard(r: AgentRun): string {
 
 function treeRow(w: Worktree): string {
   return `<div class="ag-tree"><span class="ag-tree-main"><code>${esc(w.branch || w.name)}</code><em>${w.changes ? `${w.changes} fichier${w.changes > 1 ? 's' : ''} modifié${w.changes > 1 ? 's' : ''}` : 'aucun changement en attente'}${w.ahead ? ` · ${w.ahead} commit${w.ahead > 1 ? 's' : ''}` : ''}${w.pushed ? ' · poussée' : ''}</em></span>
-    <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${w.changes || w.ahead ? '' : ' disabled'}>${icon('upload')}Publier</button><button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
+    <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${w.changes || w.ahead ? '' : ' disabled'}>${icon('upload')}Publier</button>${w.pushed ? `<button class="btn" data-ag="pr" data-wt="${esc(w.name)}" title="Ouvrir la page de la pull request sur GitHub">${icon('github')}PR</button>` : ''}<button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
 }
 
 function listHTML(list: Session[], quota: Quota | null): string {
@@ -179,32 +179,141 @@ function detailHTML(raw: Partial<Session> & { actions?: Action[] }, root: string
 }
 
 // ---------- Actions sur les copies ----------
+// ---------- Message de commit (Conventional Commits) ----------
+const TYPES = 'feat|fix|chore|docs|refactor|test|perf|style|build|ci';
+const COMMIT_RE = new RegExp(`^(${TYPES})(\\([\\w./-]+\\))?!?: \\S`);
+/** Type probable d'après la consigne et les fichiers touchés. */
+function guessType(text: string, files: string[]): string {
+  if (files.length && files.every(f => /\.(md|txt)$|^docs?\//i.test(f))) return 'docs';
+  if (files.length && files.every(f => /(^|\/)(tests?|__tests__)\/|\.(test|spec)\.\w+$/.test(f))) return 'test';
+  if (/\b(corrig|répar|repar|bug|fix|erreur|crash|plante|régression)/i.test(text)) return 'fix';
+  if (/\b(refacto|nettoi|simplifi|réorganis|renomm)/i.test(text)) return 'refactor';
+  if (/\b(doc|readme|documentation)\b/i.test(text)) return 'docs';
+  if (/\btests?\b/i.test(text)) return 'test';
+  if (/\b(dépendances?|mise à jour|mettre à jour|upgrade|bump|config|workflow|ci)\b/i.test(text)) return 'chore';
+  return 'feat';
+}
+/** Fichiers listés par `git diff --stat`. */
+const statFiles = (stat: string): string[] => stat.split('\n').map(l => l.split('|')[0]?.trim() ?? '').filter(f => f && !/files? changed/.test(f));
+/** Proposition immédiate, sans IA : type, puis la consigne résumée. */
+function draftMessage(prompt: string, files: string[]): string {
+  const first = prompt.split('\n')[0]?.replace(/[.!…]+$/, '').trim() ?? '';
+  const summary = (first.charAt(0).toLowerCase() + first.slice(1)).slice(0, 64) || 'update from Claude Code';
+  return `${guessType(prompt, files)}: ${summary}`;
+}
+/** Nettoie la réponse de l'IA : 1 ligne de titre conforme, et au plus 1 ligne de détail. */
+function cleanMessage(raw: string, fallbackType: string): string {
+  const lines = raw.replace(/```\w*/g, '').split('\n').map(l => l.trim().replace(/^["'`]+|["'`]+$/g, '')).filter(Boolean);
+  let subject = lines[0] ?? '';
+  if (!subject) return '';
+  if (!COMMIT_RE.test(subject)) subject = `${fallbackType}: ${subject.replace(/^\w+(\(.*?\))?:\s*/, '')}`;
+  subject = subject.length > 72 ? subject.slice(0, 71).trimEnd() + '…' : subject;
+  const detail = lines.slice(1).find(l => !COMMIT_RE.test(l));
+  return detail ? `${subject}\n\n${detail.slice(0, 160)}` : subject;
+}
+const COMMIT_SYSTEM = `Tu écris des messages de commit au format Conventional Commits.
+Réponds uniquement par le message, sans guillemets, sans bloc de code, sans explication.
+Ligne 1 : type(portée): résumé — types : feat, fix, chore, docs, refactor, test, perf, style, build, ci ; portée facultative et courte ; 72 caractères au plus ; à l’impératif ; sans point final.
+Ligne 2 (facultative) : une seule phrase de détail, seulement si elle apporte quelque chose.
+Écris dans la même langue que les commits récents du dépôt, et dans le même style.`;
+async function suggestMessage(p: Project, wt: string, run: AgentRun | undefined): Promise<{ draft: string; ai: Promise<string> | null; files: string[] }> {
+  const d = await native.call('project', 'diff', { project: p.id, scope: 'working', worktree: wt }, 30000);
+  const stat = String(d.stat ?? ''), files = statFiles(stat), prompt = run?.prompt ?? wt.replace(/^studio-|-\d{4}-\d{4}$/g, '').replace(/-/g, ' ');
+  const draft = draftMessage(prompt, files);
+  if (!d.ok || !ai.ready() || !String(d.patch ?? '').trim()) return { draft, ai: null, files };
+  const user = `Consigne donnée à l’agent : ${prompt}\n\n${run?.result ? `Compte rendu de l’agent :\n${run.result.slice(0, 1500)}\n\n` : ''}Commits récents du dépôt :\n${String(d.log ?? '').trim() || '(aucun)'}\n\nFichiers modifiés :\n${stat}\n\nDiff (extrait) :\n\`\`\`diff\n${String(d.patch).slice(0, 20000)}\n\`\`\``;
+  return { draft, files, ai: ai.complete(COMMIT_SYSTEM, user).then(t => cleanMessage(t, guessType(prompt, files))) };
+}
+
+/** Nom de branche conventionnel tiré du titre du commit : « feat(tasks): add parser tests » → feat/tasks-add-parser-tests. */
+export function branchName(subject: string): string {
+  const m = subject.match(new RegExp(`^(${TYPES})(?:\\(([^)]+)\\))?!?:\\s*(.*)$`));
+  const type = m?.[1] ?? 'feat', words = `${m?.[2] ?? ''} ${m?.[3] ?? subject}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+  let slug = '';
+  for (const w of words) { if ((slug + '-' + w).length > 44) break; slug = slug ? `${slug}-${w}` : w; }
+  return `${type}/${slug || 'update'}`;
+}
+
+/** Page GitHub de création de la PR, déjà remplie (marche avec n'importe quel jeton, ou sans). */
+const compareURL = (repo: string, base: string, branch: string, title: string, body: string) =>
+  `https://github.com/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?quick_pull=1&title=${encodeURIComponent(title)}&body=${encodeURIComponent(body.slice(0, 3500))}`;
+const prBody = (run: AgentRun | undefined, detail: string) => `${detail ? `${detail}\n\n` : ''}${run?.result ? `${run.result}\n\n` : ''}---\nPréparé par Claude Code depuis Studio.`;
+
 async function publish(p: Project, wt: string, root: HTMLElement): Promise<void> {
   const run = runs.find(r => r.worktree === wt), repo = p.repos[0];
-  const title = (run?.prompt ?? wt.replace(/^studio-|-\d{4}-\d{4}$/g, '').replace(/-/g, ' ')).split('\n')[0]?.slice(0, 72) ?? wt;
   const canPR = !!repo && github.connected();
   const m = modal({ cls: 'ag-pub', title: 'Publier le travail de l’agent', html: `
-    <label class="pj-field">Message de commit<input class="field" name="msg" value="${esc(title)}" required></label>
-    ${canPR ? `<label class="cx-check"><input type="checkbox" name="pr" checked> Ouvrir une pull request sur <strong>${esc(repo)}</strong></label>
-    <label class="pj-field">Titre de la PR<input class="field" name="title" value="${esc(title)}"></label>` : `<p class="modal-hint">${repo ? 'Connecte GitHub pour ouvrir la pull request depuis Studio.' : 'Associe un dépôt GitHub au projet pour ouvrir une pull request.'}</p>`}
+    <label class="pj-field"><span class="ag-msg-h">Message de commit<em class="ag-sug" hidden>${icon('sparkle')}proposé par l’IA</em></span><textarea class="field ag-msg" name="msg" rows="3" spellcheck="false" required></textarea></label>
+    <div class="ag-sug-row"><span class="ag-sug-st"><span class="spin"></span>Lecture des changements…</span><button type="button" class="link-btn" data-resug hidden>${icon('refresh')}Reproposer</button></div>
+    <label class="pj-field"><span>Branche</span><input class="field ag-branch" name="branch" spellcheck="false" autocomplete="off" required></label>
+    ${repo ? `<label class="cx-check"><input type="checkbox" name="pr" checked> Ouvrir une pull request sur <strong>${esc(repo)}</strong></label>
+    <label class="pj-field"><span>Titre de la PR</span><input class="field" name="title"></label>` : '<p class="modal-hint">Associe un dépôt GitHub au projet pour ouvrir une pull request.</p>'}
     <p class="modal-hint">${icon('shield')}Les changements de la copie sont validés puis la branche est poussée avec tes identifiants Git habituels. Ton dossier de travail n’est pas touché.</p>
-    <p class="rv-status"></p>
+    <div class="rv-status"></div>
     <div class="modal-actions"><button class="btn" data-x>Annuler</button><button class="btn btn-primary" data-go>${icon('upload')}Publier</button></div>` });
+  const msg = need<HTMLTextAreaElement>('[name=msg]', m.node), title = m.node.querySelector<HTMLInputElement>('[name=title]');
+  const sugSt = need('.ag-sug-st', m.node), sugTag = need('.ag-sug', m.node), resug = need<HTMLButtonElement>('[data-resug]', m.node);
+  const branchIn = need<HTMLInputElement>('[name=branch]', m.node);
+  let editedMsg = false, editedTitle = false, editedBranch = false;
+  const subject = () => msg.value.split('\n')[0]?.trim() ?? '';
+  const sync = () => { if (title && !editedTitle) title.value = subject(); if (!editedBranch) branchIn.value = branchName(subject()); };
+  branchIn.addEventListener('input', () => { editedBranch = true; });
+  msg.addEventListener('input', () => { editedMsg = true; sugTag.hidden = true; sync(); });
+  title?.addEventListener('input', () => { editedTitle = true; });
+  const propose = async () => {
+    resug.hidden = true; sugSt.innerHTML = '<span class="spin"></span>Lecture des changements…';
+    const s = await suggestMessage(p, wt, run);
+    if (!m.node.isConnected) return;
+    if (!editedMsg) { msg.value = s.draft; sync(); }
+    if (!s.ai) { sugSt.textContent = ai.ready() ? 'Proposition tirée de la consigne.' : 'Proposition tirée de la consigne · connecte une IA pour un message rédigé d’après le diff.'; resug.hidden = !ai.ready(); return; }
+    sugSt.innerHTML = `<span class="spin"></span>L’IA rédige le message d’après le diff (${esc(ai.PROVIDERS[ai.config().provider])})…`;
+    try {
+      const text = await s.ai; if (!m.node.isConnected) return;
+      if (text && !editedMsg) { msg.value = text; sugTag.hidden = false; sync(); }
+      sugSt.textContent = editedMsg ? 'Tu as modifié le message : la proposition de l’IA n’a pas été appliquée.' : `${s.files.length} fichier${s.files.length > 1 ? 's' : ''} modifié${s.files.length > 1 ? 's' : ''}.`;
+    } catch (e) { sugSt.innerHTML = `<span class="err">Pas de proposition de l’IA : ${esc(errMsg(e))}</span>`; }
+    resug.hidden = false;
+  };
+  resug.onclick = () => { editedMsg = false; void propose(); };
+  void propose();
   need('[data-x]', m.node).onclick = m.close;
   need('[data-go]', m.node).onclick = async () => {
-    const go = need<HTMLButtonElement>('[data-go]', m.node), st = need('.rv-status', m.node), f = (n: string) => m.node.querySelector<HTMLInputElement>(`[name=${n}]`);
-    go.disabled = true; st.innerHTML = '<span class="spin"></span>Commit et push…';
-    const r = await native.call('agent', 'push', { project: p.id, worktree: wt, message: f('msg')?.value ?? title }, 120000);
-    if (!r.ok) { st.innerHTML = `<span class="err">${esc(r.message ?? 'Échec.')}</span>`; go.disabled = false; return; }
-    if (canPR && f('pr')?.checked && repo) {
-      st.innerHTML = '<span class="spin"></span>Ouverture de la pull request…';
-      try {
-        const info = await github.project(repo), pr = await github.createPull(repo, { head: String(r.branch), base: info.info.default_branch, title: f('title')?.value || title, body: `${run?.result ? `${run.result}\n\n` : ''}---\nPréparé par Claude Code depuis Studio.` });
-        m.close(); toast(`PR #${pr.number} ouverte`); window.open(pr.html_url, '_blank', 'noopener');
-      } catch (e) { st.innerHTML = `<span class="err">Branche poussée, mais la PR n’a pas pu être ouverte : ${esc(errMsg(e))}</span>`; go.hidden = true; }
-    } else { m.close(); toast(`Branche ${String(r.branch)} poussée`); }
+    const go = need<HTMLButtonElement>('[data-go]', m.node), st = need('.rv-status', m.node), wantPR = !!repo && !!m.node.querySelector<HTMLInputElement>('[name=pr]')?.checked;
+    const message = msg.value.trim(); if (!message) { msg.focus(); return; }
+    const prTitle = title?.value.trim() || subject(), detail = message.split('\n').slice(1).join('\n').trim();
+    go.disabled = true; st.innerHTML = '<p class="rv-status"><span class="spin"></span>Commit et push…</p>';
+    const wanted = branchIn.value.trim();
+    if (!/^[a-z0-9][a-z0-9._/-]{0,89}$/.test(wanted) || wanted.includes('..') || wanted.endsWith('/')) { st.innerHTML = '<p class="rv-status err">Nom de branche invalide : minuscules, chiffres, - _ . / (ex. feat/export-pdf).</p>'; branchIn.focus(); return; }
+    const r = await native.call('agent', 'push', { project: p.id, worktree: wt, message, branch: wanted }, 120000);
+    if (!r.ok) { st.innerHTML = `<p class="rv-status err">${esc(r.message ?? 'Échec.')}</p>`; go.disabled = false; return; }
+    const branch = String(r.branch);
     void refreshTrees(p).then(() => paint(root, p));
+    if (!wantPR || !repo) { m.close(); toast(`Branche ${branch} poussée`); return; }
+    st.innerHTML = '<p class="rv-status"><span class="spin"></span>Ouverture de la pull request…</p>';
+    let base = 'main';
+    try {
+      if (!canPR) throw new Error('GitHub n’est pas connecté dans Studio');
+      base = (await github.project(repo)).info.default_branch;
+      const pr = await github.createPull(repo, { head: branch, base, title: prTitle, body: prBody(run, detail) });
+      m.close(); toast(`PR #${pr.number} ouverte`); window.open(pr.html_url, '_blank', 'noopener');
+    } catch (e) {
+      const why = errMsg(e), perm = /not accessible|403|permission/i.test(why);
+      st.innerHTML = `<div class="ag-prfail"><p>${icon('check')}Branche <code>${esc(branch)}</code> poussée sur GitHub.</p>
+        <p class="err">${perm ? 'Ton jeton GitHub n’a pas le droit d’ouvrir une pull request (permission « Pull requests : lecture et écriture »).' : `La pull request n’a pas pu être ouverte d’ici : ${esc(why)}.`}</p>
+        <div class="ag-prfail-act"><a class="btn btn-primary" href="${esc(compareURL(repo, base, branch, prTitle, prBody(run, detail)))}" target="_blank" rel="noopener">${icon('github')}Ouvrir la PR sur GitHub</a>${perm || !canPR ? '<button class="btn" data-open-conn="github">Régler le jeton</button>' : ''}</div></div>`;
+      go.hidden = true; need('[data-x]', m.node).textContent = 'Fermer';
+      st.querySelector('a.btn-primary')?.addEventListener('click', () => setTimeout(m.close, 300));
+    }
   };
+}
+
+/** Copie déjà poussée : ouvre la page GitHub de création de sa PR, déjà remplie. */
+async function openPR(p: Project, w: Worktree): Promise<void> {
+  const repo = p.repos[0]; if (!repo) { toast('Associe un dépôt GitHub au projet.'); return; }
+  let base = 'main';
+  try { if (github.connected()) base = (await github.project(repo)).info.default_branch; } catch { /* main par défaut */ }
+  const run = runs.find(r => r.worktree === w.name), t = draftMessage(run?.prompt ?? w.name, []);
+  window.open(compareURL(repo, base, w.branch, t, prBody(run, '')), '_blank', 'noopener');
 }
 
 async function refreshTrees(p: Project): Promise<void> {
@@ -275,6 +384,7 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
     if (b.dataset.ag === 'review') await review.review(p, 'working', wt);
     if (b.dataset.ag === 'vscode') { const r = await native.call('project', 'open', { project: p.id, app: 'vscode', worktree: wt }, 15000); if (!r.ok) toast(r.message ?? 'Impossible d’ouvrir.'); }
     if (b.dataset.ag === 'push') await publish(p, wt, box);
+    if (b.dataset.ag === 'pr') { const w = trees.find(x => x.name === wt); if (w) await openPR(p, w); }
     if (b.dataset.ag === 'discard' && await confirmBox({ title: 'Supprimer cette copie ?', text: 'Les changements non publiés de l’agent seront perdus. Une branche déjà poussée sur GitHub reste en place.', ok: 'Supprimer', danger: true })) {
       const r = await native.call('agent', 'discard', { project: p.id, worktree: wt }, 30000);
       toast(r.ok ? 'Copie supprimée' : r.message ?? 'Impossible.');
