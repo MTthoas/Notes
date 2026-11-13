@@ -19,6 +19,7 @@ Mémoire du dépôt pour les agents : à lire **en premier**, avant toute recher
 - **Pont web ↔ natif** : `native.call(type, action, …)` dans `src/core/native.ts` ; côté Swift, `userContentController` de `native/Shared/Shell.swift` aiguille selon `type`, et répond par `window.carnet.reply`. La page sait où elle tourne par `document.documentElement.dataset.native` (`mac`, `ios`, absent dans un navigateur).
 - **Consignes envoyées à l'IA** : `src/integrations/tuning.ts` pour les automatisations, les tâches de fond et les limites de contexte. Celles des agents Claude Code vivent sur le Mac : `AgentTuning`, en bas de `native/Shared/Agents.swift`.
 - **Agents Claude Code** : lancement et arguments de `claude` dans `native/Shared/Agents.swift` ; copies isolées dans `.claude/worktrees/studio-…` (`Projects.swift`) ; publication en pull request dans `Orchestrator.swift` ; l'interface dans `src/features/projects/sessions.ts`.
+- **Page Claude** (conversation libre, sans projet) : `src/features/chat.ts`, vue `claude` ; conversations dans le magasin IndexedDB `chats` (`db.ts`) ; consigne `auto.chat` et limite `ctx.chat` dans `src/integrations/tuning.ts` ; `ai.run({ chat: true })`.
 - **Icônes** : table en tête de `src/ui/kit.ts` (`icon('nom')`).
 - **Commande `studio`** : `bin/studio` (sh POSIX), qui appelle `native/build-mac.sh`, lequel appelle `native/copy-web.sh` (build web puis copie dans l'app).
 

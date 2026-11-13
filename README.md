@@ -23,6 +23,7 @@ Studio est un carnet de notes Markdown reliées entre elles, qui réunit aussi t
 - **Écrire** — des notes en texte simple, reliées comme un wiki personnel (`[[liens]]`, `#tags`, graphe).
 - **Centraliser** — tâches, tickets Linear, pull requests et CI GitHub à côté de tes notes.
 - **Automatiser** — décris une routine une fois ; l'IA l'exécute à heure fixe ou à chaque événement, avec ton accord pour toute écriture.
+- **Discuter** — la page **Claude**, dans la barre latérale (ou « Parler à Claude » sur l'accueil) : une conversation libre, sans projet ni dossier. Claude lit tes notes, tâches, Linear et GitHub au besoin, et demande ton accord avant toute écriture. Les conversations restent sur l'appareil, chiffrées avec le reste.
 - **Piloter** — confie une consigne à Claude Code dans une copie isolée du dépôt, relis, publie en pull request.
 - **Se souvenir** — le **Journal** garde chaque demande faite à Claude Code (dans tous tes projets, terminal compris) et à l'IA de Studio, rangée par journée, avec le résumé de chaque journée écrit par l'IA. Il recopie les journaux de Claude Code avant qu'ils ne soient effacés (30 jours), dans la base locale chiffrée.
 
@@ -289,6 +290,7 @@ src/                               TypeScript strict
     update.ts         mise à jour automatique de l'app Mac depuis les Releases du dépôt
   features/         pages et fonctions de l'app
     home.ts           accueil
+    chat.ts           page Claude : conversation libre, sans projet, avec les outils de l'IA
     tasks.ts          tâches, sous-tâches, échéances, tickets Linear
     board.ts          Kanban générique (glisser-déposer, clavier, tactile)
     voice.ts          notes vocales (transcription sur l'appareil)

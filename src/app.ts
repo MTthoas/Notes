@@ -18,6 +18,7 @@ import * as githubPage from './integrations/github/page.ts';
 import * as voice from './features/voice.ts';
 import * as home from './features/home.ts';
 import * as journal from './features/journal.ts';
+import * as chat from './features/chat.ts';
 import * as automations from './features/automations.ts';
 import * as help from './features/help.ts';
 import * as onboarding from './features/onboarding.ts';
@@ -74,15 +75,15 @@ const SC = {
   sidebar: isMac ? 'ctrl+mod+s' : 'mod+alt+s', task: 'mod+enter', bold: 'mod+b', italic: 'mod+i',
 };
 const VIEWS: Record<string, { label: string; icon: string }> = {
-  home: { label: 'Accueil', icon: 'home' }, agents: { label: 'Automatisations', icon: 'bot' }, help: { label: 'Aide', icon: 'help' }, projets: { label: 'Projets', icon: 'folder' }, settings: { label: 'Réglages', icon: 'gear' },
+  home: { label: 'Accueil', icon: 'home' }, claude: { label: 'Claude', icon: 'sparkle' }, agents: { label: 'Automatisations', icon: 'bot' }, help: { label: 'Aide', icon: 'help' }, projets: { label: 'Projets', icon: 'folder' }, settings: { label: 'Réglages', icon: 'gear' },
   today: { label: 'Aujourd’hui', icon: 'today' }, journal: { label: 'Journal', icon: 'journal' }, tasks: { label: 'Tâches', icon: 'check' }, linear: { label: 'Linear', icon: 'linear' }, github: { label: 'GitHub', icon: 'github' }, all: { label: 'Toutes les notes', icon: 'notes' },
   inbox: { label: 'Boîte de réception', icon: 'inbox' }, ephemeral: { label: 'Éphémères', icon: 'hourglass' },
   graph: { label: 'Graphe', icon: 'graph' }, trash: { label: 'Corbeille', icon: 'trash' },
 };
 /** Teinte de l'icône de chaque section dans la barre latérale. */
-const SIDE_HUE: Record<string, string> = { home: 'gray', inbox: 'blue', today: 'amber', journal: 'pink', all: 'gray', ephemeral: 'orange', tasks: 'green', agents: 'violet', help: 'blue', projets: 'orange', linear: 'indigo', github: 'gray', graph: 'teal', trash: 'gray' };
+const SIDE_HUE: Record<string, string> = { home: 'gray', claude: 'orange', inbox: 'blue', today: 'amber', journal: 'pink', all: 'gray', ephemeral: 'orange', tasks: 'green', agents: 'violet', help: 'blue', projets: 'orange', linear: 'indigo', github: 'gray', graph: 'teal', trash: 'gray' };
 const titleOf = (n: Note) => n.title.trim() || 'Sans titre';
-const WIDE = new Set(['graph', 'home', 'settings', 'tasks', 'linear', 'github', 'agents', 'help', 'projets', 'journal']); // vues sans colonne de liste
+const WIDE = new Set(['graph', 'home', 'claude', 'settings', 'tasks', 'linear', 'github', 'agents', 'help', 'projets', 'journal']); // vues sans colonne de liste
 
 function applyTheme() {
   const dark = ui.theme === 'dark' || (ui.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
@@ -187,7 +188,7 @@ function renderSidebar() {
       <button class="icon-btn" data-act="new" title="Nouvelle note (${keys(SC.newNote)})" aria-label="Nouvelle note">${icon('compose')}</button>
     </div>
     <div class="side-scroll">
-      <div class="side-group">${item('home')}</div>
+      <div class="side-group">${item('home')}${item('claude')}${v.type === 'claude' ? chat.sideList().map(c => `<button class="side-item side-chat${c.sel ? ' sel' : ''}" data-chat="${esc(c.id)}" title="${esc(c.title)}"><i class="ss-live${c.live ? ' on' : ''}"></i><span>${esc(c.title)}</span></button>`).join('') : ''}</div>
       <div class="side-label">Notes</div>
       <div class="side-group">${item('inbox')}${item('today')}${item('journal')}${item('all')}${count.ephemeral || v.type === 'ephemeral' ? item('ephemeral') : ''}</div>
       <div class="side-label">Organisation</div>
@@ -282,6 +283,7 @@ function renderMain() {
   closeAc(); graph?.destroy(); graph = null; ed = null;
   if (ui.view.type === 'graph') return mountGraph(main);
   if (ui.view.type === 'home') return home.mount(main);
+  if (ui.view.type === 'claude') return chat.mount(main);
   if (ui.view.type === 'journal') return journal.mount(main);
   if (ui.view.type === 'settings') return hub.mountSettings(main, ui.view.tab || 'coffre');
   if (ui.view.type === 'tasks') return todo.mount(main);
@@ -792,6 +794,7 @@ function commands() {
     c('Notes', 'notes', () => setView({ type: 'all' }), '', 'liste toutes'),
     c('Boîte de réception', 'inbox', () => setView({ type: 'inbox' }), '', 'inbox'),
     c('Accueil', 'home', () => setView({ type: 'home' }), '', 'widgets tableau de bord dashboard'),
+    c('Parler à Claude', 'sparkle', () => setView({ type: 'claude' }), '', 'claude chat conversation discuter assistant global'),
     c('Demander à l’IA', 'sparkle', () => hub.askAI(), SC.ask, 'claude chatgpt openai assistant question'),
     c('Automatisations', 'bot', () => setView({ type: 'agents' }), '', 'agents ia automatiser routine planifier déclencheur'),
     c('Nouvelle automatisation', 'bot', () => setView({ type: 'agents' }), '', 'créer agent modèle planifier'),
@@ -1008,6 +1011,7 @@ async function onClick(e: MouseEvent): Promise<void> {
   if (await hub.click(e)) return;
   let x: HTMLElement | null;
   if ((x = t.closest('[data-pj-open], [data-project-open]')) && !t.closest('.pj')) { if (x.dataset.pjOpen && x.dataset.pjSession !== undefined) projectsPage.openSession(x.dataset.pjOpen, x.dataset.pjSession || null, x.dataset.pjSub || null); await setView({ type: 'projets', project: x.dataset.pjOpen || x.dataset.projectOpen || null, ...(x.dataset.pjTab ? { tab: x.dataset.pjTab } : {}) }); return; }
+  if ((x = t.closest('[data-chat]'))) { await setView(x.dataset.chat ? { type: 'claude', chat: x.dataset.chat } : { type: 'claude' }); return; }
   if ((x = t.closest('[data-view]'))) { await setView({ type: x.dataset.view ?? 'home' }); return; }
   if ((x = t.closest('[data-open-note]')) && store.get(x.dataset.openNote)) { await openNote(x.dataset.openNote ?? ''); return; }
   if ((x = t.closest('[data-tag]'))) { e.preventDefault(); await setView({ type: 'tag', tag: x.dataset.tag ?? '' }); return; }
@@ -1184,7 +1188,7 @@ async function start() {
   const shared = { setView, openNote, capture: quickCapture, view: () => ui.view.type, viewState: () => ui.view, renderSidebar, tbLeft, crumb,
     onCount: () => { renderSidebar(); linearView.refreshCount(); if (ui.view.type === 'home' && !topLayer() && !need('#main').contains(document.activeElement)) renderMain(); } };
   registerBuiltins();
-  home.init(shared); journal.init(shared); automations.init(shared); projectsPage.init(shared); help.init({ ...shared, shortcuts: shortcutRows }); voice.init(shared); linearView.init(shared); githubPage.init(shared);
+  home.init(shared); journal.init(shared); chat.init({ ...shared, refreshNote }); automations.init(shared); projectsPage.init(shared); help.init({ ...shared, shortcuts: shortcutRows }); voice.init(shared); linearView.init(shared); githubPage.init(shared);
 
   hub.init({
     openNote, setView, renderMain, flush, flushAll, refreshNote, capture: quickCapture, crumb,

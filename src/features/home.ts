@@ -77,7 +77,7 @@ export function mount(main: HTMLElement): void {
   const hello = h < 5 ? 'Bonne nuit' : h < 12 ? 'Bonjour' : h < 18 ? 'Bon après-midi' : 'Bonsoir';
   const linked = linear.connected() || github.connected(), hasAgents = hub.agentList().length > 0;
   const devs = vault.isOpen() ? link.devices() : [];
-  main.innerHTML = `<header class="toolbar">${app.tbLeft()}${app.crumb('Accueil')}<div class="tb-side tb-right"><button class="btn btn-ghost" data-view="help" title="Aide et raccourcis">${icon('help')}<span>Aide</span></button><button class="btn btn-ghost" data-ask-home title="Demander à l’IA">${icon('sparkle')}<span>Demander</span></button></div></header>
+  main.innerHTML = `<header class="toolbar">${app.tbLeft()}${app.crumb('Accueil')}<div class="tb-side tb-right"><button class="btn btn-ghost" data-view="help" title="Aide et raccourcis">${icon('help')}<span>Aide</span></button><button class="btn btn-ghost" data-ask-home title="Demander à l’IA">${icon('sparkle')}<span>Demander</span></button><button class="btn" data-view="claude" title="Une conversation libre avec Claude, sans projet ni dossier">${icon('sparkle')}<span>Parler à Claude</span></button></div></header>
   <div class="home"><div class="home-in">
     <p class="hm-date">${esc(now.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }))}</p>
     <h1 class="hm-hello">${hello}.</h1>

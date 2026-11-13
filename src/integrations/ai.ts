@@ -367,16 +367,19 @@ async function loopOpenAI(cfg: AiConfig, system: string, user: string, tools: To
 //   ask   : demande posée à la main, le compte rendu peut proposer une automatisation ;
 //   auto  : automatisation déjà écrite dans une note, rien à proposer d'automatiser ;
 //   sub   : sous-agent, dont le résultat entre dans le contexte de l'agent qui l'a lancé ;
-//   plain : sans outil (revue de code, question simple), pas de méthode d'action à décrire.
-export type SystemKind = 'ask' | 'auto' | 'sub' | 'plain';
+//   plain : sans outil (revue de code, question simple), pas de méthode d'action à décrire ;
+//   chat  : conversation de la page Claude, réponse libre plutôt qu'un compte rendu.
+export type SystemKind = 'ask' | 'auto' | 'sub' | 'plain' | 'chat';
 export function systemFor(kind: SystemKind): string {
   if (kind === 'plain') return tuning.text('auto.plain');
+  if (kind === 'chat') return [tuning.text('auto.chat'), tuning.text('auto.rules')].filter(Boolean).join('\n\n');
   const end = kind === 'sub' ? tuning.text('auto.sub') : [tuning.text('auto.report'), kind === 'ask' ? tuning.text('auto.suggest') : ''].filter(Boolean).join('\n');
   return [[tuning.text('auto.head'), end].filter(Boolean).join('\n'), tuning.text('auto.rules')].filter(Boolean).join('\n\n');
 }
 
 // Exécute une tâche avec les outils demandés. `auto` : automatisation écrite dans une note (compte rendu sans proposition).
-export async function run({ prompt, tools = ['notes'], provider, context = '', auto = false }: { prompt: string; tools?: string[]; provider?: Provider | null; context?: string; auto?: boolean }, ctx: RunContext = {}): Promise<{ text: string; provider: Provider }> {
+// `chat` : message d'une conversation de la page Claude (l'historique part dans `context`).
+export async function run({ prompt, tools = ['notes'], provider, context = '', auto = false, chat = false }: { prompt: string; tools?: string[]; provider?: Provider | null; context?: string; auto?: boolean; chat?: boolean }, ctx: RunContext = {}): Promise<{ text: string; provider: Provider }> {
   const cfg = config(), p = provider || cfg.provider;
   if (!ready(p)) throw new Error(`${PROVIDERS[p]} n’est pas configuré (Réglages → Intelligence artificielle).`);
   const list = toolset(tools, ctx);
@@ -392,7 +395,7 @@ export async function run({ prompt, tools = ['notes'], provider, context = '', a
   // La date part avec la demande, pas dans la consigne système (qui doit rester identique pour être relue du cache).
   const now = `Nous sommes le ${new Date().toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })}.`;
   const user = [now, context, event, prompt].filter(Boolean).join('\n\n---\n\n');
-  const system = systemFor(!list.length ? 'plain' : (ctx.depth || 0) > 0 ? 'sub' : auto ? 'auto' : 'ask');
+  const system = systemFor(chat ? 'chat' : !list.length ? 'plain' : (ctx.depth || 0) > 0 ? 'sub' : auto ? 'auto' : 'ask');
   const text = p === 'claudecode' ? await loopClaudeCode(cfg, system, user, list, exec, ctx.signal)
     : p === 'anthropic' ? await loopAnthropic(cfg, system, user, list, exec, ctx.signal)
     : await loopOpenAI(cfg, system, user, list, exec, ctx.signal, p === 'local');

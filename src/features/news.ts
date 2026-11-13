@@ -38,6 +38,11 @@ interface Item {
 
 // Les plus récentes d'abord.
 const NEWS: Item[] = [
+  { id: 'claude-chat', date: '2026-11-14', icon: 'sparkle', hue: 'orange',
+    title: 'Parle à Claude, sans dossier',
+    text: 'Une page Claude dans la barre latérale : une conversation libre, sans projet. Claude lit tes notes, tâches, Linear et GitHub quand c’est utile, et te demande ton accord avant de modifier quoi que ce soit.',
+    points: ['Conversation libre', 'Tes données', 'Ton accord'],
+    go: { label: 'Parler à Claude', view: { type: 'claude' } } },
   { id: 'repo-memory', date: '2026-11-14', mac: true, icon: 'notes', hue: 'teal',
     title: 'Les agents se souviennent du dépôt',
     text: 'Chaque agent Claude Code lit d’abord contexte.md, à la racine du dépôt, au lieu de réexplorer le code. Il y note ce qu’il a appris de durable : le suivant démarre plus vite.',

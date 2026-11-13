@@ -31,7 +31,7 @@ export interface TaskLine { line: number; text: string; done: boolean; status: T
 export interface NoteMeta { body: string | null; tags: string[]; links: string[]; tasks: TaskLine[]; snippet: string }
 
 /** Vue courante de l'application. */
-export interface ViewState { type: string; tag?: string; tab?: string; project?: string | null }
+export interface ViewState { type: string; tag?: string; tab?: string; project?: string | null; /** Conversation ouverte de la page Claude. */ chat?: string }
 
 /** Fonctions de l'application offertes aux pages et intégrations (fournies par app.ts à l'initialisation). */
 export interface AppShell {
