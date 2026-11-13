@@ -1212,16 +1212,55 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ss-h span { color: var(--text-3); font-weight: 400; }
 .ss-files { display: flex; flex-wrap: wrap; gap: 5px; }
 .ss-files code { padding: 2px 6px; border-radius: 4px; background: var(--code); border: 1px solid var(--border); }
-.ss-feed { display: flex; flex-direction: column; max-height: 520px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
-.ss-step { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: var(--t-2); }
-.ss-step:last-child { border-bottom: 0; }
-.ss-step p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
-.ss-step time { color: var(--text-3); font-size: var(--t-1); white-space: nowrap; }
-.ss-who { display: inline-flex; align-items: center; gap: 4px; font-size: var(--t-1); font-weight: 600; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ss-who .ic { width: 11px; height: 11px; }
-.ss-step.user .ss-who { color: var(--c-blue); }
-.ss-step.ai .ss-who { color: var(--c-violet); }
-.ss-step.tool p { color: var(--text-2); font: 12px var(--mono); }
+/* Fil d'une session : une conversation (demandes, réponses, outils regroupés) qui défile dans son cadre. */
+.ss-thread { position: relative; }
+.ss-feed { display: flex; flex-direction: column; gap: 14px; padding: 16px; max-height: max(340px, calc(100dvh - 400px)); overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
+.ss-feed:focus-visible { outline: 2px solid var(--text-3); outline-offset: 1px; }
+.ss-feed > * { flex: none; min-width: 0; }
+.ss-msg header { display: flex; align-items: center; gap: 8px; min-height: 22px; margin-bottom: 4px; font-size: var(--t-1); }
+.ss-msg header strong { font-weight: 600; }
+.ss-msg header time { color: var(--text-3); }
+.ss-msg.user { align-self: flex-end; max-width: min(88%, 680px); padding: 8px 14px 10px; border-radius: 14px 14px 4px 14px; background: color-mix(in srgb, var(--c-blue) 9%, var(--bg)); border: 1px solid color-mix(in srgb, var(--c-blue) 22%, var(--border)); }
+.ss-msg.user header strong { color: var(--c-blue); }
+.ss-msg.user p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-2); line-height: 1.55; }
+.ss-msg.ai header strong { color: var(--c-violet); }
+.ss-msg.ai .md { font-size: var(--t-2); line-height: 1.6; overflow-wrap: anywhere; }
+.ss-msg.ai .md > :last-child { margin-bottom: 0; }
+.ss-msg.ai .md h1, .ss-msg.ai .md h2, .ss-msg.ai .md h3 { margin-top: 1.1em; font-size: var(--t-3); }
+.ss-msg.ai .md > :first-child { margin-top: 0; }
+.ss-copy { margin-left: auto; width: 22px; height: 22px; opacity: 0; transition: opacity .12s; }
+.ss-copy .ic { width: 13px; height: 13px; }
+.ss-msg:hover .ss-copy, .ss-copy:focus-visible { opacity: 1; }
+@media (hover: none) { .ss-copy { opacity: .6; } }
+.ss-tools { border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); font-size: var(--t-1); }
+.ss-tools > summary { display: flex; align-items: center; gap: 8px; padding: 7px 10px; cursor: pointer; list-style: none; border-radius: 8px; }
+.ss-tools > summary::-webkit-details-marker { display: none; }
+.ss-tools > summary:hover { background: var(--hover); }
+.ss-tools > summary .ic { flex: none; width: 12px; height: 12px; }
+.ss-tools > summary strong { flex: none; color: var(--text); font-weight: 600; }
+.ss-tools > summary span { flex: none; color: var(--text-3); }
+.ss-tools > summary em { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--mono); }
+.ss-tools > summary .ic:last-child { margin-left: auto; transform: rotate(-90deg); transition: transform .12s; }
+.ss-tools[open] > summary .ic:last-child { transform: none; }
+.ss-tools ul { list-style: none; margin: 0; padding: 5px 10px; }
+.ss-tools[open] ul { padding: 6px 10px 8px; border-top: 1px solid var(--border); }
+.ss-tools li { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 8px; padding: 2px 0; font: 12px/1.5 var(--mono); }
+.ss-tools li b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-tools li span { overflow-wrap: anywhere; }
+.ss-working { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: var(--t-1); }
+.ss-cut { margin: 0; text-align: center; color: var(--text-3); font-size: var(--t-1); }
+.ss-jump { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid var(--border-2); background: var(--bg); box-shadow: 0 2px 8px rgba(0, 0, 0, .14); color: var(--text); font-size: var(--t-1); font-weight: 500; }
+.ss-jump[hidden] { display: none; }
+.ss-jump .ic { width: 12px; height: 12px; }
+.ss-more { margin: 0 0 12px; }
+.ss-more > summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; color: var(--text-2); font-size: var(--t-1); font-weight: 600; }
+.ss-more > summary::-webkit-details-marker { display: none; }
+.ss-more > summary .ic { width: 12px; height: 12px; transform: rotate(-90deg); transition: transform .12s; }
+.ss-more[open] > summary .ic { transform: none; }
+.ss-more > summary span { color: var(--text-3); font-weight: 400; }
+.ss-more[open] > summary { margin-bottom: 10px; }
+.ss-more .ss-totals { margin-bottom: 0; }
+.ss-tree, .ss-top .ss-actions { margin-bottom: 12px; }
 
 /* Consommation IA (Réglages) */
 .us-bar { display: block; width: 100%; height: 5px; margin: -4px 0 14px; }
@@ -1242,7 +1281,7 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .rv-stat { margin: 0; max-height: 180px; overflow: auto; padding: 10px 12px; border-radius: 8px; background: var(--code); border: 1px solid var(--border); font: 12px/1.5 var(--mono); white-space: pre; }
 .rv-out { margin-top: 14px; max-height: 50vh; overflow-y: auto; padding: 4px 2px; }
 .rv-status { margin: 10px 0 0; color: var(--text-3); font-size: var(--t-1); }
-@media (max-width: 640px) { .ss-step { grid-template-columns: minmax(0, 1fr); gap: 2px; } .ss-row time, .pj-br time { display: none; } }
+@media (max-width: 640px) { .ss-feed { padding: 12px; } .ss-tools > summary span { display: none; } .ss-row time, .pj-br time { display: none; } }
 
 /* ---------- Réglages : Claude Code ---------- */
 .cc-head { display: flex; align-items: center; gap: 12px; }
@@ -1403,7 +1442,6 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ag-tree-act { display: flex; align-items: center; gap: 6px; }
 .ag-tree-act .btn { height: 28px; }
 .ss-box .ss-h:first-child { margin-top: 4px; }
-.ss-feed { scroll-behavior: smooth; }
 .ss-dhead .btn { height: 28px; }
 .modal.ag-pub { max-width: 520px; }
 .ag-opts kbd { border: 0; color: inherit; min-width: 0; }

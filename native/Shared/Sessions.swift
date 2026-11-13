@@ -59,7 +59,7 @@ final class ClaudeSessions {
             let text = c.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty, !text.hasPrefix("<") else { return }
             st.prompts += 1; st.lastPrompt = clip(text, 300)
-            push(st, Action(at: ts, kind: "prompt", text: clip(text, 400)))
+            push(st, Action(at: ts, kind: "prompt", text: clip(text, 4000)))
         case "assistant":
             guard let m = e["message"] as? [String: Any] else { return }
             let id = m["id"] as? String ?? UUID().uuidString
@@ -71,7 +71,7 @@ final class ClaudeSessions {
                 if ts.count >= 10 { st.daily[String(ts.prefix(10)), default: 0] += u["output_tokens"] as? Int ?? 0 }
             }
             for b in m["content"] as? [[String: Any]] ?? [] {
-                if b["type"] as? String == "text", let t = b["text"] as? String, !t.isEmpty { push(st, Action(at: ts, kind: "text", text: clip(t, 400))) }
+                if b["type"] as? String == "text", let t = b["text"] as? String, !t.isEmpty { push(st, Action(at: ts, kind: "text", text: clip(t, 16000))) }
                 if b["type"] as? String == "tool_use", let name = b["name"] as? String {
                     st.tools[name, default: 0] += 1
                     let input = b["input"] as? [String: Any] ?? [:]

@@ -116,15 +116,20 @@ final class Agents {
         if let model = body["model"] as? String, !model.isEmpty,
            Self.modelRe.firstMatch(in: model, range: NSRange(model.startIndex..., in: model)) != nil { args += ["--model", model] }
         args += ["--append-system-prompt", """
-            Tu es lancé depuis Studio, sans personne pour répondre à tes questions : travaille de façon autonome jusqu'au bout. \
+            Tu es lancé depuis Studio. L'utilisateur lit tes messages dans un fil de discussion et peut te répondre ensuite \
+            en reprenant la session, mais personne ne répond pendant que tu travailles. \
             \(mode == "edit" ? "Tu travailles dans une copie isolée du dépôt ; ne fais pas de commit, l'utilisateur relira tes changements." : "Tu es en lecture seule : analyse et propose, sans modifier de fichier.") \
-            Termine par un compte rendu court en Markdown : ce qui a été fait, les fichiers touchés, ce qui reste à décider.
+            Si l'utilisateur demande une tâche précise, mène-la de façon autonome jusqu'au bout, puis termine par un compte rendu \
+            court en Markdown : ce qui a été fait, les fichiers touchés, ce qui reste à décider. \
+            S'il veut au contraire réfléchir, discuter, comparer des options ou avoir ton avis, ne te lance pas dans la réalisation : \
+            réponds comme dans une conversation, donne ton analyse et ta recommandation, pose tes questions, et attends sa réponse \
+            avant de modifier quoi que ce soit.
             """]
         args += ["--allowedTools"] + tools.filter { $0 != "Bash" } + (tests ? Self.testCommands : [])
 
         let run = Run(id: UUID().uuidString, project: pid, mode: mode, prompt: String(prompt.prefix(500)))
         if !resume.isEmpty { run.session = resume; run.cwd = cwd; run.worktree = cwd.range(of: "/.claude/worktrees/").map { String(cwd[$0.upperBound...]) } ?? "" }
-        run.actions.append(["at": ISO8601DateFormatter().string(from: Date()), "kind": "prompt", "text": String(prompt.prefix(400))])
+        run.actions.append(["at": ISO8601DateFormatter().string(from: Date()), "kind": "prompt", "text": String(prompt.prefix(4000))])
         let p = Process()
         p.executableURL = URL(fileURLWithPath: bin)
         if let server {
@@ -202,7 +207,7 @@ final class Agents {
             if let m = e["message"] as? [String: Any] {
                 for b in m["content"] as? [[String: Any]] ?? [] {
                     if b["type"] as? String == "text", let t = b["text"] as? String, !t.isEmpty {
-                        run.lastText = String(t.prefix(300)); run.actions.append(["at": now, "kind": "text", "text": String(t.prefix(400))])
+                        run.lastText = String(t.prefix(300)); run.actions.append(["at": now, "kind": "text", "text": String(t.prefix(16000))])
                     }
                     if b["type"] as? String == "tool_use", let name = b["name"] as? String {
                         let input = b["input"] as? [String: Any] ?? [:]
