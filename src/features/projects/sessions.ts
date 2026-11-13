@@ -11,6 +11,7 @@ import { icon, rel, modal, need, toast, confirmBox, errMsg, $ } from '../../ui/k
 import * as review from './review.ts';
 import * as store from '../../core/store.ts';
 import * as model from './model.ts';
+import * as saved from './drafts.ts';
 import { menu } from '../../ui/kit.ts';
 import type { Project } from './model.ts';
 
@@ -295,22 +296,81 @@ function syncStop(box: HTMLElement): void {
   if (hint) hint.innerHTML = run ? HINT_BUSY : HINT_IDLE;
 }
 
+const HINT_EDIT = `${icon('shield')}Copie isolée du dépôt : ton dossier reste intact.`, HINT_READ = `${icon('eye')}Lecture seule : analyse et propose, sans rien modifier.`;
+
+// Modèle et niveau d'effort : choisis à chaque consigne, retenus pour la suivante. Une conversation garde les siens
+// (ceux de son lancement, ou ceux qu'on lui donne en lui répondant). Voir drafts.ts.
+const EFFORTS: [string, string][] = [['', 'Effort par défaut'], ['low', 'Effort faible'], ['medium', 'Effort moyen'], ['high', 'Effort élevé'], ['xhigh', 'Effort très élevé'], ['max', 'Effort maximal']];
+/** Valeur de l'entrée « Autre modèle… » (jamais envoyée : elle ouvre la saisie d'un identifiant). */
+const OTHER = '+';
+function modelOptions(cur: string): string {
+  const list: [string, string][] = ai.CC_MODELS.map(([v, l]): [string, string] => [v, v ? l : 'Modèle par défaut']);
+  for (const v of [...saved.extraModels(), cur]) if (v && !list.some(x => x[0] === v)) list.push([v, modelName(v)]);
+  return list.map(([v, l]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`).join('') + `<option value="${OTHER}">Autre modèle…</option>`;
+}
+const tuneHTML = (c: saved.Choice): string => `<select class="field" name="model" aria-label="Modèle" title="Modèle utilisé par Claude Code" data-prev="${esc(c.model)}">${modelOptions(c.model)}</select><select class="field" name="effort" aria-label="Niveau d’effort" title="Niveau d’effort : plus il est élevé, plus Claude réfléchit, et plus il consomme">${EFFORTS.map(([v, l]) => `<option value="${v}"${v === c.effort ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+/** Demande l'identifiant d'un modèle absent de la liste ; il y reste ensuite proposé. `null` si l'utilisateur renonce. */
+function askModel(): Promise<string | null> {
+  return new Promise<string | null>(res => {
+    let out: string | null = null;
+    const m = modal({ title: 'Autre modèle', cls: 'small', onClose: () => res(out), html: `<form>
+      <label class="pj-field"><span>Identifiant ou alias du modèle</span><input class="field" name="id" placeholder="claude-opus-5-5" spellcheck="false" autocomplete="off" autocapitalize="off" required></label>
+      <p class="modal-hint">Tel que l’accepte <code>claude --model</code>. Il reste ensuite proposé dans la liste, sur cet appareil.</p>
+      <p class="lock-err"></p>
+      <div class="modal-actions"><button type="button" class="btn" data-x>Annuler</button><button class="btn btn-primary">Ajouter</button></div></form>` });
+    need('[data-x]', m.node).onclick = m.close;
+    need<HTMLFormElement>('form', m.node).onsubmit = e => {
+      e.preventDefault();
+      const v = need<HTMLInputElement>('[name=id]', m.node).value.trim().toLowerCase();
+      if (!saved.MODEL_RE.test(v)) { need('.lock-err', m.node).textContent = 'Identifiant invalide : minuscules, chiffres, points et tirets (ex. claude-opus-5-5).'; return; }
+      saved.addModel(v); out = v; m.close();
+    };
+  });
+}
+/** Suite d'un changement de modèle ou d'effort : saisie d'un autre modèle au besoin, puis le choix est retenu. */
+async function tune(f: HTMLFormElement, t: HTMLSelectElement): Promise<void> {
+  if (t.name === 'model' && t.value === OTHER) {
+    const id = await askModel(), next = id ?? t.dataset.prev ?? '';
+    // Le nouveau modèle est proposé dans tous les formulaires affichés ; sans saisie, la liste revient au choix d'avant.
+    document.querySelectorAll<HTMLSelectElement>('.ag-compose select[name=model]').forEach(s => { s.innerHTML = modelOptions(s === t ? next : s.value === OTHER ? '' : s.value); });
+    if (!f.isConnected) return;
+  }
+  const pick = (n: string) => f.querySelector<HTMLSelectElement>(`select[name=${n}]`)?.value ?? '';
+  const c = { model: pick('model'), effort: pick('effort') };
+  if (t.name === 'model') t.dataset.prev = c.model;
+  if (f.dataset.session) saved.setSession(f.dataset.session, c); else saved.setDefaults(c);
+}
+
+/** Retient ce qui est écrit dans le formulaire, pour le retrouver après avoir navigué ailleurs (voir drafts.ts). */
+function keepDraft(f: HTMLFormElement): void {
+  const key = f.dataset.draft; if (!key) return;
+  saved.saveDraft(key, { text: f.querySelector('textarea')?.value ?? '', notes: (f.dataset.notes || '').split(',').filter(Boolean),
+    mode: f.querySelector<HTMLInputElement>('[name=mode]:checked')?.value ?? 'edit', tests: !!f.querySelector<HTMLInputElement>('[name=tests]')?.checked });
+}
+
 export function composerHTML(p: Project, { session = '', compact = false, machine = '' } = {}): string {
-  const models = ai.CC_MODELS.map(([v, l]) => `<option value="${v}">${v ? l : 'Modèle par défaut'}</option>`).join('');
   // Un agent lancé sur un serveur utilise la connexion Claude du serveur, pas l'abonnement lu sur le Mac.
   const lims = machine === 'server' ? '' : `<div class="ag-lims" aria-label="Utilisation de l’abonnement Claude">${limsHTML()}</div>`;
-  if (session) return `<form class="ag-compose ag-continue" data-session="${esc(session)}"${machine ? ` data-machine="${esc(machine)}"` : ''}><textarea name="prompt" rows="2" placeholder="Réponds à Claude : précise, corrige, tranche, demande la suite…" aria-label="Répondre dans la session"></textarea>
-    <div class="ag-opts"><span class="ag-hint" data-hint>${HINT_IDLE}</span><button type="button" class="btn btn-danger ag-stop" data-ag="stop" hidden>${icon('stop')}Arrêter</button><button class="btn btn-primary">${SEND_IDLE}</button></div>${lims}</form>`;
+  // Chaque formulaire a son brouillon : un par conversation, un pour la nouvelle consigne, un pour celle de l'aperçu, un pour le serveur.
+  const key = `${p.id}|${session ? `s:${session}` : machine === 'server' ? 'server' : compact ? 'quick' : 'new'}`, d = saved.draft(key);
+  if (session) return `<form class="ag-compose ag-continue" data-draft="${esc(key)}" data-session="${esc(session)}"${machine ? ` data-machine="${esc(machine)}"` : ''}><textarea name="prompt" rows="2" placeholder="Réponds à Claude : précise, corrige, tranche, demande la suite…" aria-label="Répondre dans la session">${esc(d?.text ?? '')}</textarea>
+    <div class="ag-opts"><span class="ag-hint" data-hint>${HINT_IDLE}</span>${tuneHTML(saved.ofSession(session) ?? { model: '', effort: '' })}<button type="button" class="btn btn-danger ag-stop" data-ag="stop" hidden>${icon('stop')}Arrêter</button><button class="btn btn-primary">${SEND_IDLE}</button></div>${lims}</form>`;
   const pre = pending?.project === p.id ? pending : null; if (pre && !compact) pending = null;
-  const notes = pre && !compact ? pre.notes : [];
-  return `<form class="ag-compose${compact ? ' compact' : ''}" data-notes="${esc(notes.join(','))}"><textarea name="prompt" rows="${compact ? 1 : 3}" placeholder="Que doit faire Claude Code dans ${esc(p.name)} ? Ex. « Ajoute des tests au parseur de dates »" aria-label="Consigne pour Claude Code">${pre && !compact ? esc(pre.prompt) : ''}</textarea>
+  // Une note ou une tâche confiée à Claude s'ajoute au brouillon en cours, sans l'effacer.
+  const hand = pre && !compact ? pre : null;
+  const notes = compact ? [] : [...new Set([...(hand?.notes ?? []), ...(d?.notes ?? [])])].filter(id => store.get(id));
+  const mine = d?.text ?? '', given = hand?.prompt ?? '';
+  const text = given && mine.trim() && !mine.includes(given) ? `${mine.trimEnd()}\n\n${given}` : given || mine;
+  const read = d?.mode === 'read', tests = !read && !!d?.tests;
+  if (hand) saved.saveDraft(key, { text, notes, mode: read ? 'read' : 'edit', tests });
+  return `<form class="ag-compose${compact ? ' compact' : ''}" data-draft="${esc(key)}" data-notes="${esc(notes.join(','))}"><textarea name="prompt" rows="${compact ? 1 : 3}" placeholder="Que doit faire Claude Code dans ${esc(p.name)} ? Ex. « Ajoute des tests au parseur de dates »" aria-label="Consigne pour Claude Code">${esc(text)}</textarea>
     <div class="ag-ctx">${notes.map(chip).join('')}<button type="button" class="ag-addnote" data-ag-note>${icon('plus')}Joindre une note</button></div>
     <div class="ag-opts">
-      <div class="ag-seg" role="radiogroup" aria-label="Mode"><label><input type="radio" name="mode" value="edit" checked><span>${icon('pencil')}Modifier</span></label><label><input type="radio" name="mode" value="read"><span>${icon('search')}Analyser</span></label></div>
-      ${bridge.local() && machine !== 'server' ? '<label class="ag-check" title="Autorise npm test et npm run … : le code du projet peut alors s’exécuter"><input type="checkbox" name="tests">Tests npm</label>' : ''}
+      <div class="ag-seg" role="radiogroup" aria-label="Mode"><label><input type="radio" name="mode" value="edit"${read ? '' : ' checked'}><span>${icon('pencil')}Modifier</span></label><label><input type="radio" name="mode" value="read"${read ? ' checked' : ''}><span>${icon('search')}Analyser</span></label></div>
+      ${bridge.local() && machine !== 'server' ? `<label class="ag-check" title="Autorise npm test et npm run … : le code du projet peut alors s’exécuter"><input type="checkbox" name="tests"${tests ? ' checked' : ''}${read ? ' disabled' : ''}>Tests npm</label>` : ''}
       <select class="field" name="machine" aria-label="Où travailler"${machine === 'server' ? '' : ' hidden'}><option value="mac">Sur le Mac</option>${machine === 'server' ? '<option value="server" selected>Sur le serveur</option>' : ''}</select>
-      <select class="field" name="model" aria-label="Modèle">${models}</select>
-      <span class="ag-hint" data-hint>${icon('shield')}Copie isolée du dépôt : ton dossier reste intact.</span>
+      ${tuneHTML(saved.defaults())}
+      <span class="ag-hint" data-hint>${read ? HINT_READ : HINT_EDIT}</span>
       <button class="btn btn-primary">${icon('play')}Lancer<kbd>⌘↩</kbd></button></div>${lims}</form>`;
 }
 
@@ -319,11 +379,19 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
   void loadLimits();
   if (root.dataset.agBound) return;
   root.dataset.agBound = '1';
+  root.addEventListener('input', e => {
+    const t = e.target as HTMLElement, f = t.closest<HTMLFormElement>('.ag-compose');
+    if (f && t.tagName === 'TEXTAREA') keepDraft(f);
+  });
   root.addEventListener('change', e => {
-    const t = e.target as HTMLInputElement, f = t.closest('.ag-compose'); if (!f || t.name !== 'mode') return;
+    const t = e.target as HTMLInputElement, f = t.closest<HTMLFormElement>('.ag-compose'); if (!f) return;
+    if (t.name === 'model' || t.name === 'effort') { void tune(f, t as unknown as HTMLSelectElement); return; }
+    if (t.name === 'tests') { keepDraft(f); return; }
+    if (t.name !== 'mode') return;
     const hint = $('[data-hint]', f), tests = $<HTMLInputElement>('[name=tests]', f);
-    if (hint) hint.innerHTML = t.value === 'edit' ? `${icon('shield')}Copie isolée du dépôt : ton dossier reste intact.` : `${icon('eye')}Lecture seule : analyse et propose, sans rien modifier.`;
+    if (hint) hint.innerHTML = t.value === 'edit' ? HINT_EDIT : HINT_READ;
     if (tests) { tests.disabled = t.value !== 'edit'; if (tests.disabled) tests.checked = false; }
+    keepDraft(f);
   });
   root.addEventListener('click', e => {
     const t = e.target as HTMLElement, f = t.closest<HTMLFormElement>('.ag-compose'); if (!f) return;
@@ -331,10 +399,10 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
     if (lim) { void limitsAction(lim.dataset.agLim ?? ''); return; }
     const ids = () => (f.dataset.notes || '').split(',').filter(Boolean);
     const un = t.closest<HTMLElement>('[data-ag-unnote]');
-    if (un) { f.dataset.notes = ids().filter(x => x !== un.dataset.agUnnote).join(','); un.closest('.ag-note')?.remove(); return; }
+    if (un) { f.dataset.notes = ids().filter(x => x !== un.dataset.agUnnote).join(','); un.closest('.ag-note')?.remove(); keepDraft(f); return; }
     const add = t.closest<HTMLElement>('[data-ag-note]'); if (!add) return;
     const have = new Set(ids()), list = attachable(p).filter(n => !have.has(n.id));
-    menu(add, list.length ? [{ label: 'Joindre une note du projet' }, ...list.map(n => ({ label: n.title, icon: 'notes', run: () => { f.dataset.notes = [...ids(), n.id].join(','); add.insertAdjacentHTML('beforebegin', chip(n.id)); } }))]
+    menu(add, list.length ? [{ label: 'Joindre une note du projet' }, ...list.map(n => ({ label: n.title, icon: 'notes', run: () => { f.dataset.notes = [...ids(), n.id].join(','); add.insertAdjacentHTML('beforebegin', chip(n.id)); keepDraft(f); } }))]
       : [{ label: model.notesOf(p).length > 1 ? 'Toutes les notes lisibles sont déjà jointes' : `Aucune note dans ce projet : ajoute #${p.tag} à une note` }]);
   });
   root.addEventListener('keydown', e => {
@@ -350,14 +418,21 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
     if (built.refused.length) toast(`Non jointe${built.refused.length > 1 ? 's' : ''} (verrouillée, privée ou trop longue) : ${built.refused.join(', ')}`);
     const btn = need<HTMLButtonElement>('button.btn-primary', f), label = btn.innerHTML;
     const val = (n: string) => (f.elements.namedItem(n) as HTMLInputElement | null);
-    const body: Record<string, unknown> = { project: p.id, prompt };
+    // Modèle et effort : envoyés aussi quand on répond, pour que la conversation garde (ou change) les siens.
+    const picked: saved.Choice = { model: val('model')?.value ?? '', effort: val('effort')?.value ?? '' };
+    if (picked.model === OTHER) picked.model = '';
+    const body: Record<string, unknown> = { project: p.id, prompt, ...picked };
     if (f.dataset.session) { body.session = f.dataset.session; if (f.dataset.machine) body.machine = f.dataset.machine; }
-    else { body.mode = f.querySelector<HTMLInputElement>('[name=mode]:checked')?.value ?? 'edit'; body.tests = !!val('tests')?.checked; body.model = val('model')?.value ?? ''; const mc = val('machine'); if (mc && !mc.hidden) body.machine = mc.value; }
+    else { body.mode = f.querySelector<HTMLInputElement>('[name=mode]:checked')?.value ?? 'edit'; body.tests = !!val('tests')?.checked; const mc = val('machine'); if (mc && !mc.hidden) body.machine = mc.value; }
     btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Envoi…';
     const r = await bridge.call('agent', 'start', body, 60000);
     btn.disabled = false; btn.innerHTML = label; delete f.dataset.busy;
+    // En cas d'échec, le texte reste dans le formulaire et dans son brouillon.
     if (!r.ok) { toast(r.message ?? 'Lancement impossible.'); return; }
     ta.value = ''; f.dataset.notes = ''; f.querySelectorAll('.ag-note').forEach(x => x.remove());
+    if (f.dataset.draft) saved.dropDraft(f.dataset.draft);
+    // La conversation lancée garde le modèle et l'effort de sa première consigne : ils sont proposés pour la suite.
+    if (!f.dataset.session && typeof r.session === 'string' && r.session) saved.setSession(r.session, picked);
     // L'agent travaille encore : le message attend la fin de son tour (il apparaît dans le fil, « en attente »).
     if (typeof r.queued === 'number') {
       toast(r.queued > 1 ? `${r.queued} messages en attente : Claude les lira ensemble à la fin de son tour` : 'Message en attente : Claude le lira à la fin de son tour');
@@ -886,6 +961,7 @@ async function removeSession(p: Project, id: string): Promise<void> {
   const r = await native.call('project', 'deleteSession', { project: p.id, session: id }, 20000);
   if (!r.ok) { toast(r.message === 'Action inconnue.' ? 'Mets à jour l’app Studio pour Mac pour supprimer une conversation.' : r.message ?? 'Suppression impossible.'); return; }
   delete titles[id]; saveTitles();
+  saved.dropDraft(`${p.id}|s:${id}`); saved.forgetSession(id);
   if (pins.some(x => x.s === id)) { pins = pins.filter(x => x.s !== id); savePins(); }
   subsOf.delete(id);
   const k = known.get(p.id); if (k) k.list = k.list.filter(s => s.id !== id);

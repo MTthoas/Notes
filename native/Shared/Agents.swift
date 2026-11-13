@@ -24,6 +24,8 @@ final class Agents {
         var finished: Date?
         var quota: [String: Any]?
         var machine = "mac", host = ""
+        /// Modèle et niveau d'effort de ce tour ("" : ceux de Claude Code par défaut).
+        var model = "", effort = ""
         /// Numéro du processus Claude Code sur le serveur (pour pouvoir l'arrêter là-bas).
         var remotePid = 0
         /// Étapes reçues du flux (pour suivre un agent qui tourne sur un serveur).
@@ -60,6 +62,7 @@ final class Agents {
         Elle décrit l'ensemble des changements présents dans la copie, jamais la demande elle-même (pas de « résout le conflit »).
         """
     private static let modelRe = try! NSRegularExpression(pattern: "^[a-z0-9][a-z0-9.\\-]{0,40}$")
+    private static let efforts: Set<String> = ["low", "medium", "high", "xhigh", "max"]
 
     private static func slug(_ s: String) -> String {
         let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current).lowercased()
@@ -283,8 +286,21 @@ final class Agents {
         let tests = mode == "edit" && body["tests"] as? Bool == true && !onServer
         let tools = (mode == "edit" ? Self.editTools : Self.readTools) + (tests ? ["Bash"] : [])
         args += ["--tools", tools.joined(separator: ",")]
-        if let model = body["model"] as? String, !model.isEmpty,
-           Self.modelRe.firstMatch(in: model, range: NSRange(model.startIndex..., in: model)) != nil { args += ["--model", model] }
+        // Modèle et effort : ceux de la demande. Une reprise qui n'en précise pas (messages en attente, orchestrateur)
+        // garde ceux du dernier tour de la discussion, tant que Studio s'en souvient.
+        var model = body["model"] as? String, effort = body["effort"] as? String
+        if !resume.isEmpty && (model == nil || effort == nil) {
+            lock.lock()
+            let last = runs.values.filter { $0.project == pid && $0.session == resume }.max { $0.started < $1.started }
+            lock.unlock()
+            model = model ?? last?.model
+            effort = effort ?? last?.effort
+        }
+        let useModel = model ?? "", useEffort = effort ?? ""
+        let modelOK = !useModel.isEmpty && Self.modelRe.firstMatch(in: useModel, range: NSRange(useModel.startIndex..., in: useModel)) != nil
+        let effortOK = Self.efforts.contains(useEffort)
+        if modelOK { args += ["--model", useModel] }
+        if effortOK { args += ["--effort", useEffort] }
         args += ["--append-system-prompt", """
             Tu es lancé depuis Studio. L'utilisateur lit tes messages dans un fil de discussion et peut te répondre ensuite \
             en reprenant la session, mais personne ne répond pendant que tu travailles : ce qu'il t'écrit pendant ton tour \
@@ -299,6 +315,7 @@ final class Agents {
         args += ["--allowedTools"] + tools.filter { $0 != "Bash" } + (tests ? Self.testCommands : [])
 
         let run = Run(id: UUID().uuidString, project: pid, mode: mode, prompt: String(prompt.prefix(500)))
+        run.model = modelOK ? useModel : ""; run.effort = effortOK ? useEffort : ""
         if !resume.isEmpty || !newWorktree.isEmpty { run.session = resume; run.cwd = cwd; run.worktree = cwd.range(of: "/.claude/worktrees/").map { String(cwd[$0.upperBound...]) } ?? newWorktree }
         run.actions.append(["at": ISO8601DateFormatter().string(from: Date()), "kind": "prompt", "text": String(prompt.prefix(4000))])
         let p = Process()

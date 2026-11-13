@@ -19,8 +19,8 @@ const CFG = 'carnet.ai';
 export type Provider = 'claudecode' | 'anthropic' | 'openai' | 'local';
 export const CLAUDE_MODELS: [string, string][] = [['claude-opus-5-5', 'Claude Opus 5.5'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5'], ['claude-haiku-5-5', 'Claude Haiku 5.5'], ['claude-fable-5-2', 'Claude Fable 5.2']];
 export const PROVIDERS: Record<Provider, string> = { claudecode: 'Claude Code', anthropic: 'Claude (clé API)', openai: 'OpenAI', local: 'Modèle local' };
-/** Modèles proposés pour Claude Code : alias compris par Claude Code ('' = son modèle par défaut). */
-export const CC_MODELS: [string, string][] = [['', 'Modèle par défaut de Claude Code'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']];
+/** Modèles proposés pour Claude Code : alias compris par Claude Code ('' = son modèle par défaut), ou identifiant complet. */
+export const CC_MODELS: [string, string][] = [['', 'Modèle par défaut de Claude Code'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['claude-fable-5-2', 'Fable 5.2']];
 
 export interface AiConfig { provider: Provider; anthropicModel: string; effort: string; openaiModel: string; localUrl: string; localModel: string; ccModel: string; /** Budget mensuel en millions de tokens (0 = aucun). */ budgetM: number }
 const DEFAULTS: AiConfig = { provider: 'anthropic', anthropicModel: 'claude-opus-5-5', effort: 'medium', openaiModel: 'gpt-5', localUrl: 'http://localhost:11434/v1', localModel: 'llama3.2', ccModel: '', budgetM: 0 };
