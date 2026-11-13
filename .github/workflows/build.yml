@@ -157,7 +157,7 @@ jobs:
               name: "@mtthoas/studio",
               version: process.env.VERSION,
               description: "Studio : notes, tâches, Linear et GitHub au même endroit, chiffrés, sans serveur. Application web compilée (dist/).",
-              license: "MIT",
+              license: "AGPL-3.0-only",
               repository: { type: "git", url: "https://github.com/MTthoas/Studio.git" },
               files: ["dist", "README.md", "LICENSE"],
               publishConfig: { registry: "https://npm.pkg.github.com" }

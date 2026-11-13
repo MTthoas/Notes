@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Notes, tâches, Linear et GitHub au même endroit, chiffrés, sans serveur.",
   "private": true,
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "engines": {
     "node": ">=22.18"
