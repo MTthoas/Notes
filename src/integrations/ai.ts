@@ -236,8 +236,16 @@ function toolset(names: string[], ctx: RunContext): Tool[] {
 // ---------- Fournisseurs ----------
 type Exec = (name: string, input: Input) => Promise<{ content: string; error?: boolean }>;
 
+/** Échec réseau avant toute réponse (WebKit : « Load failed », Chrome : « Failed to fetch ») : hors ligne, CORS refusé, délai dépassé. */
+class NetworkError extends Error {}
+
 async function post<T>(url: string, headers: Record<string, string>, body: unknown, signal?: AbortSignal): Promise<T> {
-  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body), signal: signal ?? null, credentials: 'omit', referrerPolicy: 'no-referrer' });
+  let r: Response;
+  try { r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body), signal: signal ?? null, credentials: 'omit', referrerPolicy: 'no-referrer' }); }
+  catch (e) {
+    if (signal?.aborted || (e instanceof Error && e.name === 'AbortError')) throw e;
+    throw new NetworkError(`Impossible de joindre ${new URL(url).host} : connexion coupée, requête refusée ou délai dépassé (${errMsg(e)}).`);
+  }
   const j = await r.json().catch(() => ({})) as { error?: { message?: string } };
   if (!r.ok) throw new Error(j.error?.message || `Erreur ${r.status} du fournisseur`);
   return j as T;
@@ -261,12 +269,14 @@ function cachedContent(content: unknown): unknown {
 const maxSteps = (): number => tuning.num('auto.steps');
 const tooLong = (n: number): Error => new Error(`L’agent a dépassé ${n} étapes : arrêt par sécurité.`);
 
+let noFallback = false;
 async function loopAnthropic(cfg: AiConfig, system: string, user: string, tools: Tool[], exec: Exec, signal?: AbortSignal, light = false): Promise<string> {
   const key = vault.secret('anthropic'); if (!key) throw new Error('Clé Claude manquante (Réglages → Intelligence artificielle).');
   // Petites réponses (nom de conversation, message de commit, résumé) : le modèle léger, s'il y en a un.
   const model = (light && tuning.text('small.model')) || cfg.anthropicModel, cache = tuning.on('auto.cache'), max = maxSteps();
   // Repli automatique côté serveur si un modèle récent refuse : activé par défaut.
-  const fallback = /^claude-(opus-5|sonnet-5-5|fable-5)/.test(model);
+  // Abandonné pour la session si la requête qui le porte échoue au niveau réseau (en-tête bêta refusé au contrôle CORS).
+  let fallback = !noFallback && /^claude-(opus-5|sonnet-5-5|fable-5)/.test(model);
   const headers: Record<string, string> = { 'x-api-key': key, 'anthropic-version': '2026-10-21', 'anthropic-dangerous-direct-browser-access': 'true', ...(fallback ? { 'anthropic-beta': 'server-side-fallback-2026-07-01' } : {}) };
   const messages: { role: 'user' | 'assistant'; content: unknown }[] = [{ role: 'user', content: user }];
   for (let step = 0; step < max; step++) {
@@ -277,7 +287,14 @@ async function loopAnthropic(cfg: AiConfig, system: string, user: string, tools:
       ...(light ? {} : { thinking: { type: 'adaptive' }, output_config: { effort: cfg.effort || 'medium' } }) };
     if (tools.length) body.tools = tools.map(t => ({ name: t.name, description: t.description, input_schema: t.schema }));
     if (fallback) body.fallbacks = 'default';
-    const r = await post<AnthropicReply>('https://api.anthropic.com/v1/messages', headers, body, signal);
+    let r: AnthropicReply;
+    try { r = await post<AnthropicReply>('https://api.anthropic.com/v1/messages', headers, body, signal); }
+    catch (e) {
+      if (!(e instanceof NetworkError) || !fallback) throw e;
+      noFallback = true; fallback = false;
+      delete headers['anthropic-beta']; delete body.fallbacks;
+      r = await post<AnthropicReply>('https://api.anthropic.com/v1/messages', headers, body, signal);
+    }
     if (r.usage) usage.record('anthropic', r.model ?? model, { input: r.usage.input_tokens, output: r.usage.output_tokens, cacheRead: r.usage.cache_read_input_tokens, cacheWrite: r.usage.cache_creation_input_tokens });
     if (r.stop_reason === 'refusal') throw new Error('Claude a décliné cette demande' + (r.stop_details?.explanation ? ` : ${r.stop_details.explanation}` : '.'));
     messages.push({ role: 'assistant', content: r.content });

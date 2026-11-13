@@ -133,16 +133,33 @@ final class ClaudeUsage {
     }
     private final class Box { var data: Data?; var code = 0 }
 
+    /// Lecture de l'élément « Claude Code-credentials » par `/usr/bin/security`, et non par SecItemCopyMatching.
+    /// Claude Code crée (et recrée à chaque renouvellement du jeton) cet élément avec cet outil, qui figure donc
+    /// d'office dans ses autorisations : aucune demande de mot de passe. Lu directement par Studio, l'accord
+    /// « Toujours autoriser » serait perdu à chaque reconstruction (signature ad hoc) et à chaque renouvellement.
+    /// Renvoie nil si l'élément n'existe pas ; lève `denied` si le trousseau refuse ou ne répond pas.
+    private func keychainItem() throws -> Data? {
+        let p = Process(), out = Pipe()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        p.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        // Trousseau verrouillé : macOS peut demander de le déverrouiller ; au-delà d'une minute, on abandonne.
+        let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 60, execute: killer)
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit(); killer.cancel()
+        if p.terminationReason == .uncaughtSignal { throw Failure.denied }
+        if p.terminationStatus == 44 { return nil } // errSecItemNotFound
+        guard p.terminationStatus == 0 else { throw Failure.denied }
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : Data(text.utf8)
+    }
+
     /// Jeton de connexion de Claude Code (abonnement) : trousseau de macOS, sinon son fichier d'identifiants.
-    /// macOS demande l'accord de l'utilisateur pour la lecture du trousseau.
     private func credentials() throws -> (value: String, expires: TimeInterval) {
-        var raw: Data?
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "Claude Code-credentials",
-                                    kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecSuccess { raw = item as? Data }
-        else if status == errSecUserCanceled || status == errSecAuthFailed || status == errSecInteractionNotAllowed { throw Failure.denied }
+        var raw = try keychainItem()
         if raw == nil { raw = try? Data(contentsOf: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/.credentials.json")) }
         guard let raw, let j = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else { throw Failure.missing }
         guard let o = j["claudeAiOauth"] as? [String: Any], let t = o["accessToken"] as? String, !t.isEmpty, t.utf8.count < 4096,
