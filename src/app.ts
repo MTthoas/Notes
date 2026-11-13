@@ -12,6 +12,7 @@ import * as todo from './features/tasks.ts';
 import * as notifs from './integrations/linear/notifications.ts';
 import * as linearView from './integrations/linear/page.ts';
 import * as github from './integrations/github/api.ts';
+import * as usage from './integrations/usage.ts';
 import * as githubPage from './integrations/github/page.ts';
 import * as voice from './features/voice.ts';
 import * as home from './features/home.ts';
@@ -186,7 +187,11 @@ function renderSidebar() {
       <div class="side-label">Notes</div>
       <div class="side-group">${item('inbox')}${item('today')}${item('all')}${count.ephemeral || v.type === 'ephemeral' ? item('ephemeral') : ''}</div>
       <div class="side-label">Organisation</div>
-      <div class="side-group">${item('projets')}${projectsModel.projects().slice(0, 8).map(p => `<button class="side-item side-sub${v.type === 'projets' && v.project === p.id ? ' sel' : ''}" data-pj-open="${esc(p.id)}"><i class="tag-dot" style="--c:var(--c-${p.hue})"></i><span>${esc(p.name)}</span></button>`).join('')}${item('tasks')}${item('agents')}</div>
+      <div class="side-group">${item('projets')}${projectsModel.projects().slice(0, 8).map(p => {
+        const open = v.type === 'projets' && v.project === p.id, tab = v.tab ?? 'overview';
+        return `<button class="side-item side-sub${open && tab === 'overview' ? ' sel' : ''}${open ? ' open' : ''}" data-pj-open="${esc(p.id)}"><i class="tag-dot" style="--c:var(--c-${p.hue})"></i><span>${esc(p.name)}</span></button>`
+          + (open ? projectsPage.TABS.slice(1).map(([k, l, ic]) => `<button class="side-item side-sub2${tab === k ? ' sel' : ''}" data-pj-open="${esc(p.id)}" data-pj-tab="${k}">${icon(ic)}<span>${esc(l)}</span></button>`).join('') : '');
+      }).join('')}${item('tasks')}${item('agents')}</div>
       <div class="side-label">Connexions</div>
       <div class="side-group">${item('linear')}${item('github')}</div>
       ${tags.length ? `<button class="side-label" data-act="tags" aria-expanded="${ui.tagsOpen}">${icon('chevron')}Tags</button>${ui.tagsOpen ? `<div class="side-group">${tags.map(([t, c]) => `<button class="side-item${v.type === 'tag' && v.tag === t ? ' sel' : ''}" data-tag="${esc(t)}"><i class="tag-dot" style="--c:var(--c-${hue(t)})"></i><span>${esc(t)}</span><span class="side-count">${c}</span></button>`).join('')}</div>` : ''}` : ''}
@@ -980,7 +985,7 @@ async function onClick(e: MouseEvent): Promise<void> {
   }
   if (await hub.click(e)) return;
   let x: HTMLElement | null;
-  if ((x = t.closest('[data-pj-open], [data-project-open]')) && !t.closest('.pj')) { await setView({ type: 'projets', project: x.dataset.pjOpen || x.dataset.projectOpen || null }); return; }
+  if ((x = t.closest('[data-pj-open], [data-project-open]')) && !t.closest('.pj')) { await setView({ type: 'projets', project: x.dataset.pjOpen || x.dataset.projectOpen || null, ...(x.dataset.pjTab ? { tab: x.dataset.pjTab } : {}) }); return; }
   if ((x = t.closest('[data-view]'))) { await setView({ type: x.dataset.view ?? 'home' }); return; }
   if ((x = t.closest('[data-open-note]')) && store.get(x.dataset.openNote)) { await openNote(x.dataset.openNote ?? ''); return; }
   if ((x = t.closest('[data-tag]'))) { e.preventDefault(); await setView({ type: 'tag', tag: x.dataset.tag ?? '' }); return; }
@@ -1195,4 +1200,4 @@ async function start() {
 start().catch(e => { console.error(e); document.body.insertAdjacentHTML('beforeend', `<div class="fatal">Studio n’a pas pu démarrer : ${esc(e.message)}.<br>Le stockage local du navigateur est peut-être désactivé (navigation privée ?).</div>`); });
 
 // Build de test uniquement (retiré du build normal) : accès direct aux modules pour les tests automatisés.
-if (__TEST__) Object.assign(window, { __studio: { store, vault, todo, notifs, hub, github, linear, link, biometric } });
+if (__TEST__) Object.assign(window, { __studio: { store, vault, todo, notifs, hub, github, linear, link, biometric, usage } });

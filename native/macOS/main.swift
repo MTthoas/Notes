@@ -108,12 +108,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         r.notesShown = document.querySelectorAll('#list .note-item, .hm-note').length;
         try { r.github = (await fetch('https://api.github.com/zen', { credentials: 'omit' })).status; } catch (e) { r.github = String(e); }
         const pid = '\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_PROJECT"] ?? "")';
-        if (pid) r.project = await new Promise(res => {
-          const prev = window.carnet.reply;
-          window.carnet.reply = p => { if (p && p.id === 424242) { window.carnet.reply = prev; res(p); } else prev(p); };
-          window.webkit.messageHandlers.carnet.postMessage({ type: 'project', action: 'info', id: 424242, project: pid });
-          setTimeout(() => res('pas de réponse'), 8000);
+        let seq = 424240;
+        const ask = (action, extra) => new Promise(res => {
+          const id = ++seq, prev = window.carnet.reply;
+          window.carnet.reply = p => { if (p && p.id === id) { window.carnet.reply = prev; res(p); } else prev(p); };
+          window.webkit.messageHandlers.carnet.postMessage({ type: 'project', action, id, project: pid, ...extra });
+          setTimeout(() => res('pas de réponse'), 15000);
         });
+        if (pid) {
+          r.project = await ask('info', {});
+          const b = await ask('branches', {}); r.branches = b.ok ? (b.branches || []).length : b;
+          const d = await ask('diff', { scope: 'working' }); r.diff = d.ok ? { lines: String(d.patch || '').split('\\n').length, base: d.base } : d;
+          const s = await ask('sessions', {}); r.sessions = s.ok ? { found: s.found, count: (s.sessions || []).length, first: s.sessions && s.sessions[0] ? { title: s.sessions[0].title, live: s.sessions[0].live, output: s.sessions[0].tokens.output } : null, quota: s.quota ? s.quota.status : null } : s;
+          if (s.sessions && s.sessions[0]) { const one = await ask('session', { session: s.sessions[0].id }); r.session = one.ok ? { actions: (one.actions || []).length, files: (one.files || []).length } : one; }
+          const w = await ask('site', { url: 'https://github.com' }); r.site = w.ok ? { up: w.up, status: w.status } : w;
+          const bad = await ask('site', { url: 'http://127.0.0.1' }); r.siteRefusesLocal = !bad.ok;
+        }
         try { r.ntfy = (await fetch('https://ntfy.sh/carnet-autotest-' + crypto.randomUUID(), { method: 'POST', body: 'x', headers: { Cache: 'no' } })).status; } catch (e) { r.ntfy = String(e); }
         try { r.anthropic = (await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json', 'x-api-key': 'cle-invalide', 'anthropic-version': '2026-10-21', 'anthropic-dangerous-direct-browser-access': 'true' } })).status; } catch (e) { r.anthropic = String(e); }
         return JSON.stringify(r);

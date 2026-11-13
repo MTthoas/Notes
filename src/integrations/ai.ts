@@ -10,6 +10,7 @@ import * as github from './github/api.ts';
 import { parseTrigger, TRIGGERS, type AppEvent, type Trigger } from '../core/events.ts';
 import { fold } from '../lib/fuzzy.ts';
 import { errMsg } from '../ui/kit.ts';
+import * as usage from './usage.ts';
 import type { Note } from '../types.ts';
 
 const CFG = 'carnet.ai';
@@ -17,8 +18,8 @@ export type Provider = 'anthropic' | 'openai' | 'local';
 export const CLAUDE_MODELS: [string, string][] = [['claude-opus-5-5', 'Claude Opus 5.5'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5'], ['claude-haiku-5-5', 'Claude Haiku 5.5'], ['claude-fable-5-2', 'Claude Fable 5.2']];
 export const PROVIDERS: Record<Provider, string> = { anthropic: 'Claude', openai: 'OpenAI', local: 'Modèle local' };
 
-export interface AiConfig { provider: Provider; anthropicModel: string; effort: string; openaiModel: string; localUrl: string; localModel: string }
-const DEFAULTS: AiConfig = { provider: 'anthropic', anthropicModel: 'claude-opus-5-5', effort: 'medium', openaiModel: 'gpt-5', localUrl: 'http://localhost:11434/v1', localModel: 'llama3.2' };
+export interface AiConfig { provider: Provider; anthropicModel: string; effort: string; openaiModel: string; localUrl: string; localModel: string; /** Budget mensuel en millions de tokens (0 = aucun). */ budgetM: number }
+const DEFAULTS: AiConfig = { provider: 'anthropic', anthropicModel: 'claude-opus-5-5', effort: 'medium', openaiModel: 'gpt-5', localUrl: 'http://localhost:11434/v1', localModel: 'llama3.2', budgetM: 0 };
 
 export function config(): AiConfig {
   let c: Partial<AiConfig> = {};
@@ -188,7 +189,7 @@ async function post<T>(url: string, headers: Record<string, string>, body: unkno
 
 // Messages API d'Anthropic (sous-ensemble utilisé).
 type Block = { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: Input } | { type: string; [k: string]: unknown };
-interface AnthropicReply { content: Block[]; stop_reason: string; stop_details?: { explanation?: string } }
+interface AnthropicReply { content: Block[]; stop_reason: string; stop_details?: { explanation?: string }; model?: string; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } }
 
 async function loopAnthropic(cfg: AiConfig, system: string, user: string, tools: Tool[], exec: Exec, signal?: AbortSignal): Promise<string> {
   const key = vault.secret('anthropic'); if (!key) throw new Error('Clé Claude manquante (Réglages → Intelligence artificielle).');
@@ -202,6 +203,7 @@ async function loopAnthropic(cfg: AiConfig, system: string, user: string, tools:
     if (tools.length) body.tools = tools.map(t => ({ name: t.name, description: t.description, input_schema: t.schema }));
     if (fallback) body.fallbacks = 'default';
     const r = await post<AnthropicReply>('https://api.anthropic.com/v1/messages', headers, body, signal);
+    if (r.usage) usage.record('anthropic', r.model ?? model, { input: r.usage.input_tokens, output: r.usage.output_tokens, cacheRead: r.usage.cache_read_input_tokens, cacheWrite: r.usage.cache_creation_input_tokens });
     if (r.stop_reason === 'refusal') throw new Error('Claude a décliné cette demande' + (r.stop_details?.explanation ? ` : ${r.stop_details.explanation}` : '.'));
     messages.push({ role: 'assistant', content: r.content });
     const uses = r.content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use' && typeof b.id === 'string');
@@ -216,7 +218,7 @@ async function loopAnthropic(cfg: AiConfig, system: string, user: string, tools:
 
 // Chat Completions d'OpenAI (et compatibles).
 interface OpenAIMessage { role: string; content?: string | null; tool_calls?: { id: string; function: { name: string; arguments?: string } }[]; tool_call_id?: string }
-interface OpenAIReply { choices?: { message?: OpenAIMessage }[] }
+interface OpenAIReply { choices?: { message?: OpenAIMessage }[]; model?: string; usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } }
 
 async function loopOpenAI(cfg: AiConfig, system: string, user: string, tools: Tool[], exec: Exec, signal: AbortSignal | undefined, local: boolean): Promise<string> {
   const key = local ? vault.secret('local') : vault.secret('openai');
@@ -227,6 +229,7 @@ async function loopOpenAI(cfg: AiConfig, system: string, user: string, tools: To
     const body: Record<string, unknown> = { model: local ? cfg.localModel : cfg.openaiModel, messages };
     if (tools.length) body.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.schema } }));
     const r = await post<OpenAIReply>(base + '/chat/completions', key ? { Authorization: `Bearer ${key}` } : {}, body, signal);
+    if (r.usage) { const cached = r.usage.prompt_tokens_details?.cached_tokens ?? 0; usage.record(local ? 'local' : 'openai', r.model ?? String(body.model), { input: (r.usage.prompt_tokens ?? 0) - cached, output: r.usage.completion_tokens, cacheRead: cached }); }
     const msg = r.choices?.[0]?.message; if (!msg) throw new Error('Réponse vide du fournisseur.');
     messages.push(msg);
     if (!msg.tool_calls?.length) return (msg.content || '').trim();

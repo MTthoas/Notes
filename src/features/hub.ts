@@ -11,6 +11,7 @@ import * as link from '../integrations/link.ts';
 import * as schema from '../lib/schema.ts';
 import * as qr from '../lib/qr.ts';
 import * as events from '../core/events.ts';
+import * as usage from '../integrations/usage.ts';
 import type { AppEvent } from '../core/events.ts';
 import { renderMarkdown, esc, plain } from '../lib/markdown.ts';
 import { fold } from '../lib/fuzzy.ts';
@@ -502,10 +503,23 @@ function tabVault() {
     <section class="cx-sec"><button class="btn btn-danger" data-v="off">Désactiver le coffre…</button></section>`;
 }
 
+/** Consommation du mois et ce qu'il reste du budget. */
+export function usageHTML(): string {
+  const c = ai.config(), { rows, total } = usage.month(), used = usage.billable(total), budget = (c.budgetM || 0) * 1e6;
+  const left = budget ? Math.max(0, budget - used) : 0, pct = budget ? Math.min(100, Math.round(used / budget * 100)) : 0;
+  return `<div class="us-sum"><div><strong>${usage.fmt(used)}</strong><span>tokens ce mois-ci · ${total.calls} appel${total.calls > 1 ? 's' : ''}</span></div>
+      ${budget ? `<div><strong class="${pct >= 90 ? 'err' : pct >= 70 ? 'warn' : 'ok'}">${usage.fmt(left)}</strong><span>restants sur ${usage.fmt(budget)}</span></div>` : '<div><strong>—</strong><span>pas de budget fixé</span></div>'}</div>
+    ${budget ? `<span class="bar us-bar"><i style="width:${pct}%" class="${pct >= 90 ? 'err' : pct >= 70 ? 'warn' : ''}"></i></span>` : ''}
+    ${rows.length ? `<div class="us-rows">${rows.map(([k, r]) => `<div class="us-row"><span>${esc(k.replace(/^(\w+):/, (_, p: string) => (ai.PROVIDERS[p as ai.Provider] ?? p) + ' · '))}</span><em>${usage.fmt(r.input + r.cacheWrite)} entrée · ${usage.fmt(r.output)} sortie${r.cacheRead ? ` · ${usage.fmt(r.cacheRead)} cache` : ''}</em></div>`).join('')}</div>` : '<p class="modal-hint">Aucun appel ce mois-ci.</p>'}`;
+}
+
 function tabAI() {
   if (!vault.enabled()) return needVault('Les clés des fournisseurs d’IA');
   const c = ai.config();
-  return `<section class="cx-sec"><h4>${icon('sparkle')}Fournisseur par défaut</h4><div class="cx-seg">${Object.entries(ai.PROVIDERS).map(([k, l]) => `<label><input type="radio" name="provider" value="${k}"${c.provider === k ? ' checked' : ''}>${l}</label>`).join('')}</div>
+  return `<section class="cx-sec"><h4>${icon('bolt')}Consommation</h4>${usageHTML()}
+    <label class="cx-row us-budget"><span>Budget mensuel</span><input class="field" type="number" min="0" step="0.5" data-cfg="budgetM" value="${c.budgetM || ''}" placeholder="0"><span>millions de tokens</span></label>
+    <p class="modal-hint">Compté par Studio à chaque réponse (entrée, sortie, écriture en cache). Les fournisseurs n’exposent pas ton crédit restant à une simple clé : fixe ici le budget que tu t’accordes, Studio t’indique ce qu’il en reste. La consommation de Claude Code apparaît dans l’onglet Sessions IA de chaque projet.</p></section>
+    <section class="cx-sec"><h4>${icon('sparkle')}Fournisseur par défaut</h4><div class="cx-seg">${Object.entries(ai.PROVIDERS).map(([k, l]) => `<label><input type="radio" name="provider" value="${k}"${c.provider === k ? ' checked' : ''}>${l}</label>`).join('')}</div>
     <p class="modal-hint">Les requêtes partent directement de ce navigateur vers le fournisseur, avec ta clé. Les notes chiffrées et celles taguées <code>#privé</code> ne sont jamais envoyées. Les actions qui modifient quelque chose demandent ton accord.</p></section>
     <section class="cx-sec"><h4>Claude</h4>${keyField('anthropic', 'Clé Anthropic', 'sk-ant-…')}
       <div class="cx-grid"><select class="field" data-cfg="anthropicModel">${ai.CLAUDE_MODELS.map(([v, l]) => `<option value="${v}"${c.anthropicModel === v ? ' selected' : ''}>${l}</option>`).join('')}</select><select class="field" data-cfg="effort">${[['low', 'Effort : faible'], ['medium', 'Effort : moyen'], ['high', 'Effort : élevé'], ['xhigh', 'Effort : très élevé']].map(([v, l]) => `<option value="${v}"${c.effort === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div></section>
@@ -619,6 +633,7 @@ function onConnChange(e: Event): void {
   const t = target(e) as HTMLInputElement;
   if (t.name === 'provider') ai.setConfig({ provider: t.value as ai.Provider });
   else if (t.name === 'theme') app.setTheme(t.value);
+  else if (t.dataset.cfg === 'budgetM') { ai.setConfig({ budgetM: Math.max(0, Number(t.value) || 0) }); refreshConnections(); }
   else if (t.dataset.cfg) ai.setConfig({ [t.dataset.cfg]: t.value.trim() });
   else if (t.matches('[data-autolock]')) vault.setSetting('autolock', Number(t.value));
   else if (t.matches('[data-lan]')) link.setLanOnly(t.checked);

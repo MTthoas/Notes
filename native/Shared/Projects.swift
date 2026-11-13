@@ -40,18 +40,62 @@ final class ProjectFolders {
 
     func forget(_ id: String) { var f = folders; f.removeValue(forKey: id); folders = f }
 
-    /// Lance git en lecture seule, sans shell, avec un délai maximal.
-    private func git(_ args: [String], in dir: String) -> String? {
+    /// Lance git en lecture seule, sans shell, avec un délai et une taille de sortie maximaux.
+    /// La sortie est lue pendant l'exécution : une sortie volumineuse ne peut pas bloquer le processus.
+    private func git(_ args: [String], in dir: String, timeout: TimeInterval = 5, maxBytes: Int = 400_000) -> String? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        p.arguments = ["-C", dir] + args
-        let out = Pipe(); p.standardOutput = out; p.standardError = Pipe()
+        p.arguments = ["-C", dir, "--no-pager"] + args
+        p.environment = ["GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "PATH": "/usr/bin:/bin"]
+        let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
+        var data = Data(); let lock = NSLock(); let reading = DispatchGroup()
+        reading.enter()
+        DispatchQueue.global(qos: .utility).async {
+            while true {
+                let chunk = out.fileHandleForReading.availableData
+                if chunk.isEmpty { break }
+                lock.lock(); if data.count < maxBytes { data.append(chunk) }; lock.unlock()
+            }
+            reading.leave()
+        }
         do { try p.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(timeout)
         while p.isRunning && Date() < deadline { usleep(20_000) }
         if p.isRunning { p.terminate(); return nil }
+        _ = reading.wait(timeout: .now() + 2)
         guard p.terminationStatus == 0 else { return nil }
-        return String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+        lock.lock(); defer { lock.unlock() }
+        return String(decoding: data.prefix(maxBytes), as: UTF8.self)
+    }
+
+    /// Changements à relire : non commités (par rapport à HEAD) ou ceux de la branche (par rapport à la branche principale).
+    func diff(_ id: String, scope: String) -> [String: Any] {
+        guard let dir = path(id) else { return ["ok": false, "message": "Choisis d'abord le dossier du projet."] }
+        if scope == "branch" {
+            let base = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], in: dir)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "origin/main"
+            let stat = git(["diff", "--stat", "\(base)...HEAD"], in: dir, timeout: 15) ?? ""
+            let patch = git(["diff", "--unified=3", "\(base)...HEAD"], in: dir, timeout: 15) ?? ""
+            return ["ok": true, "base": base, "stat": stat, "patch": patch, "truncated": patch.utf8.count >= 400_000]
+        }
+        let stat = git(["diff", "--stat", "HEAD"], in: dir, timeout: 15) ?? ""
+        let patch = git(["diff", "--unified=3", "HEAD"], in: dir, timeout: 15) ?? ""
+        let untracked = git(["ls-files", "--others", "--exclude-standard"], in: dir) ?? ""
+        return ["ok": true, "base": "HEAD", "stat": stat, "patch": patch, "untracked": untracked, "truncated": patch.utf8.count >= 400_000]
+    }
+
+    /// Branches locales et leur position par rapport à la branche principale (pour le suivi du flux).
+    func branches(_ id: String) -> [String: Any] {
+        guard let dir = path(id) else { return ["ok": true, "branches": []] }
+        let base = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], in: dir)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "origin/main"
+        let raw = git(["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)\t%(committerdate:iso-strict)\t%(upstream:short)", "refs/heads/"], in: dir) ?? ""
+        var out: [[String: Any]] = []
+        for line in raw.split(separator: "\n").prefix(25) {
+            let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard let name = f.first else { continue }
+            let counts = git(["rev-list", "--left-right", "--count", "\(base)...\(name)"], in: dir)?.split(whereSeparator: { $0 == "\t" || $0 == " " || $0 == "\n" }).compactMap { Int($0) } ?? []
+            out.append(["name": name, "date": f.count > 1 ? f[1] : "", "upstream": f.count > 2 ? f[2] : "", "behind": counts.first ?? 0, "ahead": counts.count > 1 ? counts[1] : 0])
+        }
+        return ["ok": true, "base": base, "branches": out]
     }
 
     /// État du dépôt : branche, avance/retard, fichiers modifiés, dépôt GitHub d'origine.
@@ -95,6 +139,43 @@ final class ProjectFolders {
             ws.open([url], withApplicationAt: term, configuration: NSWorkspace.OpenConfiguration())
         default:
             throw Failure(message: "Application inconnue.")
+        }
+    }
+}
+#endif
+
+#if os(macOS)
+/// Vérifie qu'un site répond (HTTPS public uniquement, sans cookies) : code, temps de réponse, adresse finale.
+enum SiteCheck {
+    static func isPublicHTTPS(_ url: URL) -> Bool {
+        guard url.scheme == "https", let host = url.host?.lowercased(), !host.isEmpty else { return false }
+        if host == "localhost" || host.hasSuffix(".local") || host.hasSuffix(".internal") { return false }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        if parts.count == 4 {
+            if parts[0] == 10 || parts[0] == 127 || parts[0] == 0 || (parts[0] == 169 && parts[1] == 254) || (parts[0] == 192 && parts[1] == 168) || (parts[0] == 172 && (16...31).contains(parts[1])) { return false }
+        }
+        return !host.contains(":")
+    }
+    static func run(_ raw: String, done: @escaping ([String: Any]) -> Void) {
+        guard let url = URL(string: raw), isPublicHTTPS(url) else { return done(["ok": false, "message": "Adresse invalide : seul un site public en https:// est vérifié."]) }
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 10
+        cfg.httpCookieStorage = nil
+        var req = URLRequest(url: url); req.httpMethod = "GET"; req.setValue("Studio (vérification du site)", forHTTPHeaderField: "User-Agent")
+        let start = Date()
+        let session = URLSession(configuration: cfg, delegate: Redirects(), delegateQueue: nil)
+        session.dataTask(with: req) { _, resp, err in
+            session.finishTasksAndInvalidate()
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            if let err { return done(["ok": true, "up": false, "ms": ms, "message": err.localizedDescription]) }
+            let http = resp as? HTTPURLResponse
+            done(["ok": true, "up": (200..<400).contains(http?.statusCode ?? 0), "status": http?.statusCode ?? 0, "ms": ms, "final": http?.url?.absoluteString ?? raw])
+        }.resume()
+    }
+    /// Une redirection ne suit que vers un autre site public en https (jamais vers le réseau local).
+    private final class Redirects: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(request.url.map(SiteCheck.isPublicHTTPS) == true ? request : nil)
         }
     }
 }

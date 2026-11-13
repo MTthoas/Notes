@@ -123,6 +123,19 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
             catch { answer(["id": id, "ok": false, "message": error.localizedDescription]) }
         case "forget":
             folders.forget(pid); answer(["id": id, "ok": true])
+        case "diff":
+            let scope = body["scope"] as? String ?? "working"
+            DispatchQueue.global(qos: .userInitiated).async { var r = folders.diff(pid, scope: scope); r["id"] = id; self.answer(r) }
+        case "branches":
+            DispatchQueue.global(qos: .userInitiated).async { var r = folders.branches(pid); r["id"] = id; self.answer(r) }
+        case "site":
+            SiteCheck.run(body["url"] as? String ?? "") { var r = $0; r["id"] = id; self.answer(r) }
+        case "sessions":
+            guard let dir = folders.path(pid) else { answer(["id": id, "ok": true, "sessions": [], "found": false]); return }
+            ClaudeSessions.shared.list(project: dir) { var r = $0; r["id"] = id; self.answer(r) }
+        case "session":
+            guard let dir = folders.path(pid) else { answer(["id": id, "ok": false, "message": "Choisis d'abord le dossier du projet."]); return }
+            ClaudeSessions.shared.detail(project: dir, session: body["session"] as? String ?? "") { var r = $0; r["id"] = id; self.answer(r) }
         default:
             answer(["id": id, "ok": false, "message": "Action inconnue."])
         }

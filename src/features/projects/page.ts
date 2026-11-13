@@ -11,12 +11,15 @@ import { esc, plain } from '../../lib/markdown.ts';
 import { $, icon, modal, need, rel, target, toast, errMsg } from '../../ui/kit.ts';
 import type { AppShell, Note } from '../../types.ts';
 import type { Project } from './model.ts';
+import * as flux from './flux.ts';
+import * as sessions from './sessions.ts';
+import * as review from './review.ts';
 
 let app!: AppShell;
 export const init = (shell: AppShell): void => { app = shell; };
 
 const titleOf = (n: Note) => n.title.trim() || 'Sans titre';
-const go = (id: string | null) => app.setView({ type: 'projets', project: id });
+const go = (id: string | null, tab?: string) => app.setView({ type: 'projets', project: id, ...(tab ? { tab } : {}) });
 
 // ---------- Dossier local (app Mac) ----------
 interface Folder { path: string | null; name?: string; git?: boolean; branch?: string; ahead?: number; behind?: number; changes?: number; remote?: string }
@@ -67,23 +70,96 @@ function noteRows(p: Project): string {
 }
 const section = (id: string, title: string, ic: string, body: string, cls = '') => `<section class="pj-sec ${cls}" data-sec="${esc(id)}"><h2>${icon(ic)}${esc(title)}</h2><div class="pj-sec-body">${body}</div></section>`;
 
-function detailHTML(p: Project): string {
-  const panels = registry.projectPanels(p);
-  return `<div class="pj-head" style="--c:var(--c-${p.hue})"><button class="lv-back" data-pj-open="">${icon('back')}Projets</button>
-      <div class="pj-title"><span class="pj-dot"></span><h1>${esc(p.name)}</h1><button class="btn btn-ghost" data-pj="edit">Note du projet</button></div>
-      <div class="pj-links">${p.repos.map(r => `<a class="lv-chip" href="https://github.com/${esc(r)}" target="_blank" rel="noopener">${icon('github')}${esc(r)}</a>`).join('')}${p.linear ? `<span class="lv-chip">${icon('linear')}${esc(p.linear)}</span>` : ''}<span class="lv-chip">#${esc(p.tag)}</span></div>
-      <div class="pj-folder-box">${folderHTML(p, folders.get(p.id) ?? null)}</div></div>
-    <div class="pj-cols"><div class="pj-col">${section('tasks', 'Tâches', 'check', taskBox(p))}${section('notes', 'Notes', 'notes', noteRows(p))}</div>
-      <div class="pj-col">${panels.map(x => section(x.id, x.title, x.icon, '<p class="nf-empty">Chargement…</p>', 'pj-panel')).join('') || section('none', 'Connexions', 'plug', '<p class="hm-empty">Associe un dépôt GitHub ou un projet Linear dans la note du projet pour voir ici les PR, la CI et les tickets.</p>')}</div></div>`;
+/** Sous-menus d'un projet (aussi affichés dans la barre latérale). */
+export const TABS: [string, string, string][] = [
+  ['overview', 'Vue d’ensemble', 'home'], ['code', 'Code', 'code'], ['flux', 'Flux', 'pr'], ['sessions', 'Sessions IA', 'bot'],
+  ['tasks', 'Tâches', 'check'], ['notes', 'Notes', 'notes'], ['site', 'Site', 'link'],
+];
+const curTab = (): string => { const t = app.viewState().tab; return t && TABS.some(x => x[0] === t) ? t : 'overview'; };
+const panelsHTML = (p: Project, tab: string) => registry.projectPanels(p, tab).map(x => section(x.id, x.title, x.icon, '<p class="nf-empty">Chargement…</p>', 'pj-panel')).join('');
+const card = (tab: string, title: string, ic: string, body: string) => `<button class="pj-ov" data-pj-tab="${tab}"><span class="pj-ov-h">${icon(ic)}${esc(title)}${icon('chevronRight')}</span><span class="pj-ov-b" data-ov="${tab}">${body}</span></button>`;
+
+function siteHTML(p: Project): string {
+  if (!p.site) return `<p class="hm-empty">Aucun site associé à ce projet.</p><form class="td-add pj-site-form"><span class="td-plus">${icon('link')}</span><input type="url" placeholder="https://studio.exemple.com" aria-label="Adresse du site" required></form>`;
+  const host = p.site.replace(/^https:\/\//, '').replace(/\/$/, '');
+  return `<div class="pj-site"><div class="pj-site-h"><span class="pj-site-dot" data-site-dot></span><a href="${esc(p.site)}" target="_blank" rel="noopener">${esc(host)}</a></div>
+    <p class="pj-site-st" data-site-st>${native.available() ? 'Vérification…' : 'La vérification du site se fait depuis l’app Mac.'}</p>
+    <div class="pj-site-act"><a class="btn btn-primary" href="${esc(p.site)}" target="_blank" rel="noopener">${icon('link')}Ouvrir le site</a>${native.available() ? `<button class="btn" data-pj="site-check">${icon('refresh')}Vérifier</button>` : ''}<button class="btn" data-pj="site-edit">Changer l’adresse</button></div></div>`;
 }
 
-async function hydrate(root: HTMLElement, p: Project): Promise<void> {
-  for (const x of registry.projectPanels(p)) {
-    void Promise.resolve().then(() => x.render(p)).then(html => { const b = $(`[data-sec="${CSS.escape(x.id)}"] .pj-sec-body`, root); if (b) b.innerHTML = html; })
-      .catch(e => { const b = $(`[data-sec="${CSS.escape(x.id)}"] .pj-sec-body`, root); if (b) b.innerHTML = `<p class="nf-empty">${esc(errMsg(e))}</p>`; });
+function tabBody(p: Project, tab: string): string {
+  const folderBox = `<div class="pj-folder-box">${folderHTML(p, folders.get(p.id) ?? null)}</div>`;
+  if (tab === 'code') return `${folderBox}<div class="pj-review"><span>${icon('sparkle')}Revue IA</span><button class="btn" data-pj="review-working">Changements en cours</button><button class="btn" data-pj="review-branch">Branche actuelle</button></div>
+    ${section('branches', 'Branches locales', 'pr', native.available() ? '<p class="nf-empty">Chargement…</p>' : '<p class="hm-empty">Visibles dans l’app Mac.</p>')}${panelsHTML(p, 'code')}`;
+  if (tab === 'flux') return '<div class="pj-flux"><p class="nf-empty">Chargement du flux…</p></div>';
+  if (tab === 'sessions') return '<div class="ss-box"></div>';
+  if (tab === 'tasks') return `${section('tasks', 'Tâches', 'check', taskBox(p))}${panelsHTML(p, 'tasks')}`;
+  if (tab === 'notes') return section('notes', 'Notes', 'notes', noteRows(p));
+  if (tab === 'site') return section('site', 'Site web', 'link', siteHTML(p));
+  const c = todo.ofProject(p.id), notes = model.notesOf(p).length - 1;
+  return `${folderBox}<div class="pj-ovs">
+    ${card('tasks', 'Tâches', 'check', `<b>${c.openCount}</b> ouvertes · ${c.doing.length} en cours${c.late.length ? ` · <span class="err">${c.late.length} en retard</span>` : ''}`)}
+    ${card('code', 'Code', 'code', p.repos.length ? 'Lecture des PR…' : 'Aucun dépôt associé')}
+    ${card('flux', 'Flux', 'pr', p.repos.length ? 'Lecture du flux…' : 'Associe un dépôt pour suivre les branches')}
+    ${card('sessions', 'Sessions IA', 'bot', native.available() ? 'Lecture des sessions…' : 'Visibles dans l’app Mac')}
+    ${card('site', 'Site', 'link', p.site ? esc(p.site.replace(/^https:\/\//, '')) : 'Ajouter le site du projet')}
+    ${card('notes', 'Notes', 'notes', `<b>${notes}</b> note${notes > 1 ? 's' : ''}`)}</div>${panelsHTML(p, 'overview')}`;
+}
+
+function detailHTML(p: Project, tab: string): string {
+  return `<div class="pj-head" style="--c:var(--c-${p.hue})"><button class="lv-back" data-pj-open="">${icon('back')}Projets</button>
+      <div class="pj-title"><span class="pj-dot"></span><h1>${esc(p.name)}</h1><button class="btn btn-ghost" data-pj="edit">Note du projet</button></div>
+      <div class="pj-links" data-k="${esc(`${p.repos.join(',')}|${p.site ?? ''}|${p.linear ?? ''}`)}">${p.repos.map(r => `<a class="lv-chip" href="https://github.com/${esc(r)}" target="_blank" rel="noopener">${icon('github')}${esc(r)}</a>`).join('')}${p.linear ? `<span class="lv-chip">${icon('linear')}${esc(p.linear)}</span>` : ''}${p.site ? `<a class="lv-chip" href="${esc(p.site)}" target="_blank" rel="noopener">${icon('link')}${esc(p.site.replace(/^https:\/\//, ''))}</a>` : ''}<span class="lv-chip">#${esc(p.tag)}</span></div>
+      <nav class="lv-tabs pj-tabs">${TABS.map(([k, l]) => `<button data-pj-tab="${k}" class="${k === tab ? 'sel' : ''}">${esc(l)}</button>`).join('')}</nav></div>
+    <div class="pj-body" data-tab="${tab}">${tabBody(p, tab)}</div>`;
+}
+
+const fill = (root: HTMLElement, sel: string, html: string) => { const b = $(sel, root); if (b) b.innerHTML = html; };
+async function hydrate(root: HTMLElement, p: Project, tab: string): Promise<void> {
+  for (const x of registry.projectPanels(p, tab)) {
+    void Promise.resolve().then(() => x.render(p)).then(html => fill(root, `[data-sec="${CSS.escape(x.id)}"] .pj-sec-body`, html))
+      .catch(e => fill(root, `[data-sec="${CSS.escape(x.id)}"] .pj-sec-body`, `<p class="nf-empty">${esc(errMsg(e))}</p>`));
   }
+  if (tab === 'flux') void flux.render(p).then(h => fill(root, '.pj-flux', h)).catch(e => fill(root, '.pj-flux', `<p class="nf-empty">${esc(errMsg(e))}</p>`));
   const f = await folderOf(p);
-  const box = $('.pj-folder-box', root); if (box && f) box.innerHTML = folderHTML(p, f);
+  fill(root, '.pj-folder-box', folderHTML(p, f));
+  if (tab === 'sessions') { const box = $('.ss-box', root); if (box) sessions.mount(box, p, f?.path ?? null); }
+  if (tab === 'code' && native.available()) {
+    const r = await native.call('project', 'branches', { project: p.id }, 20000), list = (r.branches as { name: string; date: string; ahead: number; behind: number; upstream: string }[] | undefined) ?? [];
+    fill(root, '[data-sec="branches"] .pj-sec-body', list.length ? list.map(b => `<div class="pj-br"><code>${esc(b.name)}</code>${b.name === f?.branch ? '<em class="pj-badge approved">actuelle</em>' : ''}${b.upstream ? '' : '<em class="pj-badge">locale</em>'}<span>${b.ahead ? `↑${b.ahead} ` : ''}${b.behind ? `↓${b.behind}` : ''}</span><time>${esc(rel(Date.parse(b.date)))}</time></div>`).join('') : '<p class="hm-empty">Choisis le dossier du projet pour voir ses branches.</p>');
+  }
+  if (tab === 'site' && p.site && native.available()) void checkSite(root, p);
+  if (tab === 'overview') void overview(root, p, f);
+}
+
+async function checkSite(root: HTMLElement, p: Project): Promise<void> {
+  const st = $('[data-site-st]', root), dot = $('[data-site-dot]', root); if (!st || !p.site) return;
+  st.textContent = 'Vérification…';
+  const r = await native.call('project', 'site', { url: p.site }, 20000);
+  dot?.classList.toggle('up', !!r.up); dot?.classList.toggle('down', !r.up);
+  st.innerHTML = !r.ok ? esc(r.message ?? 'Vérification impossible.') : r.up ? `En ligne · code ${String(r.status)} · ${String(r.ms)} ms` : `<span class="err">Ne répond pas</span>${r.status ? ` · code ${String(r.status)}` : ''}${r.message ? ` · ${esc(String(r.message))}` : ''}`;
+}
+
+async function overview(root: HTMLElement, p: Project, f: Folder | null): Promise<void> {
+  const repo = p.repos[0];
+  if (repo && github.connected()) {
+    github.project(repo).then(({ pulls }) => {
+      const failing = pulls.filter(x => x.ci === 'failure').length, ready = pulls.filter(x => x.review === 'approved' && x.ci === 'success').length;
+      fill(root, '[data-ov="code"]', `<b>${pulls.length}</b> PR ouverte${pulls.length > 1 ? 's' : ''}${failing ? ` · <span class="err">${failing} CI en échec</span>` : ''}${ready ? ` · <span class="ok">${ready} prête${ready > 1 ? 's' : ''}</span>` : ''}${f?.branch ? ` · sur <code>${esc(f.branch)}</code>` : ''}`);
+    }).catch(() => fill(root, '[data-ov="code"]', 'GitHub ne répond pas'));
+    github.flow(repo).then(fl => {
+      const rel0 = fl.releases[0];
+      fill(root, '[data-ov="flux"]', `<code>${esc(fl.base)}</code> ${fl.baseCi === 'success' ? '<span class="ok">CI verte</span>' : fl.baseCi === 'failure' ? '<span class="err">CI en échec</span>' : fl.baseCi === 'pending' ? 'CI en cours' : ''}${rel0 ? ` · dernière version ${esc(rel0.tag)}` : ''}`);
+    }).catch(() => fill(root, '[data-ov="flux"]', 'GitHub ne répond pas'));
+  }
+  if (native.available() && f?.path) {
+    const r = await native.call('project', 'sessions', { project: p.id }, 20000), s = (r.sessions as { title: string; live: boolean; tokens: { output: number }; updated: string }[] | undefined)?.[0];
+    fill(root, '[data-ov="sessions"]', s ? `${s.live ? '<span class="ok">● en cours</span> · ' : ''}${esc(s.title)} · ${esc(rel(Date.parse(s.updated)))}` : 'Aucune session');
+  }
+  if (p.site && native.available()) {
+    const r = await native.call('project', 'site', { url: p.site }, 20000);
+    fill(root, '[data-ov="site"]', `${esc(p.site.replace(/^https:\/\//, ''))} · ${r.up ? `<span class="ok">en ligne</span> · ${String(r.ms)} ms` : '<span class="err">ne répond pas</span>'}`);
+  }
 }
 
 // ---------- Création ----------
@@ -125,21 +201,33 @@ export function projectMenuItems(n: Note): { label: string; icon?: string; run?:
 
 // ---------- Page ----------
 export function mount(main: HTMLElement): void {
-  const p = model.byId(app.viewState().project);
+  sessions.stop();
+  const p = model.byId(app.viewState().project), tab = curTab();
   main.innerHTML = `<header class="toolbar">${app.tbLeft()}${app.crumb(p ? p.name : 'Projets')}<div class="tb-side tb-right">${p ? '' : `<button class="btn btn-ghost" data-pj="new">${icon('plus')}<span>Nouveau projet</span></button>`}</div></header>
-    <div class="todo pj"><div class="todo-in pj-in">${p ? detailHTML(p) : `<div class="td-head"><h1>Projets</h1><p class="td-sub">Un projet réunit son dossier, son dépôt, ses PR, ses tickets, ses tâches et ses notes.</p></div><div class="pj-list">${listHTML()}</div>`}</div></div>`;
+    <div class="todo pj"><div class="todo-in pj-in">${p ? detailHTML(p, tab) : `<div class="td-head"><h1>Projets</h1><p class="td-sub">Un projet réunit son dossier, son dépôt, ses PR, ses tickets, ses tâches et ses notes.</p></div><div class="pj-list">${listHTML()}</div>`}</div></div>`;
   const root = need('.pj', main);
   $('.toolbar [data-pj=new]', main)?.addEventListener('click', () => void createDialog());
-  if (p) void hydrate(root, p);
+  if (p) void hydrate(root, p, tab);
   root.addEventListener('submit', async e => {
-    const f = target(e).closest('.pj-add'); if (!f || !p) return;
-    e.preventDefault();
-    const i = need<HTMLInputElement>('input', f), v = i.value; if (!v.trim()) return;
-    i.value = ''; await todo.add(v, p.id); refresh();
+    if (!p) return;
+    const f = target(e);
+    if (f.closest('.pj-add')) {
+      e.preventDefault();
+      const i = need<HTMLInputElement>('input', f), v = i.value; if (!v.trim()) return;
+      i.value = ''; await todo.add(v, p.id); refresh();
+    }
+    if (f.closest('.pj-site-form')) {
+      e.preventDefault();
+      const v = need<HTMLInputElement>('input', f).value.trim();
+      if (!/^https:\/\/[^\s]+$/i.test(v)) { toast('L’adresse doit commencer par https://'); return; }
+      await model.setField(p, 'site', v); toast('Site associé au projet');
+    }
   });
   root.addEventListener('click', async e => {
     const t = target(e), open = t.closest('[data-pj-open]');
     if (open) { await go(open.dataset.pjOpen || null); return; }
+    const tb = t.closest('[data-pj-tab]');
+    if (tb && p) { await app.setView({ type: 'projets', project: p.id, tab: tb.dataset.pjTab ?? 'overview' }); return; }
     const issue = t.closest('.lv-row[data-issue]');
     if (issue) { void import('../../integrations/linear/page.ts').then(m => m.openTicket(issue.dataset.issue ?? '')); return; }
     const b = t.closest('[data-pj]'); if (!b) return;
@@ -149,19 +237,14 @@ export function mount(main: HTMLElement): void {
     if (act === 'edit') app.openNote(p.id);
     if (act === 'kanban') { todo.showProject(p.id); await app.setView({ type: 'tasks' }); }
     if (act === 'new-note') { const n = await store.createNote({ title: '', body: `\n\n#${p.tag}` }); app.openNote(n.id); }
-    if (act === 'pick') { const r = await native.call('project', 'pick', { project: p.id }, 600000); if (r.ok) { folders.delete(p.id); void hydrate(root, p); } }
+    if (act === 'pick') { const r = await native.call('project', 'pick', { project: p.id }, 600000); if (r.ok) { folders.delete(p.id); void hydrate(root, p, tab); } }
     if (act === 'vscode' || act === 'finder' || act === 'terminal') { const r = await native.call('project', 'open', { project: p.id, app: act }, 15000); if (!r.ok) toast(r.message ?? 'Impossible d’ouvrir.'); }
-    if (act === 'link-repo' && b.dataset.repo) await addRepo(p, b.dataset.repo);
+    if (act === 'link-repo' && b.dataset.repo) { await model.setField(p, 'dépôts', [...p.repos, b.dataset.repo].join(', ')); toast(`${b.dataset.repo} associé au projet`); }
+    if (act === 'review-working') await review.review(p, 'working');
+    if (act === 'review-branch') await review.review(p, 'branch');
+    if (act === 'site-check') await checkSite(root, p);
+    if (act === 'site-edit') { const box = $('[data-sec="site"] .pj-sec-body', root); if (box) box.innerHTML = `<form class="td-add pj-site-form"><span class="td-plus">${icon('link')}</span><input type="url" value="${esc(p.site ?? '')}" aria-label="Adresse du site" required></form>`; }
   });
-}
-
-/** Ajoute un dépôt au bloc ```projet de la note du projet. */
-async function addRepo(p: Project, repo: string): Promise<void> {
-  const body = store.getBody(p.note); if (body == null) return;
-  const repos = [...p.repos, repo].join(', ');
-  const next = /^\s*d[ée]p[oô]ts?\s*:.*$/m.test(body) ? body.replace(/^(\s*)d[ée]p[oô]ts?\s*:.*$/m, `$1dépôts: ${repos}`) : body.replace(/^```projet[ \t]*\n/m, m => `${m}dépôts: ${repos}\n`);
-  store.touch(p.note); store.setBody(p.note, next); p.note.updated = Date.now(); await store.saveNote(p.note);
-  toast(`${repo} associé au projet`);
 }
 
 export function refresh(): void {
@@ -171,4 +254,7 @@ export function refresh(): void {
   const tasks = $('.pj-tasklist', root), notes = $('[data-sec="notes"] .pj-sec-body', root);
   if (tasks) tasks.innerHTML = taskRows(p);
   if (notes) notes.innerHTML = noteRows(p);
+  // Le bloc ```projet a changé (site, dépôts) : on redessine l'en-tête et l'onglet.
+  const head = $('.pj-links', root), want = `${p.repos.join(',')}|${p.site ?? ''}|${p.linear ?? ''}`;
+  if (head && head.dataset.k !== want) mount(need('#main'));
 }

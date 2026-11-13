@@ -144,3 +144,57 @@ export async function project(repo: string, { fresh = false } = {}): Promise<{ i
 export const activityOf = (repo: string, n = 8): { e: GhEvent; d: Described }[] => events.filter(e => e.repo?.name === repo).slice(0, n).map(e => ({ e, d: describe(e) }));
 /** Dépôts de l'utilisateur (pour choisir celui d'un projet). */
 export const myRepos = async (): Promise<string[]> => (await api<{ full_name: string }[]>('/user/repos?sort=pushed&per_page=50&affiliation=owner,collaborator,organization_member')).map(r => r.full_name);
+
+// ---------- Flux de travail (gitflow) d'un dépôt ----------
+export type Stage = 'branche' | 'pr' | 'ci' | 'revue' | 'prete' | 'fusionnee' | 'publiee' | 'fermee';
+export interface FlowItem {
+  branch: string; stage: Stage; updated: string;
+  pr?: { number: number; title: string; url: string; author: string; draft: boolean; mergedAt: string | null };
+  ci: CiState; review: ReviewState; release?: { tag: string; url: string };
+}
+export interface Flow { repo: string; base: string; items: FlowItem[]; baseCi: CiState; releases: { tag: string; url: string; at: string }[] }
+
+interface RawRun { head_branch: string; status: string; conclusion: string | null; created_at: string; name: string }
+interface RawPullAll extends RawPull { state: 'open' | 'closed'; merged_at: string | null; closed_at: string | null; created_at: string }
+const runState = (r?: RawRun): CiState => !r ? 'none' : r.status !== 'completed' ? 'pending' : ['success', 'skipped', 'neutral'].includes(r.conclusion ?? '') ? 'success' : 'failure';
+const flowCache = new Map<string, { at: number; flow: Flow }>();
+
+/** Où en est chaque branche : PR, CI, revue, fusion dans la branche principale, publication. */
+export async function flow(repo: string, { fresh = false } = {}): Promise<Flow> {
+  if (!REPO_RE.test(repo)) throw new Error(`Dépôt invalide : ${repo}`);
+  const hit = flowCache.get(repo); if (!fresh && hit && Date.now() - hit.at < 60e3) return hit.flow;
+  const [info, branches, pulls, releases, runs] = await Promise.all([
+    api<RepoInfo>(`/repos/${repo}`),
+    api<{ name: string }[]>(`/repos/${repo}/branches?per_page=60`),
+    api<RawPullAll[]>(`/repos/${repo}/pulls?state=all&per_page=30&sort=updated&direction=desc`),
+    api<{ tag_name: string; html_url: string; published_at: string; draft: boolean }[]>(`/repos/${repo}/releases?per_page=10`),
+    api<{ workflow_runs: RawRun[] }>(`/repos/${repo}/actions/runs?per_page=60`).catch(() => ({ workflow_runs: [] as RawRun[] })),
+  ]);
+  const base = info.default_branch;
+  const lastRun = new Map<string, RawRun>();
+  for (const r of runs.workflow_runs) if (r.name !== 'Dependabot Updates' && !lastRun.has(r.head_branch)) lastRun.set(r.head_branch, r);
+  const rels = releases.filter(r => !r.draft && r.published_at).sort((a, b) => a.published_at.localeCompare(b.published_at));
+  const items: FlowItem[] = [], seen = new Set<string>([base]);
+  for (const p of pulls) {
+    if (seen.has(p.head.ref) || p.head.ref === base) continue;
+    seen.add(p.head.ref);
+    const pr = { number: p.number, title: p.title, url: p.html_url, author: p.user?.login ?? '', draft: !!p.draft, mergedAt: p.merged_at };
+    if (p.state === 'closed') {
+      const rel = p.merged_at ? rels.find(r => r.published_at >= (p.merged_at ?? '')) : undefined;
+      items.push({ branch: p.head.ref, stage: p.merged_at ? (rel ? 'publiee' : 'fusionnee') : 'fermee', updated: p.merged_at ?? p.closed_at ?? p.updated_at, pr, ci: runState(lastRun.get(p.head.ref)), review: 'none', ...(rel ? { release: { tag: rel.tag_name, url: rel.html_url } } : {}) });
+      continue;
+    }
+    const [ci, review] = await Promise.all([ciOf(repo, p.head.sha).catch((): CiState => runState(lastRun.get(p.head.ref))), reviewOf(repo, p).catch((): ReviewState => 'none')]);
+    const stage: Stage = p.draft ? 'pr' : ci === 'failure' || ci === 'pending' ? 'ci' : review === 'approved' ? 'prete' : review === 'changes' || review === 'pending' ? 'revue' : ci === 'success' ? 'prete' : 'pr';
+    items.push({ branch: p.head.ref, stage, updated: p.updated_at, pr, ci, review });
+  }
+  for (const b of branches) {
+    if (seen.has(b.name)) continue;
+    seen.add(b.name);
+    const run = lastRun.get(b.name);
+    items.push({ branch: b.name, stage: 'branche', updated: run?.created_at ?? '', ci: runState(run), review: 'none' });
+  }
+  const flow: Flow = { repo, base, items, baseCi: runState(lastRun.get(base)), releases: rels.slice(-5).reverse().map(r => ({ tag: r.tag_name, url: r.html_url, at: r.published_at })) };
+  flowCache.set(repo, { at: Date.now(), flow });
+  return flow;
+}

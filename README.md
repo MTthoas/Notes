@@ -74,12 +74,28 @@ Un **projet** réunit son dossier sur le Mac, son ou ses dépôts GitHub, son pr
 nom: Studio
 dépôts: MTthoas/Studio
 linear: Studio
+site: https://studio.exemple.com
 ```
 
 - Une note ou une tâche y appartient avec le tag `#projet/studio` — posé par le bouton **Projet** de l'éditeur, le menu d'une tâche, ou en créant depuis la page du projet.
 - Le **cockpit** du projet montre les PR ouvertes avec leur CI et leurs revues, l'activité du dépôt, les tickets Linear, les tâches et les notes ; il ouvre le dossier dans **VS Code**, le Finder ou le Terminal (app Mac).
 - Le **dossier local** est choisi dans le sélecteur de macOS et reste dans les réglages de l'app Mac : il n'est jamais écrit dans une note ni synchronisé. L'app n'en lit l'état Git qu'en lecture seule.
 - La page Tâches filtre par projet, en liste ou en Kanban.
+
+Chaque projet a ses **sous-menus**, aussi listés dans la barre latérale :
+
+| Onglet | Ce qu'on y trouve |
+| --- | --- |
+| Vue d'ensemble | Une carte par sous-menu : tâches ouvertes, PR et CI, flux, dernière session IA, état du site, notes |
+| Code | Dossier local, branches locales (avance / retard), PR et activité, **revue IA** des changements en cours ou de la branche |
+| Flux | Le parcours de chaque branche façon gitflow : en cours → PR ouverte → prête à fusionner → fusionnée → publiée (Release), avec CI et revues |
+| Sessions IA | Les sessions **Claude Code** menées dans le dossier, en direct : ce qu'elles font, fichiers modifiés, tokens consommés, état de la limite d'utilisation |
+| Tâches · Notes | Ce qui est tagué `#projet/<nom>` |
+| Site | Le site du projet, vérifié depuis le Mac (en ligne, code, temps de réponse) |
+
+- **Sessions IA** : l'app Mac lit les journaux locaux de Claude Code (`~/.claude/projects/…`), en lecture seule ; rien ne quitte la machine.
+- **Revue IA** : le diff est lu en local, montré, puis envoyé à l'IA branchée seulement après ton clic ; la revue peut être enregistrée comme note du projet.
+- **Consommation** (Réglages → IA) : tokens du mois par fournisseur et modèle, et ce qu'il reste sur le budget mensuel que tu fixes.
 
 ## Plugins
 
