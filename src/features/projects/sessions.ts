@@ -9,6 +9,9 @@ import * as github from '../../integrations/github/api.ts';
 import { esc } from '../../lib/markdown.ts';
 import { icon, rel, modal, need, toast, confirmBox, errMsg, $ } from '../../ui/kit.ts';
 import * as review from './review.ts';
+import * as store from '../../core/store.ts';
+import * as model from './model.ts';
+import { menu } from '../../ui/kit.ts';
 import type { Project } from './model.ts';
 
 interface Tokens { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -28,12 +31,42 @@ const elapsed = (r: AgentRun) => { const s = Math.max(0, Math.round(((r.finished
 const STATUS: Record<string, [string, string]> = { starting: ['amber', 'Démarrage'], running: ['amber', 'En cours'], done: ['green', 'Terminé'], error: ['red', 'Erreur'], stopped: ['gray', 'Arrêté'] };
 const pill = (s: string) => { const [c, l] = STATUS[s] ?? ['gray', s]; return `<span class="ag-pill${s === 'running' || s === 'starting' ? ' live' : ''}" style="--c:var(--c-${c})">${l}</span>`; };
 
+// ---------- Notes jointes ----------
+// Une note du projet peut servir de contexte ou de cahier des charges : son contenu est ajouté à la consigne.
+// Les notes chiffrées ou marquées #privé ne sont jamais envoyées.
+const MAX_NOTE = 20000, MAX_ALL = 60000;
+let pending: { project: string; notes: string[]; prompt: string } | null = null;
+const titleOf = (id: string) => store.get(id)?.title.trim() || 'Sans titre';
+const chip = (id: string) => `<span class="ag-note" data-note-id="${esc(id)}">${icon('notes')}${esc(titleOf(id))}<button type="button" data-ag-unnote="${esc(id)}" aria-label="Retirer la note">×</button></span>`;
+/** Notes du projet qu'on peut joindre (lisibles, ni chiffrées ni privées). */
+function attachable(p: Project): { id: string; title: string }[] {
+  return model.notesOf(p).filter(n => n.id !== p.id && ai.shareable(n) && store.getBody(n) != null).map(n => ({ id: n.id, title: n.title.trim() || 'Sans titre' }));
+}
+/** Ouvre l'onglet Claude Code du projet avec des notes déjà jointes et, éventuellement, une consigne. */
+export function handoff(p: Project, { notes = [] as string[], prompt = '' } = {}): void { pending = { project: p.id, notes, prompt }; selected = null; }
+/** Consigne finale : le texte de l'utilisateur, puis le contenu des notes jointes. */
+function withNotes(prompt: string, ids: string[]): { text: string; refused: string[] } {
+  const parts: string[] = [], refused: string[] = []; let total = 0;
+  for (const id of ids) {
+    const n = store.get(id), body = n ? store.getBody(n) : null;
+    if (!n || body == null || !ai.shareable(n)) { refused.push(titleOf(id)); continue; }
+    const chunk = body.length > MAX_NOTE ? body.slice(0, MAX_NOTE) + '\n…(tronquée)' : body;
+    if (total + chunk.length > MAX_ALL) { refused.push(titleOf(id)); continue; }
+    total += chunk.length; parts.push(`## Note « ${n.title.trim() || 'Sans titre'} »\n\n${chunk}`);
+  }
+  const head = prompt || (parts.length === 1 ? 'Réalise ce que décrit la note jointe.' : 'Réalise ce que décrivent les notes jointes.');
+  return { text: parts.length ? `${head}\n\n---\nNotes du projet jointes par l’utilisateur (contexte et cahier des charges) :\n\n${parts.join('\n\n')}` : head, refused };
+}
+
 // ---------- Consigne ----------
 export function composerHTML(p: Project, { session = '', compact = false, machine = '' } = {}): string {
   const models = ai.CC_MODELS.map(([v, l]) => `<option value="${v}">${v ? l : 'Modèle par défaut'}</option>`).join('');
   if (session) return `<form class="ag-compose ag-continue" data-session="${esc(session)}"${machine ? ` data-machine="${esc(machine)}"` : ''}><textarea name="prompt" rows="2" placeholder="Continuer cette session : précise, corrige, demande la suite…" aria-label="Continuer la session"></textarea>
     <div class="ag-opts"><span class="ag-hint">${icon('history')}Reprend la session là où elle s’est arrêtée, dans le même dossier.</span><button class="btn btn-primary">${icon('play')}Envoyer<kbd>⌘↩</kbd></button></div></form>`;
-  return `<form class="ag-compose${compact ? ' compact' : ''}"><textarea name="prompt" rows="${compact ? 1 : 3}" placeholder="Que doit faire Claude Code dans ${esc(p.name)} ? Ex. « Ajoute des tests au parseur de dates »" aria-label="Consigne pour Claude Code"></textarea>
+  const pre = pending?.project === p.id ? pending : null; if (pre && !compact) pending = null;
+  const notes = pre && !compact ? pre.notes : [];
+  return `<form class="ag-compose${compact ? ' compact' : ''}" data-notes="${esc(notes.join(','))}"><textarea name="prompt" rows="${compact ? 1 : 3}" placeholder="Que doit faire Claude Code dans ${esc(p.name)} ? Ex. « Ajoute des tests au parseur de dates »" aria-label="Consigne pour Claude Code">${pre && !compact ? esc(pre.prompt) : ''}</textarea>
+    <div class="ag-ctx">${notes.map(chip).join('')}<button type="button" class="ag-addnote" data-ag-note>${icon('plus')}Joindre une note</button></div>
     <div class="ag-opts">
       <div class="ag-seg" role="radiogroup" aria-label="Mode"><label><input type="radio" name="mode" value="edit" checked><span>${icon('pencil')}Modifier</span></label><label><input type="radio" name="mode" value="read"><span>${icon('search')}Analyser</span></label></div>
       ${bridge.local() && machine !== 'server' ? '<label class="ag-check" title="Autorise npm test et npm run … : le code du projet peut alors s’exécuter"><input type="checkbox" name="tests">Tests npm</label>' : ''}
@@ -53,13 +86,26 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
     if (hint) hint.innerHTML = t.value === 'edit' ? `${icon('shield')}Copie isolée du dépôt : ton dossier reste intact.` : `${icon('eye')}Lecture seule : analyse et propose, sans rien modifier.`;
     if (tests) { tests.disabled = t.value !== 'edit'; if (tests.disabled) tests.checked = false; }
   });
+  root.addEventListener('click', e => {
+    const t = e.target as HTMLElement, f = t.closest<HTMLFormElement>('.ag-compose'); if (!f) return;
+    const ids = () => (f.dataset.notes || '').split(',').filter(Boolean);
+    const un = t.closest<HTMLElement>('[data-ag-unnote]');
+    if (un) { f.dataset.notes = ids().filter(x => x !== un.dataset.agUnnote).join(','); un.closest('.ag-note')?.remove(); return; }
+    const add = t.closest<HTMLElement>('[data-ag-note]'); if (!add) return;
+    const have = new Set(ids()), list = attachable(p).filter(n => !have.has(n.id));
+    menu(add, list.length ? [{ label: 'Joindre une note du projet' }, ...list.map(n => ({ label: n.title, icon: 'notes', run: () => { f.dataset.notes = [...ids(), n.id].join(','); add.insertAdjacentHTML('beforebegin', chip(n.id)); } }))]
+      : [{ label: model.notesOf(p).length > 1 ? 'Toutes les notes lisibles sont déjà jointes' : `Aucune note dans ce projet : ajoute #${p.tag} à une note` }]);
+  });
   root.addEventListener('keydown', e => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (e.target as HTMLElement).closest('.ag-compose')) { e.preventDefault(); (e.target as HTMLElement).closest<HTMLFormElement>('form')?.requestSubmit(); }
   });
   root.addEventListener('submit', async e => {
     const f = (e.target as HTMLElement).closest<HTMLFormElement>('.ag-compose'); if (!f) return;
     e.preventDefault(); e.stopPropagation();
-    const ta = need<HTMLTextAreaElement>('textarea', f), prompt = ta.value.trim(); if (!prompt) { ta.focus(); return; }
+    const ta = need<HTMLTextAreaElement>('textarea', f), noteIds = (f.dataset.notes || '').split(',').filter(Boolean);
+    if (!ta.value.trim() && !noteIds.length) { ta.focus(); return; }
+    const built = withNotes(ta.value.trim(), noteIds), prompt = built.text;
+    if (built.refused.length) toast(`Non jointe${built.refused.length > 1 ? 's' : ''} (verrouillée, privée ou trop longue) : ${built.refused.join(', ')}`);
     const btn = need<HTMLButtonElement>('button.btn-primary', f), label = btn.innerHTML;
     const val = (n: string) => (f.elements.namedItem(n) as HTMLInputElement | null);
     const body: Record<string, unknown> = { project: p.id, prompt };
@@ -69,7 +115,7 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
     const r = await bridge.call('agent', 'start', body, 60000);
     btn.disabled = false; btn.innerHTML = label;
     if (!r.ok) { toast(r.message ?? 'Lancement impossible.'); return; }
-    ta.value = '';
+    ta.value = ''; f.dataset.notes = ''; f.querySelectorAll('.ag-note').forEach(x => x.remove());
     toast(f.dataset.session ? 'Session reprise' : 'Claude Code est au travail');
     onStarted(r as unknown as AgentRun);
   });
@@ -98,7 +144,7 @@ function runCard(r: AgentRun): string {
 
 function treeRow(w: Worktree): string {
   return `<div class="ag-tree"><span class="ag-tree-main"><code>${esc(w.branch || w.name)}</code><em>${w.changes ? `${w.changes} fichier${w.changes > 1 ? 's' : ''} modifié${w.changes > 1 ? 's' : ''}` : 'aucun changement en attente'}${w.ahead ? ` · ${w.ahead} commit${w.ahead > 1 ? 's' : ''}` : ''}${w.pushed ? ' · poussée' : ''}</em></span>
-    <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${w.changes || w.ahead ? '' : ' disabled'}>${icon('upload')}Publier</button><button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
+    <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${w.changes || w.ahead ? '' : ' disabled'}>${icon('upload')}Publier</button>${w.pushed ? `<button class="btn" data-ag="pr" data-wt="${esc(w.name)}" title="Ouvrir la page de la pull request sur GitHub">${icon('github')}PR</button>` : ''}<button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
 }
 
 function listHTML(list: Session[], quota: Quota | null): string {
@@ -133,90 +179,156 @@ function detailHTML(raw: Partial<Session> & { actions?: Action[] }, root: string
 }
 
 // ---------- Actions sur les copies ----------
-// Titres au format des commits conventionnels : « type: description ».
-const TYPES: [string, string][] = [['feat', 'Nouvelle fonctionnalité'], ['fix', 'Correction de bug'], ['chore', 'Entretien, configuration, dépendances'], ['refactor', 'Refonte sans changement de comportement'], ['docs', 'Documentation'], ['test', 'Tests']];
-const CONV = /^(feat|fix|chore|refactor|docs|test|perf|ci|build|style)(\([\w./-]+\))?!?:\s*/i;
-const withType = (type: string, title: string): string => `${type}: ${title.replace(CONV, '').trim()}`.slice(0, 72);
-/** Type le plus probable d'après la consigne et le compte rendu de l'agent. */
-function guessType(text: string): string {
-  const t = text.toLowerCase();
-  if (/\b(fix|bug|corrig|répar|repar|erreur|crash|plant|cass|régression|regression|ne (marche|fonctionne|s['’]affiche) (pas|plus))/.test(t)) return 'fix';
-  if (/\b(readme|documentation|docs?\b|comment(e|aire))/.test(t)) return 'docs';
-  if (/\b(refactor|refacto|nettoie|nettoy|simplifi|renomm|réorganis)/.test(t)) return 'refactor';
-  if (/\b(tests?|couverture)\b/.test(t)) return 'test';
-  if (/\b(dépendance|dependenc|bump|mets? à jour|mise à jour|config|lint|ci\b|build)/.test(t)) return 'chore';
+// ---------- Message de commit (Conventional Commits) ----------
+const TYPES = 'feat|fix|chore|docs|refactor|test|perf|style|build|ci';
+const COMMIT_RE = new RegExp(`^(${TYPES})(\\([\\w./-]+\\))?!?: \\S`);
+/** Types proposés en un clic dans la fenêtre de publication. */
+const KINDS: [string, string][] = [['feat', 'Nouvelle fonctionnalité'], ['fix', 'Correction de bug'], ['chore', 'Entretien, configuration, dépendances'], ['refactor', 'Refonte sans changement de comportement'], ['docs', 'Documentation'], ['test', 'Tests']];
+/** Remplace le type d'un titre en gardant sa portée et son résumé : « feat(ui): x » → « fix(ui): x ». */
+const retype = (type: string, line: string): string => { const m = line.match(new RegExp(`^(?:${TYPES})(\\([^)]*\\))?!?:\\s*(.*)$`)); return m ? `${type}${m[1] ?? ''}: ${m[2] ?? ''}` : `${type}: ${line}`; };
+/** Type probable d'après la consigne et les fichiers touchés. */
+function guessType(text: string, files: string[]): string {
+  if (files.length && files.every(f => /\.(md|txt)$|^docs?\//i.test(f))) return 'docs';
+  if (files.length && files.every(f => /(^|\/)(tests?|__tests__)\/|\.(test|spec)\.\w+$/.test(f))) return 'test';
+  if (/\b(corrig|répar|repar|bug|fix|erreur|crash|plante|régression)/i.test(text)) return 'fix';
+  if (/\b(refacto|nettoi|simplifi|réorganis|renomm)/i.test(text)) return 'refactor';
+  if (/\b(doc|readme|documentation)\b/i.test(text)) return 'docs';
+  if (/\btests?\b/i.test(text)) return 'test';
+  if (/\b(dépendances?|mise à jour|mettre à jour|upgrade|bump|config|workflow|ci)\b/i.test(text)) return 'chore';
   return 'feat';
 }
-const TITLE_PROMPT = `Propose trois titres pour le commit et la pull request qui publient ce travail.
-Format obligatoire, celui des commits conventionnels : « type: Description », avec type parmi feat, fix, chore, refactor, docs, test (feat = nouvelle fonctionnalité, fix = correction de bug, chore = entretien).
-En anglais, à l'impératif, première lettre de la description en majuscule, sans point final, 72 caractères au plus. Décris le changement réel, pas la consigne mot pour mot.
-Mets en premier le titre que tu recommandes. Réponds uniquement par les trois titres, un par ligne, sans numéro ni commentaire.`;
-/** Titres proposés par l'IA, à partir de la consigne, du compte rendu de l'agent et de la liste des fichiers modifiés (pas du contenu du diff). */
-async function suggestTitles(p: Project, wt: string, run: AgentRun | undefined): Promise<string[]> {
-  const d = await native.call('project', 'diff', { project: p.id, scope: 'working', worktree: wt }, 30000);
-  const files = d.ok ? `${String(d.stat ?? '').trim()}\n${String(d.untracked ?? '').trim()}`.trim().slice(0, 3000) : '';
-  const r = await ai.run({ prompt: TITLE_PROMPT, tools: [], context: `Projet : ${p.name}\n\nConsigne donnée à l'agent :\n${run?.prompt ?? '(inconnue)'}\n\nCompte rendu de l'agent :\n${(run?.result ?? '').slice(0, 4000) || '(aucun)'}\n\nFichiers modifiés :\n${files || '(inconnus)'}` });
-  const out = r.text.split('\n').map(l => l.replace(/^[\s\-*•\d.)`"«]+/, '').replace(/[`"»\s]+$/, '')).filter(l => CONV.test(l) && l.replace(CONV, '').length > 2).map(l => l.slice(0, 72));
-  return [...new Set(out)].slice(0, 3);
+/** Fichiers listés par `git diff --stat`. */
+const statFiles = (stat: string): string[] => stat.split('\n').map(l => l.split('|')[0]?.trim() ?? '').filter(f => f && !/files? changed/.test(f));
+/** Proposition immédiate, sans IA : type, puis la consigne résumée. */
+function draftMessage(prompt: string, files: string[]): string {
+  const first = prompt.split('\n')[0]?.replace(/[.!…]+$/, '').trim() ?? '';
+  const summary = (first.charAt(0).toLowerCase() + first.slice(1)).slice(0, 64) || 'update from Claude Code';
+  return `${guessType(prompt, files)}: ${summary}`;
 }
+/** Nettoie la réponse de l'IA : 1 ligne de titre conforme, et au plus 1 ligne de détail. */
+function cleanMessage(raw: string, fallbackType: string): string {
+  const lines = raw.replace(/```\w*/g, '').split('\n').map(l => l.trim().replace(/^["'`]+|["'`]+$/g, '')).filter(Boolean);
+  let subject = lines[0] ?? '';
+  if (!subject) return '';
+  if (!COMMIT_RE.test(subject)) subject = `${fallbackType}: ${subject.replace(/^\w+(\(.*?\))?:\s*/, '')}`;
+  subject = subject.length > 72 ? subject.slice(0, 71).trimEnd() + '…' : subject;
+  const detail = lines.slice(1).find(l => !COMMIT_RE.test(l));
+  return detail ? `${subject}\n\n${detail.slice(0, 160)}` : subject;
+}
+const COMMIT_SYSTEM = `Tu écris des messages de commit au format Conventional Commits.
+Réponds uniquement par le message, sans guillemets, sans bloc de code, sans explication.
+Ligne 1 : type(portée): résumé — types : feat, fix, chore, docs, refactor, test, perf, style, build, ci ; portée facultative et courte ; 72 caractères au plus ; à l’impératif ; sans point final.
+Ligne 2 (facultative) : une seule phrase de détail, seulement si elle apporte quelque chose.
+Écris dans la même langue que les commits récents du dépôt, et dans le même style.`;
+async function suggestMessage(p: Project, wt: string, run: AgentRun | undefined): Promise<{ draft: string; ai: Promise<string> | null; files: string[] }> {
+  const d = await native.call('project', 'diff', { project: p.id, scope: 'working', worktree: wt }, 30000);
+  const stat = String(d.stat ?? ''), files = statFiles(stat), prompt = run?.prompt ?? wt.replace(/^studio-|-\d{4}-\d{4}$/g, '').replace(/-/g, ' ');
+  const draft = draftMessage(prompt, files);
+  if (!d.ok || !ai.ready() || !String(d.patch ?? '').trim()) return { draft, ai: null, files };
+  const user = `Consigne donnée à l’agent : ${prompt}\n\n${run?.result ? `Compte rendu de l’agent :\n${run.result.slice(0, 1500)}\n\n` : ''}Commits récents du dépôt :\n${String(d.log ?? '').trim() || '(aucun)'}\n\nFichiers modifiés :\n${stat}\n\nDiff (extrait) :\n\`\`\`diff\n${String(d.patch).slice(0, 20000)}\n\`\`\``;
+  return { draft, files, ai: ai.complete(COMMIT_SYSTEM, user).then(t => cleanMessage(t, guessType(prompt, files))) };
+}
+
+/** Nom de branche conventionnel tiré du titre du commit : « feat(tasks): add parser tests » → feat/tasks-add-parser-tests. */
+export function branchName(subject: string): string {
+  const m = subject.match(new RegExp(`^(${TYPES})(?:\\(([^)]+)\\))?!?:\\s*(.*)$`));
+  const type = m?.[1] ?? 'feat', words = `${m?.[2] ?? ''} ${m?.[3] ?? subject}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+  let slug = '';
+  for (const w of words) { if ((slug + '-' + w).length > 44) break; slug = slug ? `${slug}-${w}` : w; }
+  return `${type}/${slug || 'update'}`;
+}
+
+/** Page GitHub de création de la PR, déjà remplie (marche avec n'importe quel jeton, ou sans). */
+const compareURL = (repo: string, base: string, branch: string, title: string, body: string) =>
+  `https://github.com/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?quick_pull=1&title=${encodeURIComponent(title)}&body=${encodeURIComponent(body.slice(0, 3500))}`;
+const prBody = (run: AgentRun | undefined, detail: string) => `${detail ? `${detail}\n\n` : ''}${run?.result ? `${run.result}\n\n` : ''}---\nPréparé par Claude Code depuis Studio.`;
 
 async function publish(p: Project, wt: string, root: HTMLElement): Promise<void> {
   const run = runs.find(r => r.worktree === wt), repo = p.repos[0];
-  const subject = ((run?.prompt ?? wt.replace(/^studio-|-\d{4}-\d{4}$/g, '').replace(/-/g, ' ')).split('\n')[0] ?? wt).trim().replace(/[.!?…]+$/, '');
-  const type = guessType(`${run?.prompt ?? wt}\n${run?.result ?? ''}`);
-  const title = withType(type, subject.charAt(0).toUpperCase() + subject.slice(1));
   const canPR = !!repo && github.connected();
-  const provider = ai.PROVIDERS[ai.config().provider], auto = ai.ready() && ai.config().provider === 'claudecode';
   const m = modal({ cls: 'ag-pub', title: 'Publier le travail de l’agent', html: `
-    <div class="pub-type"><span>Type</span><div class="ag-seg" role="radiogroup" aria-label="Type de changement">${TYPES.map(([k, l]) => `<label title="${esc(l)}"><input type="radio" name="ctype" value="${k}"${k === type ? ' checked' : ''}><span>${k}</span></label>`).join('')}</div></div>
-    <div class="pub-sugg" data-sugg>${auto ? '<em><span class="spin"></span>Claude propose des titres…</em>' : ai.ready() ? `<button type="button" class="btn" data-suggest>${icon('sparkle')}Proposer des titres avec ${esc(provider)}</button>` : ''}</div>
-    <label class="pj-field">Message de commit<input class="field" name="msg" value="${esc(title)}" required></label>
-    ${canPR ? `<label class="cx-check"><input type="checkbox" name="pr" checked> Ouvrir une pull request sur <strong>${esc(repo)}</strong></label>
-    <label class="pj-field">Titre de la PR<input class="field" name="title" value="${esc(title)}"></label>` : `<p class="modal-hint">${repo ? 'Connecte GitHub pour ouvrir la pull request depuis Studio.' : 'Associe un dépôt GitHub au projet pour ouvrir une pull request.'}</p>`}
+    <div class="pub-type"><span>Type</span><div class="ag-seg" role="radiogroup" aria-label="Type de changement">${KINDS.map(([k, l]) => `<label title="${esc(l)}"><input type="radio" name="ctype" value="${k}"><span>${k}</span></label>`).join('')}</div></div>
+    <label class="pj-field"><span class="ag-msg-h">Message de commit<em class="ag-sug" hidden>${icon('sparkle')}proposé par l’IA</em></span><textarea class="field ag-msg" name="msg" rows="3" spellcheck="false" required></textarea></label>
+    <div class="ag-sug-row"><span class="ag-sug-st"><span class="spin"></span>Lecture des changements…</span><button type="button" class="link-btn" data-resug hidden>${icon('refresh')}Reproposer</button></div>
+    <label class="pj-field"><span>Branche</span><input class="field ag-branch" name="branch" spellcheck="false" autocomplete="off" required></label>
+    ${repo ? `<label class="cx-check"><input type="checkbox" name="pr" checked> Ouvrir une pull request sur <strong>${esc(repo)}</strong></label>
+    <label class="pj-field"><span>Titre de la PR</span><input class="field" name="title"></label>` : '<p class="modal-hint">Associe un dépôt GitHub au projet pour ouvrir une pull request.</p>'}
     <p class="modal-hint">${icon('shield')}Les changements de la copie sont validés puis la branche est poussée avec tes identifiants Git habituels. Ton dossier de travail n’est pas touché.</p>
-    <p class="rv-status"></p>
+    <div class="rv-status"></div>
     <div class="modal-actions"><button class="btn" data-x>Annuler</button><button class="btn btn-primary" data-go>${icon('upload')}Publier</button></div>` });
-  need('[data-x]', m.node).onclick = m.close;
-  const f = (n: string) => m.node.querySelector<HTMLInputElement>(`[name=${n}]`);
-  // Changer de type réécrit le préfixe du message et du titre ; choisir un titre proposé remplit les deux.
-  const inputs = () => [f('msg'), f('title')].filter((i): i is HTMLInputElement => !!i);
-  const pick = (t: string) => {
-    inputs().forEach(i => { i.value = t; });
-    const k = CONV.exec(t)?.[1]?.toLowerCase(), radio = k ? m.node.querySelector<HTMLInputElement>(`[name=ctype][value="${k}"]`) : null;
-    if (radio) radio.checked = true;
+  const msg = need<HTMLTextAreaElement>('[name=msg]', m.node), title = m.node.querySelector<HTMLInputElement>('[name=title]');
+  const sugSt = need('.ag-sug-st', m.node), sugTag = need('.ag-sug', m.node), resug = need<HTMLButtonElement>('[data-resug]', m.node);
+  const branchIn = need<HTMLInputElement>('[name=branch]', m.node);
+  let editedMsg = false, editedTitle = false, editedBranch = false;
+  const subject = () => msg.value.split('\n')[0]?.trim() ?? '';
+  const typeOf = () => new RegExp(`^(${TYPES})`).exec(subject())?.[1] ?? '';
+  const sync = () => {
+    if (title && !editedTitle) title.value = subject();
+    if (!editedBranch) branchIn.value = branchName(subject());
+    m.node.querySelectorAll<HTMLInputElement>('[name=ctype]').forEach(r => { r.checked = r.value === typeOf(); });
   };
-  const sugg = need('[data-sugg]', m.node);
-  const suggest = async () => {
-    sugg.innerHTML = `<em><span class="spin"></span>${esc(provider)} propose des titres…</em>`;
-    try {
-      const list = await suggestTitles(p, wt, run);
-      if (!m.node.isConnected) return;
-      sugg.innerHTML = list.length ? `<em>Titres proposés</em>${list.map(t => `<button type="button" class="lv-chip" data-title="${esc(t)}">${esc(t)}</button>`).join('')}` : '<em>Aucun titre proposé : écris le tien ci-dessous.</em>';
-      // Le titre recommandé remplace le titre par défaut, sauf si tu as déjà écrit le tien.
-      const first = list[0]; if (first && inputs().every(i => i.value === i.defaultValue)) pick(first);
-    } catch (e) { if (m.node.isConnected) sugg.innerHTML = `<em class="err">Titres non proposés : ${esc(errMsg(e))}</em>`; }
-  };
-  m.node.addEventListener('change', e => { const t = e.target as HTMLInputElement; if (t.name === 'ctype') inputs().forEach(i => { i.value = withType(t.value, i.value); }); });
-  m.node.addEventListener('click', e => {
-    const t = e.target as HTMLElement, chip = t.closest<HTMLElement>('[data-title]');
-    if (chip) pick(chip.dataset.title ?? '');
-    else if (t.closest('[data-suggest]')) void suggest();
+  // Changer de type réécrit seulement le préfixe du message (la portée et le résumé restent).
+  m.node.addEventListener('change', e => {
+    const t = e.target as HTMLInputElement; if (t.name !== 'ctype') return;
+    const lines = msg.value.split('\n'); lines[0] = retype(t.value, lines[0] ?? ''); msg.value = lines.join('\n'); sync();
   });
-  if (auto) void suggest();
-  need('[data-go]', m.node).onclick = async () => {
-    const go = need<HTMLButtonElement>('[data-go]', m.node), st = need('.rv-status', m.node);
-    go.disabled = true; st.innerHTML = '<span class="spin"></span>Commit et push…';
-    const r = await native.call('agent', 'push', { project: p.id, worktree: wt, message: f('msg')?.value ?? title }, 120000);
-    if (!r.ok) { st.innerHTML = `<span class="err">${esc(r.message ?? 'Échec.')}</span>`; go.disabled = false; return; }
-    if (canPR && f('pr')?.checked && repo) {
-      st.innerHTML = '<span class="spin"></span>Ouverture de la pull request…';
-      try {
-        const info = await github.project(repo), pr = await github.createPull(repo, { head: String(r.branch), base: info.info.default_branch, title: f('title')?.value || title, body: `${run?.result ? `${run.result}\n\n` : ''}---\nPréparé par Claude Code depuis Studio.` });
-        m.close(); toast(`PR #${pr.number} ouverte`); window.open(pr.html_url, '_blank', 'noopener');
-      } catch (e) { st.innerHTML = `<span class="err">Branche poussée, mais la PR n’a pas pu être ouverte : ${esc(errMsg(e))}</span>`; go.hidden = true; }
-    } else { m.close(); toast(`Branche ${String(r.branch)} poussée`); }
-    void refreshTrees(p).then(() => paint(root, p));
+  branchIn.addEventListener('input', () => { editedBranch = true; });
+  msg.addEventListener('input', () => { editedMsg = true; sugTag.hidden = true; sync(); });
+  title?.addEventListener('input', () => { editedTitle = true; });
+  const propose = async () => {
+    resug.hidden = true; sugSt.innerHTML = '<span class="spin"></span>Lecture des changements…';
+    const s = await suggestMessage(p, wt, run);
+    if (!m.node.isConnected) return;
+    if (!editedMsg) { msg.value = s.draft; sync(); }
+    if (!s.ai) { sugSt.textContent = ai.ready() ? 'Proposition tirée de la consigne.' : 'Proposition tirée de la consigne · connecte une IA pour un message rédigé d’après le diff.'; resug.hidden = !ai.ready(); return; }
+    sugSt.innerHTML = `<span class="spin"></span>L’IA rédige le message d’après le diff (${esc(ai.PROVIDERS[ai.config().provider])})…`;
+    try {
+      const text = await s.ai; if (!m.node.isConnected) return;
+      if (text && !editedMsg) { msg.value = text; sugTag.hidden = false; sync(); }
+      sugSt.textContent = editedMsg ? 'Tu as modifié le message : la proposition de l’IA n’a pas été appliquée.' : `${s.files.length} fichier${s.files.length > 1 ? 's' : ''} modifié${s.files.length > 1 ? 's' : ''}.`;
+    } catch (e) { sugSt.innerHTML = `<span class="err">Pas de proposition de l’IA : ${esc(errMsg(e))}</span>`; }
+    resug.hidden = false;
   };
+  resug.onclick = () => { editedMsg = false; void propose(); };
+  void propose();
+  need('[data-x]', m.node).onclick = m.close;
+  need('[data-go]', m.node).onclick = async () => {
+    const go = need<HTMLButtonElement>('[data-go]', m.node), st = need('.rv-status', m.node), wantPR = !!repo && !!m.node.querySelector<HTMLInputElement>('[name=pr]')?.checked;
+    const message = msg.value.trim(); if (!message) { msg.focus(); return; }
+    const prTitle = title?.value.trim() || subject(), detail = message.split('\n').slice(1).join('\n').trim();
+    go.disabled = true; st.innerHTML = '<p class="rv-status"><span class="spin"></span>Commit et push…</p>';
+    const wanted = branchIn.value.trim();
+    if (!/^[a-z0-9][a-z0-9._/-]{0,89}$/.test(wanted) || wanted.includes('..') || wanted.endsWith('/')) { st.innerHTML = '<p class="rv-status err">Nom de branche invalide : minuscules, chiffres, - _ . / (ex. feat/export-pdf).</p>'; branchIn.focus(); return; }
+    const r = await native.call('agent', 'push', { project: p.id, worktree: wt, message, branch: wanted }, 120000);
+    if (!r.ok) { st.innerHTML = `<p class="rv-status err">${esc(r.message ?? 'Échec.')}</p>`; go.disabled = false; return; }
+    const branch = String(r.branch);
+    void refreshTrees(p).then(() => paint(root, p));
+    if (!wantPR || !repo) { m.close(); toast(`Branche ${branch} poussée`); return; }
+    st.innerHTML = '<p class="rv-status"><span class="spin"></span>Ouverture de la pull request…</p>';
+    let base = 'main';
+    try {
+      if (!canPR) throw new Error('GitHub n’est pas connecté dans Studio');
+      base = (await github.project(repo)).info.default_branch;
+      const pr = await github.createPull(repo, { head: branch, base, title: prTitle, body: prBody(run, detail) });
+      m.close(); toast(`PR #${pr.number} ouverte`); window.open(pr.html_url, '_blank', 'noopener');
+    } catch (e) {
+      const why = errMsg(e), perm = /not accessible|403|permission/i.test(why);
+      st.innerHTML = `<div class="ag-prfail"><p>${icon('check')}Branche <code>${esc(branch)}</code> poussée sur GitHub.</p>
+        <p class="err">${perm ? 'Ton jeton GitHub n’a pas le droit d’ouvrir une pull request (permission « Pull requests : lecture et écriture »).' : `La pull request n’a pas pu être ouverte d’ici : ${esc(why)}.`}</p>
+        <div class="ag-prfail-act"><a class="btn btn-primary" href="${esc(compareURL(repo, base, branch, prTitle, prBody(run, detail)))}" target="_blank" rel="noopener">${icon('github')}Ouvrir la PR sur GitHub</a>${perm || !canPR ? '<button class="btn" data-open-conn="github">Régler le jeton</button>' : ''}</div></div>`;
+      go.hidden = true; need('[data-x]', m.node).textContent = 'Fermer';
+      st.querySelector('a.btn-primary')?.addEventListener('click', () => setTimeout(m.close, 300));
+    }
+  };
+}
+
+/** Copie déjà poussée : ouvre la page GitHub de création de sa PR, déjà remplie. */
+async function openPR(p: Project, w: Worktree): Promise<void> {
+  const repo = p.repos[0]; if (!repo) { toast('Associe un dépôt GitHub au projet.'); return; }
+  let base = 'main';
+  try { if (github.connected()) base = (await github.project(repo)).info.default_branch; } catch { /* main par défaut */ }
+  const run = runs.find(r => r.worktree === w.name), t = draftMessage(run?.prompt ?? w.name, []);
+  window.open(compareURL(repo, base, w.branch, t, prBody(run, '')), '_blank', 'noopener');
 }
 
 async function refreshTrees(p: Project): Promise<void> {
@@ -287,6 +399,7 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
     if (b.dataset.ag === 'review') await review.review(p, 'working', wt);
     if (b.dataset.ag === 'vscode') { const r = await native.call('project', 'open', { project: p.id, app: 'vscode', worktree: wt }, 15000); if (!r.ok) toast(r.message ?? 'Impossible d’ouvrir.'); }
     if (b.dataset.ag === 'push') await publish(p, wt, box);
+    if (b.dataset.ag === 'pr') { const w = trees.find(x => x.name === wt); if (w) await openPR(p, w); }
     if (b.dataset.ag === 'discard' && await confirmBox({ title: 'Supprimer cette copie ?', text: 'Les changements non publiés de l’agent seront perdus. Une branche déjà poussée sur GitHub reste en place.', ok: 'Supprimer', danger: true })) {
       const r = await native.call('agent', 'discard', { project: p.id, worktree: wt }, 30000);
       toast(r.ok ? 'Copie supprimée' : r.message ?? 'Impossible.');

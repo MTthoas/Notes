@@ -297,6 +297,7 @@ function mountNote(main: HTMLElement, n: Note, keep: Keep | null): void {
         ${n.enc && !trashed ? tb('lock', locked ? 'lock' : 'unlock', locked ? 'Note verrouillée' : 'Verrouiller maintenant', locked ? '' : SC.lock, 'on') : ''}
         ${ro ? '' : `<div class="seg" role="tablist" title="Changer de mode (${keys(SC.mode)})">${seg.map(([m, ic, l]) => `<button role="tab" data-mode="${m}" aria-selected="${m === mode}" aria-label="${l}" title="${l}">${icon(ic)}</button>`).join('')}</div>`}
         ${ro ? '' : `<button class="btn btn-ghost" data-act="ask" title="Demander à l’IA (${keys(SC.ask)})">${icon('sparkle')}<span>Demander</span></button>`}
+        ${ro || !projectsModel.projectOfNote(n) || !projectsPage.claudeAvailable() || !ai.shareable(n) ? '' : `<button class="btn btn-ghost" data-act="claude" title="Confier cette note à Claude Code, dans le projet ${esc(projectsModel.projectOfNote(n)?.name ?? '')}">${icon('terminal')}<span>Claude Code</span></button>`}
         ${ro ? '' : `<button class="btn btn-ghost pj-pick" data-act="project" title="Projet de la note">${icon('folder')}<span>${esc(projectsModel.projectOfNote(n)?.name ?? 'Projet')}</span></button>`}
         ${tb('more', 'more', 'Plus d’actions')}
       </div>
@@ -985,6 +986,7 @@ async function onClick(e: MouseEvent): Promise<void> {
     else if (act === 'restore') { await store.restoreNote(n); await openNote(n.id); }
     else if (act === 'destroy') await destroy(n);
     else if (act === 'project') menu(anchor, projectsPage.projectMenuItems(n));
+    else if (act === 'claude') { const pj = projectsModel.projectOfNote(n); if (pj) { await flushAll(); await projectsPage.toClaude(pj, { notes: [n.id] }); } }
     else if (act === 'backlinks') menu(anchor, [{ label: 'Rétroliens' }, ...store.backlinks(n).map(b => ({ label: titleOf(b), icon: 'notes', run: () => openNote(b.id) }))]);
     return;
   }

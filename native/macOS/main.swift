@@ -128,6 +128,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
           const df = await ask('diff', { scope: 'working', worktree: st.worktree }); r.wtDiff = df.ok ? { untracked: df.untracked } : df.message;
           if (st.worktree) { const del = await ask('discard', { worktree: st.worktree }, 'agent'); r.discard = del.ok; }
         }
+        if ('\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_PUSH"] ?? "")') {
+          const bad = await ask('push', { project: 'selftest-push', worktree: 'studio-test-1113-2210', message: 'x', branch: '../evil' }, 'agent', 60000); r.pushRefusesBadBranch = !bad.ok;
+          const ok = await ask('push', { project: 'selftest-push', worktree: 'studio-test-1113-2210', message: 'feat(test): add b file\\n\\nDetail line.', branch: 'feat/test-add-b-file' }, 'agent', 60000); r.push = { ok: ok.ok, branch: ok.branch, message: ok.message };
+          const del = await ask('discard', { project: 'selftest-push', worktree: 'studio-test-1113-2210' }, 'agent', 60000); r.discardAfterPush = del.ok;
+        }
         if ('\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_CLAUDE"] ?? "")') {
           const st = await ask('status', {}, 'claude', 40000); r.claudeStatus = { installed: st.installed, loggedIn: st.loggedIn, plan: st.plan, version: st.version, source: st.source, path: st.path };
           const t0 = Date.now(), x = await ask('run', { run: 'selftest-1', system: 'Tu es concis.', prompt: 'Réponds uniquement : ok', model: 'haiku' }, 'claude', 120000);
@@ -141,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
           const d = await ask('diff', { scope: 'working' }); r.diff = d.ok ? { lines: String(d.patch || '').split('\\n').length, base: d.base } : d;
           const s = await ask('sessions', {}); r.sessions = s.ok ? { found: s.found, count: (s.sessions || []).length, first: s.sessions && s.sessions[0] ? { title: s.sessions[0].title, live: s.sessions[0].live, output: s.sessions[0].tokens.output } : null, quota: s.quota ? s.quota.status : null } : s;
           if (s.sessions && s.sessions[0]) { const one = await ask('session', { session: s.sessions[0].id }); r.session = one.ok ? { actions: (one.actions || []).length, files: (one.files || []).length } : one; }
+          const pc = await ask('pushcheck', {}, 'agent', 70000); r.pushCheck = { ok: pc.ok, git: pc.git, message: pc.message };
           const hs = await ask('server', { op: 'hosts' }, 'agent'); r.sshHosts = (hs.hosts || []).length;
           const badH = await ask('server', { op: 'set', host: '-oProxyCommand=touch /tmp/x', path: '/srv' }, 'agent'); r.serverRefusesBadHost = !badH.ok;
           const bad2 = await ask('server', { op: 'set', host: 'vps', path: '/srv/$(id)' }, 'agent'); r.serverRefusesBadPath = !bad2.ok;

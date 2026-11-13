@@ -373,6 +373,16 @@ export async function run({ prompt, tools = ['notes'], provider, context = '' }:
   return { text, provider: p };
 }
 
+/** Réponse simple, sans outil (message de commit, résumé) : même fournisseur que le reste de Studio. */
+export async function complete(system: string, user: string, provider?: Provider | null): Promise<string> {
+  const cfg = config(), p = provider || cfg.provider;
+  if (!ready(p)) throw new Error(`${PROVIDERS[p]} n’est pas configuré (Réglages → Intelligence artificielle).`);
+  const none: Exec = async () => ({ content: 'Aucun outil disponible.', error: true });
+  return p === 'claudecode' ? loopClaudeCode(cfg, system, user, [], none)
+    : p === 'anthropic' ? loopAnthropic(cfg, system, user, [], none)
+    : loopOpenAI(cfg, system, user, [], none, undefined, p === 'local');
+}
+
 // ---------- Agents définis dans les notes ----------
 // ```agent
 // nom: Revue du lundi

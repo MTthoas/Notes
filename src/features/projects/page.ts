@@ -16,6 +16,7 @@ import * as sessions from './sessions.ts';
 import * as review from './review.ts';
 import * as chart from '../../ui/chart.ts';
 import * as bridge from '../../integrations/remote.ts';
+import { shareable } from '../../integrations/ai.ts';
 
 let app!: AppShell;
 export const init = (shell: AppShell): void => { app = shell; };
@@ -61,13 +62,15 @@ function listHTML(): string {
 // ---------- Cockpit d'un projet ----------
 function taskRows(p: Project): string {
   const c = todo.ofProject(p.id), items = [...c.late, ...c.doing, ...c.today, ...c.soon, ...c.tickets, ...c.undated, ...c.notes].filter((t, i, a) => a.indexOf(t) === i).slice(0, 10);
-  return `${items.length ? items.map(t => `<label class="tg-task hm-task"><input type="checkbox" data-note="${t.note.id}" data-line="${t.line}"${t.status === 'doing' ? ' class="doing"' : ''}><span>${esc(plain(t.text))}</span>${t.ticket ? `<em class="hm-ticket">${esc(t.ticket)}</em>` : ''}${t.due ? `<em class="td-due${t.due < store.dayKey() ? ' late' : ''}">${esc(todo.dueLabel(t.due))}</em>` : ''}</label>`).join('') : '<p class="hm-empty">Aucune tâche ouverte dans ce projet.</p>'}
+  const cc = bridge.where();
+  return `${items.length ? items.map(t => `<div class="pj-row"><label class="tg-task hm-task"><input type="checkbox" data-note="${t.note.id}" data-line="${t.line}"${t.status === 'doing' ? ' class="doing"' : ''}><span>${esc(plain(t.text))}</span>${t.ticket ? `<em class="hm-ticket">${esc(t.ticket)}</em>` : ''}${t.due ? `<em class="td-due${t.due < store.dayKey() ? ' late' : ''}">${esc(todo.dueLabel(t.due))}</em>` : ''}</label>${cc ? `<button class="pj-cc" data-pj-cc-task="${esc(plain(t.text))}" title="Confier cette tâche à Claude Code">${icon('terminal')}Claude Code</button>` : ''}</div>`).join('') : '<p class="hm-empty">Aucune tâche ouverte dans ce projet.</p>'}
     <button class="hm-more" data-pj="kanban">${c.openCount > items.length ? `${c.openCount - items.length} de plus · ` : ''}Ouvrir en Kanban</button>`;
 }
 const taskBox = (p: Project) => `<form class="td-add pj-add"><span class="td-plus">${icon('plus')}</span><input placeholder="Nouvelle tâche du projet, ex. « Corriger la synchro vendredi »" aria-label="Nouvelle tâche du projet" autocomplete="off"></form><div class="pj-tasklist">${taskRows(p)}</div>`;
 function noteRows(p: Project): string {
   const notes = model.notesOf(p).filter(n => n.id !== p.id).slice(0, 8);
-  return `${notes.length ? notes.map(n => `<button class="w-row" data-open-note="${n.id}">${icon('notes')}<span>${esc(titleOf(n))}</span><em>${esc(rel(n.updated))}</em></button>`).join('') : '<p class="hm-empty">Aucune note dans ce projet. Ajoute <code>#' + esc(p.tag) + '</code> à une note, ou crée-la d’ici.</p>'}
+  const cc = bridge.where();
+  return `${notes.length ? notes.map(n => `<div class="pj-row"><button class="w-row" data-open-note="${n.id}">${icon('notes')}<span>${esc(titleOf(n))}</span><em>${esc(rel(n.updated))}</em></button>${cc && shareable(n) ? `<button class="pj-cc" data-pj-cc-note="${n.id}" title="Confier cette note à Claude Code">${icon('terminal')}Claude Code</button>` : ''}</div>`).join('') : '<p class="hm-empty">Aucune note dans ce projet. Ajoute <code>#' + esc(p.tag) + '</code> à une note, ou crée-la d’ici.</p>'}
     <button class="hm-more" data-pj="new-note">${icon('plus')}Nouvelle note du projet</button>`;
 }
 const section = (id: string, title: string, ic: string, body: string, cls = '') => `<section class="pj-sec ${cls}" data-sec="${esc(id)}"><h2>${icon(ic)}${esc(title)}</h2><div class="pj-sec-body">${body}</div></section>`;
@@ -298,6 +301,15 @@ export function projectMenuItems(n: Note): { label: string; icon?: string; run?:
     { label: 'Aucun projet', checked: !cur, run: () => model.setNoteProject(n, null).then(() => label('Projet')) }, { label: 'Nouveau projet…', icon: 'plus', run: () => createDialog() }];
 }
 
+// ---------- Vers Claude Code ----------
+/** Claude Code est joignable d'ici (sur ce Mac, ou un Mac lié qui l'autorise). */
+export const claudeAvailable = (): boolean => !!bridge.where();
+/** Ouvre l'onglet Claude Code du projet avec des notes jointes ou une consigne déjà écrite. */
+export function toClaude(p: Project, what: { notes?: string[]; prompt?: string }): Promise<void> {
+  sessions.handoff(p, { notes: what.notes ?? [], prompt: what.prompt ?? '' });
+  return go(p.id, 'sessions');
+}
+
 // ---------- Page ----------
 export function mount(main: HTMLElement): void {
   sessions.stop();
@@ -343,6 +355,8 @@ export function mount(main: HTMLElement): void {
     if (open) { await go(open.dataset.pjOpen || null); return; }
     const tb = t.closest('[data-pj-tab]');
     if (tb && p) { await app.setView({ type: 'projets', project: p.id, tab: tb.dataset.pjTab ?? 'overview' }); return; }
+    const ccNote = t.closest('[data-pj-cc-note]'), ccTask = t.closest('[data-pj-cc-task]');
+    if ((ccNote || ccTask) && p) { await toClaude(p, ccNote ? { notes: [ccNote.dataset.pjCcNote ?? ''] } : { prompt: ccTask?.dataset.pjCcTask ?? '' }); return; }
     const sv = t.closest('[data-sv]');
     if (sv && p) {
       const act = sv.dataset.sv, box = $('.sv-box', root);
