@@ -2,6 +2,7 @@
 // tant qu'elle est ouverte, avec la clé du coffre. Rien n'est écrit sur le disque, sauf l'heure du dernier passage.
 import * as linear from './api.ts';
 import * as vault from '../../core/vault.ts';
+import * as events from '../../core/events.ts';
 import { esc } from '../../lib/markdown.ts';
 import { $, icon, toast, rel, need, target, errMsg, avatar } from '../../ui/kit.ts';
 import type { AppShell } from '../../types.ts';
@@ -67,7 +68,9 @@ export async function poll({ quiet = true } = {}): Promise<void> {
     items = await linear.notifications(); error = '';
     const last = localStorage.getItem(SEEN), newest = items[0]?.createdAt;
     // Premier passage : on prend l'état actuel comme point de départ, sans rien annoncer.
-    if (last) announce(items.filter(n => !n.readAt && n.createdAt > last));
+    const fresh = last ? items.filter(n => !n.readAt && n.createdAt > last) : [];
+    announce(fresh);
+    if (fresh.length) events.emit('linear', fresh.map(n => `- ${headline(n)}${excerpt(n) ? ` : « ${excerpt(n)} »` : ''}${n.issue ? ` (${n.issue.url})` : ''}`).join('\n'));
     if (newest && (!last || newest > last)) localStorage.setItem(SEEN, newest);
     loaded = true; badge();
     if (before !== unreadCount()) app.renderSidebar();

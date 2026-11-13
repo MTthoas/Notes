@@ -2,6 +2,7 @@
 // Ce fichier : accès à l'API et état (événements, non vus). La page est dans page.js.
 // Lecture seule : Studio n'écrit jamais sur GitHub. Sans serveur, l'app interroge l'API toutes les 5 minutes.
 import * as vault from '../../core/vault.ts';
+import * as bus from '../../core/events.ts';
 import { toast, errMsg } from '../../ui/kit.ts';
 import type { AppShell } from '../../types.ts';
 
@@ -78,7 +79,11 @@ export async function poll({ quiet = true } = {}): Promise<void> {
     const repos = await api<{ full_name: string }[]>(`/user/repos?sort=pushed&per_page=${MAX_REPOS}&affiliation=owner,collaborator,organization_member`);
     const lists = await Promise.all(repos.map(r => api<GhEvent[]>(`/repos/${r.full_name}/events?per_page=20`).catch((): GhEvent[] => [])));
     const seen = new Set<string>();
+    const before = events[0]?.created_at ?? '', known = events.length > 0;
     events = lists.flat().filter(e => e?.id && !seen.has(e.id) && seen.add(e.id)).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 120);
+    // Nouveautés depuis le passage précédent (pas au premier chargement) : déclencheur des automatisations.
+    const fresh = known ? events.filter(e => e.created_at > before && e.actor?.login !== me) : [];
+    if (fresh.length) bus.emit('github', fresh.slice(0, 20).map(e => { const d = describe(e); return `- ${e.actor?.login ?? ''} ${d.verb} ${d.what} (${e.repo?.name ?? ''}) ${d.url}`; }).join('\n'));
     if (!localStorage.getItem(SEEN) && events[0]) localStorage.setItem(SEEN, events[0].created_at); // premier passage : rien n'est « nouveau »
     error = ''; loaded = true;
   } catch (e) { error = errMsg(e); if (!quiet) toast('GitHub : ' + error); }

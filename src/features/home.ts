@@ -9,6 +9,7 @@ import * as notifs from '../integrations/linear/notifications.ts';
 import * as github from '../integrations/github/api.ts';
 import * as voice from './voice.ts';
 import * as hub from './hub.ts';
+import * as onboarding from './onboarding.ts';
 import { esc, plain } from '../lib/markdown.ts';
 import { $, icon, rel, need, target } from '../ui/kit.ts';
 import type { AppShell, Note } from '../types.ts';
@@ -58,6 +59,15 @@ function connections() {
     + row('phone', 'Téléphone', devs.length ? devs.map(d => d.name).join(', ') : 'Synchronisation chiffrée, sans serveur', vault.enabled() ? 'appareils' : 'coffre', devs.length > 0);
 }
 
+function firstSteps(): string {
+  if (!onboarding.visible()) return '';
+  const st = onboarding.steps(), done = st.filter(s => s.done).length;
+  return `<section class="hm-sec hm-ob"><header><span class="hm-h">Premiers pas</span><span class="hm-meta">${done}/${st.length} <button class="hm-link" data-ob-dismiss>Masquer</button></span></header>
+    <span class="bar hm-obbar"><i style="width:${Math.round(done / st.length * 100)}%"></i></span>
+    <div class="hm-steps">${st.map(s => `<button class="hm-step${s.done ? ' done' : ''}" ${s.action}><i class="hm-tick">${s.done ? icon('check') : ''}</i><span><strong>${esc(s.label)}</strong><em>${esc(s.hint)}</em></span></button>`).join('')}</div>
+    <p class="hm-help">Perdu ? <button class="link-btn" data-view="help">L’aide explique tout en cinq minutes</button>.</p></section>`;
+}
+
 function agents() {
   return hub.agentList().slice(0, 4).map(a => `<div class="hm-agent"><i class="st ${a.live ? 'live' : a.last ? (a.ok ? 'ok' : 'err') : ''}"></i><button data-open-note="${a.note.id}">${esc(a.spec.nom)}</button><em>${a.live ? 'en cours' : a.spec.planning ? esc(a.spec.planning) : a.last ? esc(rel(a.last)) : 'manuel'}</em><button class="icon-btn" data-home-agent="${a.index}" title="Lancer" aria-label="Lancer ${esc(a.spec.nom)}"${a.live ? ' disabled' : ''}>${icon('play')}</button></div>`).join('');
 }
@@ -67,7 +77,7 @@ export function mount(main: HTMLElement): void {
   const hello = h < 5 ? 'Bonne nuit' : h < 12 ? 'Bonjour' : h < 18 ? 'Bon après-midi' : 'Bonsoir';
   const linked = linear.connected() || github.connected(), hasAgents = hub.agentList().length > 0;
   const devs = vault.isOpen() ? link.devices() : [];
-  main.innerHTML = `<header class="toolbar">${app.tbLeft()}${app.crumb('Accueil')}<div class="tb-side tb-right"><button class="btn btn-ghost" data-ask-home title="Demander à l’IA">${icon('sparkle')}<span>Demander</span></button></div></header>
+  main.innerHTML = `<header class="toolbar">${app.tbLeft()}${app.crumb('Accueil')}<div class="tb-side tb-right"><button class="btn btn-ghost" data-view="help" title="Aide et raccourcis">${icon('help')}<span>Aide</span></button><button class="btn btn-ghost" data-ask-home title="Demander à l’IA">${icon('sparkle')}<span>Demander</span></button></div></header>
   <div class="home"><div class="home-in">
     <p class="hm-date">${esc(now.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }))}</p>
     <h1 class="hm-hello">${hello}.</h1>
@@ -75,17 +85,19 @@ export function mount(main: HTMLElement): void {
     <form class="w-capture hm-capture"><input placeholder="Note une idée ou une tâche… (#todo pour une tâche, #tag pour ranger)" aria-label="Capture rapide">${voice.available() ? `<button type="button" class="icon-btn" data-act="voice" title="Note vocale" aria-label="Note vocale">${icon('mic')}</button>` : ''}<kbd>↵</kbd></form>
     <div class="hm-grid">
       <div class="hm-col">
+        ${firstSteps()}
         ${section('À faire', tasks(a), { view: 'tasks' })}
         ${section('Reprendre', notes(), { view: 'all' })}
       </div>
       <div class="hm-col">
         ${linked ? section('Quoi de neuf', feed()) : ''}
-        ${hasAgents ? section('Agents', agents(), { view: 'agents' }) : ''}
+        ${section('Automatisations', hasAgents ? agents() : `<p class="hm-empty">Fais travailler Studio pour toi : une revue chaque matin, le tri des captures, tes notifications Linear changées en tâches…</p><button class="btn" data-view="agents">${icon('bot')}Choisir un modèle</button>`, { view: 'agents' })}
         ${section('Connexions', connections(), { meta: devs.length ? `<button class="hm-link" data-home="sync">Synchroniser</button>` : '' })}
       </div>
     </div>
   </div></div>`;
   need('.hm-capture', main).onsubmit = async e => { e.preventDefault(); const i = need<HTMLInputElement>('input', target(e)); if (!i.value.trim()) return; await app.capture(i.value); i.value = ''; };
   need('[data-ask-home]', main).onclick = () => hub.askAI();
+  $('[data-ob-dismiss]', main)?.addEventListener('click', () => { onboarding.dismiss(); mount(main); });
   need('.home', main).addEventListener('click', e => { const f = target(e).closest('[data-feed-issue]'); if (f) void import('../integrations/linear/page.ts').then(m => m.openTicket(f.dataset.feedIssue ?? '')); });
 }
