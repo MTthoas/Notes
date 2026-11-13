@@ -160,7 +160,15 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         case "worktrees": bg { folders.worktrees(pid) }
         case "pushcheck": bg { folders.pushCheck(pid) }
         case "push": bg { folders.commitPush(pid, name: body["worktree"] as? String ?? "", message: body["message"] as? String ?? "", branch: body["branch"] as? String ?? "") }
-        case "discard": bg { folders.removeWorktree(pid, name: body["worktree"] as? String ?? "") }
+        case "discard":
+            let name = body["worktree"] as? String ?? ""
+            if Orchestrator.shared.busy(project: pid, worktree: name) { send(["ok": false, "message": "Une publication est en cours sur cette copie."]); return }
+            bg { folders.removeWorktree(pid, name: name) }
+        // Orchestrateur : publication ou mise à jour d'une copie, de bout en bout (voir Orchestrator.swift).
+        case "publish": bg { Orchestrator.shared.start(kind: "publish", project: pid, worktree: body["worktree"] as? String ?? "", message: body["message"] as? String ?? "", branch: body["branch"] as? String ?? "") }
+        case "sync": bg { Orchestrator.shared.start(kind: "sync", project: pid, worktree: body["worktree"] as? String ?? "") }
+        case "job": send(Orchestrator.shared.job(body["job"] as? String ?? ""))
+        case "jobs": send(Orchestrator.shared.list(project: pid))
         case "commits": bg { folders.commits(pid, days: body["days"] as? Int ?? 30) }
         case "run": send(Agents.shared.detail(body["run"] as? String ?? ""))
         case "server":

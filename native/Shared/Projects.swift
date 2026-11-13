@@ -52,7 +52,9 @@ final class ProjectFolders {
         p.arguments = ["-C", dir, "--no-pager"] + args
         // HOME : configuration Git de l'utilisateur (identité, gestionnaire d'identifiants) ; agent SSH s'il existe.
         let binDir = (Self.gitPath as NSString).deletingLastPathComponent
-        var env = ["GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "PATH": "\(binDir):/usr/bin:/bin", "HOME": NSHomeDirectory()]
+        // GIT_OPTIONAL_LOCKS=0 : les lectures (status, diff) ne prennent plus le verrou de l'index, ce qui évitait
+        // les échecs « index.lock exists » quand l'orchestrateur écrit dans une copie pendant le rafraîchissement de l'écran.
+        var env = ["GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C", "PATH": "\(binDir):/usr/bin:/bin", "HOME": NSHomeDirectory()]
         if let sock = ProcessInfo.processInfo.environment["SSH_AUTH_SOCK"] { env["SSH_AUTH_SOCK"] = sock }
         p.environment = env
         let out = Pipe(), err = Pipe(); p.standardOutput = out; p.standardError = err
@@ -162,7 +164,7 @@ final class ProjectFolders {
         guard let dir = path(id) else { return ["ok": true, "worktrees": []] }
         let raw = git(["worktree", "list", "--porcelain"], in: dir) ?? ""
         let base = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], in: dir)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "HEAD"
-        var out: [[String: Any]] = []
+        var found: [(path: String, name: String, branch: String)] = []
         for block in raw.components(separatedBy: "\n\n") {
             var wtPath = "", branch = ""
             for l in block.split(separator: "\n") {
@@ -172,12 +174,95 @@ final class ProjectFolders {
             guard wtPath.hasPrefix(dir + "/.claude/worktrees/") else { continue }
             let name = (wtPath as NSString).lastPathComponent
             guard Self.validWorktree(name) else { continue }
-            let changes = (git(["status", "--porcelain"], in: wtPath) ?? "").split(separator: "\n").count
-            let ahead = Int(git(["rev-list", "--count", "\(base)..HEAD"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
-            let upstream = git(["rev-parse", "--abbrev-ref", "@{upstream}"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            out.append(["name": name, "branch": branch, "changes": changes, "ahead": ahead, "pushed": !upstream.isEmpty])
+            found.append((wtPath, name, branch))
         }
+        // Chaque copie est examinée en parallèle (plusieurs commandes git par copie : en série, l'écran ralentissait).
+        var rows = [[String: Any]?](repeating: nil, count: found.count); let rowsLock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: found.count) { i in
+            let (wtPath, name, branch) = found[i]
+            let status = git(["status", "--porcelain"], in: wtPath) ?? ""
+            let changes = status.split(separator: "\n").count
+            let counts = git(["rev-list", "--left-right", "--count", "\(base)...HEAD"], in: wtPath)?.split(whereSeparator: { $0 == "\t" || $0 == " " || $0 == "\n" }).compactMap { Int($0) } ?? []
+            let upstream = git(["rev-parse", "--abbrev-ref", "@{upstream}"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let row: [String: Any] = ["name": name, "branch": branch, "changes": changes, "behind": counts.first ?? 0, "ahead": counts.count > 1 ? counts[1] : 0,
+                                      "pushed": !upstream.isEmpty, "conflicts": status.isEmpty ? [] : conflictFiles(wtPath)]
+            rowsLock.lock(); rows[i] = row; rowsLock.unlock()
+        }
+        let out = rows.compactMap { $0 }
         return ["ok": true, "worktrees": out, "base": base]
+    }
+
+    /// Branche principale distante (origin/main en général), à jour si `fetch` ; HEAD du dépôt à défaut de dépôt distant.
+    func baseRef(_ dir: String, fetch: Bool) -> String {
+        if fetch { _ = gitRun(["fetch", "-q", "--prune", "origin"], in: dir, timeout: 60) }
+        if let b = git(["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], in: dir)?.trimmingCharacters(in: .whitespacesAndNewlines), !b.isEmpty { return b }
+        for b in ["origin/main", "origin/master"] where gitRun(["rev-parse", "-q", "--verify", b], in: dir).ok { return b }
+        return "HEAD"
+    }
+
+    /// Crée la copie isolée d'un agent à partir de la dernière version de la branche principale distante,
+    /// jamais de la branche sur laquelle se trouve le dossier de l'utilisateur (sinon l'agent part d'une base périmée
+    /// ou d'une autre branche, et sa PR arrive avec des conflits).
+    func createWorktree(_ dir: String, name: String) -> (path: String?, error: String) {
+        guard Self.validWorktree(name) else { return (nil, "Nom de copie invalide.") }
+        excludeWorktrees(dir)
+        let base = baseRef(dir, fetch: true), wt = dir + "/.claude/worktrees/" + name
+        let r = gitRun(["worktree", "add", "-q", "-b", "worktree-" + name, wt, base], in: dir, timeout: 60)
+        return r.ok ? (wt, "") : (nil, "Copie isolée impossible : \(Self.gitError(r.err))")
+    }
+
+    /// Fichiers modifiés de la copie qui contiennent encore des marqueurs de conflit.
+    func conflictFiles(_ wt: String) -> [String] {
+        let status = git(["status", "--porcelain", "--untracked-files=all"], in: wt) ?? ""
+        var out: [String] = []
+        for line in status.split(separator: "\n") where line.count > 3 {
+            var f = String(line.dropFirst(3))
+            if let r = f.range(of: " -> ") { f = String(f[r.upperBound...]) }
+            if f.hasPrefix("\"") { continue } // nom exotique : ignoré
+            guard let data = FileManager.default.contents(atPath: wt + "/" + f), data.count < 2_000_000, let text = String(data: data, encoding: .utf8) else { continue }
+            if text.split(separator: "\n", omittingEmptySubsequences: false).contains(where: { $0.hasPrefix("<<<<<<< ") || $0.hasPrefix(">>>>>>> ") }) { out.append(f) }
+        }
+        return out
+    }
+
+    /// Remet le travail de la copie (commits et changements en cours) par-dessus la dernière version de la branche principale.
+    /// Tout le travail de l'agent devient des changements non commités sur cette base : jamais de commit de fusion,
+    /// et le commit final portera le vrai message. En cas de conflit, les fichiers gardent les marqueurs <<<<<<< / >>>>>>>,
+    /// que l'agent sait corriger avec ses outils d'édition (il n'a pas accès à git).
+    func syncWorktree(_ wt: String) -> [String: Any] {
+        let base = baseRef(wt, fetch: true)
+        if base == "HEAD" { return ["ok": true, "base": base, "updated": false, "conflicts": []] }
+        if gitRun(["merge-base", "--is-ancestor", base, "HEAD"], in: wt).ok { return ["ok": true, "base": base, "updated": false, "conflicts": conflictFiles(wt)] }
+        let left = conflictFiles(wt)
+        if !left.isEmpty { return ["ok": false, "base": base, "conflicts": left, "message": "Résous d'abord les conflits en cours."] }
+        guard let mb = git(["merge-base", "HEAD", base], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines), !mb.isEmpty else {
+            return ["ok": false, "base": base, "conflicts": [], "message": "Aucun ancêtre commun avec \(base)."]
+        }
+        // Toute erreur après ce point remet la copie exactement dans son état de départ (contenu identique, sur `mb`).
+        let restore: (String) -> [String: Any] = { why in
+            _ = self.gitRun(["reset", "-q", "--hard", mb], in: wt, timeout: 30)
+            let back = self.gitRun(["stash", "pop", "-q"], in: wt, timeout: 30)
+            return ["ok": false, "base": base, "conflicts": [], "message": why + (back.ok ? " La copie n'a pas été modifiée." : " Ton travail est conservé dans « git stash list ».")]
+        }
+        let steps: [[String]] = [["add", "-A"], ["reset", "-q", "--soft", mb]]
+        for a in steps { let r = gitRun(a, in: wt, timeout: 30); if !r.ok { return ["ok": false, "base": base, "conflicts": [], "message": Self.gitError(r.err)] } }
+        let hasWork = !gitRun(["diff", "--cached", "--quiet"], in: wt).ok
+        if !hasWork {
+            let r = gitRun(["reset", "-q", "--hard", base], in: wt, timeout: 30)
+            return r.ok ? ["ok": true, "base": base, "updated": true, "conflicts": []] : ["ok": false, "base": base, "conflicts": [], "message": Self.gitError(r.err)]
+        }
+        let stash = gitRun(["stash", "push", "-q", "-m", "studio: synchronisation de la copie"], in: wt, timeout: 30)
+        guard stash.ok else { return ["ok": false, "base": base, "conflicts": [], "message": Self.gitError(stash.err)] }
+        let reset = gitRun(["reset", "-q", "--hard", base], in: wt, timeout: 30)
+        guard reset.ok else { return restore("Mise à jour impossible : \(Self.gitError(reset.err)).") }
+        let pop = gitRun(["stash", "pop", "-q"], in: wt, timeout: 30)
+        if pop.ok { return ["ok": true, "base": base, "updated": true, "conflicts": []] }
+        // Conflit : les marqueurs sont dans les fichiers ; on sort de l'état « non fusionné » (le travail reste dans les fichiers).
+        let unmerged = (git(["diff", "--name-only", "--diff-filter=U"], in: wt) ?? "").split(separator: "\n").map(String.init)
+        if unmerged.isEmpty { return restore("Mise à jour impossible : \(Self.gitError(pop.err)).") }
+        _ = gitRun(["reset", "-q"], in: wt, timeout: 30)
+        _ = gitRun(["stash", "drop", "-q"], in: wt, timeout: 30)
+        return ["ok": true, "base": base, "updated": true, "conflicts": unmerged]
     }
 
     /// Valide les changements d'une copie isolée et pousse sa branche (identifiants Git habituels de l'utilisateur).
@@ -191,6 +276,8 @@ final class ProjectFolders {
         guard let wt = worktreeDir(id, name) else { return ["ok": false, "message": "Copie introuvable."] }
         if !wanted.isEmpty && !Self.validBranch(wanted) { return ["ok": false, "message": "Nom de branche invalide : minuscules, chiffres, - _ . / (ex. feat/export-pdf)."] }
         let msg = String(message.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2000))
+        let left = conflictFiles(wt)
+        if !left.isEmpty { return ["ok": false, "conflicts": left, "message": "Conflits non résolus : \(left.joined(separator: ", "))."] }
         if !(git(["status", "--porcelain"], in: wt) ?? "").isEmpty {
             guard !msg.isEmpty else { return ["ok": false, "message": "Message de commit vide."] }
             let add = gitRun(["add", "-A"], in: wt, timeout: 30)
@@ -206,7 +293,9 @@ final class ProjectFolders {
             guard mv.ok else { return ["ok": false, "message": "Renommage de la branche impossible : \(Self.gitError(mv.err))"] }
             branch = wanted
         }
-        let push = gitRun(["push", "-u", "origin", branch], in: wt, timeout: 90)
+        // La copie a pu être remise sur la dernière version de la branche principale : son historique a changé.
+        // --force-with-lease ne remplace la branche distante que si personne d'autre ne l'a modifiée entre-temps.
+        let push = gitRun(["push", "-u", "--force-with-lease", "origin", branch], in: wt, timeout: 90)
         guard push.ok else {
             let why = Self.gitError(push.err)
             let auth = why.lowercased().contains("auth") || why.contains("403") || why.contains("could not read") || why.contains("Permission denied")
