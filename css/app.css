@@ -1408,3 +1408,34 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .modal.ag-pub { max-width: 520px; }
 .ag-opts kbd { border: 0; color: inherit; min-width: 0; }
 .ag-compose + .ag-zone { margin-top: 16px; }
+.cx-remote { display: flex; align-items: center; gap: 7px; margin-top: 6px; color: var(--text-2); font-size: var(--t-1); }
+.ag-remote { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--c-blue) 8%, var(--bg)); border: 1px solid color-mix(in srgb, var(--c-blue) 25%, var(--border)); color: var(--text-2); font-size: var(--t-1); }
+.ag-remote .ic { width: 14px; height: 14px; color: var(--c-blue); }
+.ag-remote strong { color: var(--text); font-weight: 500; }
+.ag-onmac { font-style: normal; color: var(--text-3); font-size: var(--t-1); }
+
+/* ---------- Projet : serveur ---------- */
+.sv-box { display: flex; flex-direction: column; gap: 16px; }
+.sv-intro { margin: 8px auto 4px; }
+.sv-form { max-width: 560px; margin: 0 auto; width: 100%; }
+.sv-form .pj-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; color: var(--text-2); font-size: var(--t-1); font-weight: 500; }
+.sv-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); }
+.sv-head > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sv-head strong { font-size: var(--t-3); font-weight: 600; }
+.sv-head code { color: var(--text-3); font: 12px var(--mono); }
+.sv-state { color: var(--text-2); font-size: var(--t-1); }
+.sv-act { margin-left: auto; display: flex; gap: 6px; }
+.sv-act .btn { height: 30px; }
+.sv-err { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--c-red); }
+.sv-err .ic { width: 14px; height: 14px; }
+.sv-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.sv-tile { display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); }
+.sv-tile span { color: var(--text-2); font-size: var(--t-1); font-weight: 600; }
+.sv-tile strong { font-size: 24px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1; }
+.sv-tile em { font-style: normal; color: var(--text-3); font-size: var(--t-1); }
+.sv-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0; }
+.sv-facts div { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); min-width: 0; }
+.sv-facts dt { color: var(--text-3); font-size: var(--t-1); }
+.sv-facts dd { margin: 3px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-box .ss-h { margin: 4px 0 -4px; }
+@media (max-width: 760px) { .sv-grid, .sv-facts { grid-template-columns: minmax(0, 1fr); } .sv-act { margin-left: 0; } }

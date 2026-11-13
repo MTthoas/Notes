@@ -115,6 +115,20 @@ Sur Mac, Studio peut passer par le **Claude Code** installé sur la machine, con
 - Les automatisations gardent leurs outils (ranger une note, créer une tâche…) : Claude Code renvoie les appels sous forme structurée, Studio les exécute, avec ton accord pour toute modification.
 - La consommation passe par les limites de ton abonnement : elle est comptée à part du budget des clés API.
 
+## Piloter ses projets : Claude Code, serveurs, à distance
+
+Chaque projet a un onglet **Claude Code** : tu écris une consigne, Claude Code travaille dans le dépôt du projet, et tu suis tout en direct.
+
+- **Modifier** : Claude Code travaille dans une **copie isolée** du dépôt (worktree Git dans `.claude/worktrees/`, exclue de `git status`). Ton dossier n'est jamais touché. Ensuite : **Revue** IA, **VS Code**, **Publier** (commit, push, pull request en un clic) ou **Supprimer**.
+- **Analyser** : lecture seule, Claude Code explore et propose.
+- **Garde-fous** : `--restricted` (fichiers confinés au dossier de travail), `--permission-mode dontAsk` et une liste explicite d'outils (lecture, écriture). Aucune commande ne s'exécute, sauf si tu coches **Tests npm** (`npm test`, `npm run …`). Pas de réglages, hooks ni serveurs MCP de l'utilisateur ; trois agents au plus, 90 minutes au plus.
+- **Sessions** : toutes les sessions Claude Code du projet (y compris celles lancées hors de Studio), avec leur fil, les fichiers touchés, les tokens, la limite d'utilisation ; chacune peut être **reprise**.
+- **Vue d'ensemble** : graphiques (commits par jour, tokens Claude Code par jour, santé de la CI, avancement des tâches), barre de consigne rapide et agents en cours.
+
+**Serveur** (VPS, VM) : relie un hôte SSH (alias de `~/.ssh/config` ou `utilisateur@hôte`) et le dossier du projet sur ce serveur. Studio affiche son état (charge, mémoire, disque, dépôt, Claude Code), ouvre un terminal SSH, et y lance des agents Claude Code avec les mêmes garde-fous. Connexion par clé uniquement (`BatchMode`), commandes distantes fixes et protégées, configuration gardée dans l'app Mac.
+
+**À distance** : depuis l'iPhone (ou un autre ordinateur) lié au Mac, tu suis les agents, lances une consigne, reprends ou arrêtes une session — via la liaison chiffrée de bout en bout. Sur le Mac, chaque appareil doit être autorisé (Réglages → Appareils → « Peut piloter Claude Code sur ce Mac ») ; seules ces actions passent, jamais les commandes ni la publication, et chacune est signalée sur le Mac. Studio doit rester ouvert sur le Mac.
+
 ## Plugins
 
 Les fonctions de Studio se branchent sur un registre d'extensions (`src/plugins/registry.ts`) : panneaux de la page projet, actions sur une tâche. GitHub et Linear y sont déjà enregistrés comme plugins maison (`src/plugins/builtin.ts`). Prochaines étapes : plugins déclaratifs (modèles, thèmes), puis plugins avec code, isolés et soumis à permissions.

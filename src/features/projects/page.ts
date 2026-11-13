@@ -15,7 +15,7 @@ import * as flux from './flux.ts';
 import * as sessions from './sessions.ts';
 import * as review from './review.ts';
 import * as chart from '../../ui/chart.ts';
-import { cc } from '../../integrations/ai.ts';
+import * as bridge from '../../integrations/remote.ts';
 
 let app!: AppShell;
 export const init = (shell: AppShell): void => { app = shell; };
@@ -27,7 +27,7 @@ const go = (id: string | null, tab?: string) => app.setView({ type: 'projets', p
 interface Folder { path: string | null; name?: string; git?: boolean; branch?: string; ahead?: number; behind?: number; changes?: number; remote?: string }
 const folders = new Map<string, Folder>();
 async function folderOf(p: Project, fresh = false): Promise<Folder | null> {
-  if (!native.available()) return null;
+  if (!bridge.local()) return null;
   if (!fresh && folders.has(p.id)) return folders.get(p.id) ?? null;
   const r = await native.call('project', 'info', { project: p.id }, 10000);
   const f: Folder = { path: typeof r.path === 'string' ? r.path : null, ...(r as Partial<Folder>) };
@@ -35,7 +35,7 @@ async function folderOf(p: Project, fresh = false): Promise<Folder | null> {
   return f;
 }
 function folderHTML(p: Project, f: Folder | null): string {
-  if (!native.available()) return `<p class="pj-folder muted">${icon('folder')}Le dossier du projet et VS Code s’ouvrent depuis l’app Studio pour Mac.</p>`;
+  if (!bridge.local()) { const at = bridge.where(); return `<p class="pj-folder muted">${icon(at ? 'devices' : 'folder')}${at ? `Dossier et VS Code sur <strong>${esc(at.kind === 'remote' ? at.name : 'le Mac')}</strong> · Claude Code se pilote d’ici` : 'Le dossier du projet et VS Code s’ouvrent depuis l’app Studio pour Mac.'}</p>`; }
   if (!f) return `<p class="pj-folder muted">${icon('folder')}Lecture du dossier…</p>`;
   if (!f.path) return `<div class="pj-folder">${icon('folder')}<span>Aucun dossier choisi sur ce Mac.</span><button class="btn btn-primary" data-pj="pick">Choisir le dossier</button></div>`;
   const git = f.git ? `<span class="pj-git">${icon('pr')}${esc(f.branch ?? '?')}${f.changes ? ` · <b>${f.changes} modif.</b>` : ' · à jour'}${f.ahead ? ` · ↑${f.ahead}` : ''}${f.behind ? ` · ↓${f.behind}` : ''}</span>` : '<span class="pj-git muted">pas un dépôt Git</span>';
@@ -74,7 +74,7 @@ const section = (id: string, title: string, ic: string, body: string, cls = '') 
 
 /** Sous-menus d'un projet (aussi affichés dans la barre latérale). */
 export const TABS: [string, string, string][] = [
-  ['overview', 'Vue d’ensemble', 'home'], ['sessions', 'Claude Code', 'terminal'], ['code', 'Code', 'code'], ['flux', 'Flux', 'pr'],
+  ['overview', 'Vue d’ensemble', 'home'], ['sessions', 'Claude Code', 'terminal'], ['code', 'Code', 'code'], ['flux', 'Flux', 'pr'], ['server', 'Serveur', 'server'],
   ['tasks', 'Tâches', 'check'], ['notes', 'Notes', 'notes'], ['site', 'Site', 'link'],
 ];
 const curTab = (): string => { const t = app.viewState().tab; return t && TABS.some(x => x[0] === t) ? t : 'overview'; };
@@ -95,12 +95,13 @@ function tabBody(p: Project, tab: string): string {
     ${section('branches', 'Branches locales', 'pr', native.available() ? '<p class="nf-empty">Chargement…</p>' : '<p class="hm-empty">Visibles dans l’app Mac.</p>')}${panelsHTML(p, 'code')}`;
   if (tab === 'flux') return '<div class="pj-flux"><p class="nf-empty">Chargement du flux…</p></div>';
   if (tab === 'sessions') return '<div class="ss-box"></div>';
+  if (tab === 'server') return '<div class="sv-box"><div class="pj-skel"></div></div>';
   if (tab === 'tasks') return `${section('tasks', 'Tâches', 'check', taskBox(p))}${panelsHTML(p, 'tasks')}`;
   if (tab === 'notes') return section('notes', 'Notes', 'notes', noteRows(p));
   if (tab === 'site') return section('site', 'Site web', 'link', siteHTML(p));
   const notes = model.notesOf(p).length - 1;
   return `${folderBox}
-    ${cc.onMac() ? `<section class="pj-quick">${sessions.composerHTML(p, { compact: true })}<div data-ov="agents"></div></section>` : ''}
+    ${bridge.where() ? `<section class="pj-quick">${sessions.composerHTML(p, { compact: true })}<div data-ov="agents"></div></section>` : ''}
     <div class="pj-dash">
       ${chartCard('code', 'Activité du code', 'code', 'commits')}
       ${chartCard('sessions', 'Claude Code', 'terminal', 'tokens')}
@@ -111,6 +112,51 @@ function tabBody(p: Project, tab: string): string {
       ${card('code', 'Pull requests', 'github', p.repos.length ? 'Lecture des PR…' : 'Aucun dépôt associé')}
       ${card('site', 'Site', 'link', p.site ? esc(p.site.replace(/^https:\/\//, '')) : 'Ajouter le site du projet')}
       ${card('notes', 'Notes', 'notes', `<b>${notes}</b> note${notes > 1 ? 's' : ''}`)}</div>${panelsHTML(p, 'overview')}`;
+}
+
+// ---------- Serveur (VPS, VM) ----------
+interface ServerStatus { configured?: boolean; online?: boolean; host?: string; path?: string; ms?: number; error?: string; load?: number[]; cpus?: number; uptime?: string; disk?: { size: string; used: string; free: string; pct: number }; mem?: { total: number; used: number }; git?: string; claude?: string; os?: string }
+const level = (pct: number) => pct >= 90 ? 'red' : pct >= 75 ? 'amber' : 'green';
+function serverForm(hosts: { alias: string; hostname: string }[], cur?: ServerStatus): string {
+  return `<form class="sv-form"><div class="ag-empty sv-intro">${icon('server')}<h3>Relie un serveur à ce projet</h3><p>Un VPS ou une VM où tourne le projet ou ses agents. Studio s’y connecte en SSH depuis ce Mac, avec ta configuration habituelle (<code>~/.ssh/config</code>, agent SSH) : aucune clé n’est stockée par Studio.</p></div>
+    <label class="pj-field"><span>Hôte SSH</span><input class="field" name="host" list="sv-hosts" placeholder="vps-prod ou deploy@203.0.113.10" value="${esc(cur?.host ?? '')}" required autocomplete="off"><datalist id="sv-hosts">${hosts.map(h => `<option value="${esc(h.alias)}">${esc(h.hostname)}</option>`).join('')}</datalist></label>
+    <label class="pj-field"><span>Dossier du projet sur le serveur</span><input class="field" name="path" placeholder="/srv/studio ou ~/studio" value="${esc(cur?.path ?? '')}" required autocomplete="off"></label>
+    <p class="modal-hint">${icon('shield')}Connexion par clé uniquement (jamais de mot de passe demandé). Les commandes envoyées sont fixes : état du serveur, et Claude Code avec les mêmes garde-fous que sur le Mac.</p>
+    <div class="modal-actions">${cur?.configured ? '<button type="button" class="btn" data-sv="cancel">Annuler</button>' : ''}<button class="btn btn-primary">${icon('check')}Enregistrer</button></div></form>`;
+}
+function serverHTML(st: ServerStatus): string {
+  const local = bridge.local();
+  const head = `<div class="sv-head"><span class="pj-site-dot ${st.online ? 'up' : 'down'}"></span><div><strong>${esc(st.host ?? '')}</strong><code>${esc(st.path ?? '')}</code></div>
+    <span class="sv-state">${st.online ? `En ligne · ${st.ms} ms` : 'Injoignable'}</span>
+    <span class="sv-act">${local ? `<button class="btn" data-sv="terminal">${icon('terminal')}Terminal SSH</button>` : ''}<button class="btn" data-sv="refresh">${icon('refresh')}Actualiser</button>${local ? `<button class="icon-btn" data-sv="edit" title="Modifier" aria-label="Modifier le serveur">${icon('pencil')}</button>` : ''}</span></div>`;
+  if (!st.online) return head + `<p class="sv-err">${icon('shield')}${esc(st.error || 'La connexion SSH a échoué.')}</p><p class="modal-hint">Vérifie que <code>ssh ${esc(st.host ?? '')}</code> fonctionne dans le Terminal sans mot de passe (clé chargée dans l’agent SSH).</p>`;
+  const load = st.load?.[0] ?? 0, cpus = st.cpus || 1, loadPct = Math.min(100, Math.round(load / cpus * 100));
+  const memPct = st.mem ? Math.round(st.mem.used / st.mem.total * 100) : 0, diskPct = st.disk?.pct ?? 0;
+  const tile = (label: string, value: string, sub: string, pct?: number) => `<div class="sv-tile"><span>${label}</span><strong>${value}</strong>${pct !== undefined ? chart.meter(pct, 100, level(pct)) : ''}<em>${sub}</em></div>`;
+  return head + `<div class="sv-grid">
+      ${tile('Charge', load.toLocaleString('fr-FR', { maximumFractionDigits: 2 }), `${cpus} cœur${cpus > 1 ? 's' : ''} · ${loadPct} %`, loadPct)}
+      ${st.mem ? tile('Mémoire', `${memPct} %`, `${(st.mem.used / 1024).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} / ${(st.mem.total / 1024).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Go`, memPct) : tile('Mémoire', '—', 'non disponible')}
+      ${st.disk ? tile('Disque', `${diskPct} %`, `${esc(st.disk.used)} sur ${esc(st.disk.size)} · ${esc(st.disk.free)} libres`, diskPct) : tile('Disque', '—', 'dossier introuvable')}
+    </div>
+    <dl class="sv-facts"><div><dt>Dépôt</dt><dd>${st.git ? `<code>${esc(st.git.replace(/^## /, ''))}</code>` : 'pas un dépôt Git'}</dd></div>
+      <div><dt>Claude Code</dt><dd>${st.claude ? esc(st.claude) : '<span class="warn">non installé</span>'}</dd></div>
+      <div><dt>Système</dt><dd>${esc(st.os ?? '')}${st.uptime ? ` · allumé depuis ${esc(st.uptime)}` : ''}</dd></div></dl>
+    ${st.claude ? `<h3 class="ss-h">Lancer un agent sur ce serveur <span>dans une copie isolée du dépôt distant</span></h3>${sessions.composerHTML(model.byId(app.viewState().project) as Project, { machine: 'server' })}` : `<p class="modal-hint">Installe Claude Code sur le serveur (<code>curl -fsSL https://claude.ai/install.sh | bash</code>) et connecte-le (<code>claude</code> puis <code>/login</code>) pour y lancer des agents.</p>`}`;
+}
+async function server(root: HTMLElement, p: Project): Promise<void> {
+  const box = $('.sv-box', root); if (!box) return;
+  if (!bridge.where()) { box.innerHTML = `<div class="ag-empty">${icon('server')}<h3>Le serveur se pilote depuis le Mac</h3><p>Ouvre ce projet dans l’app Studio pour Mac, ou lie cet appareil au Mac pour suivre le serveur d’ici.</p></div>`; return; }
+  const st = (await bridge.call('agent', 'server', { project: p.id, op: 'status' }, 30000)) as ServerStatus & { ok: boolean; message?: string };
+  if (!box.isConnected) return;
+  if (!st.ok) { box.innerHTML = `<p class="hm-empty">${esc(st.message ?? 'Lecture impossible.')}</p>`; return; }
+  if (!st.configured) {
+    if (!bridge.local()) { box.innerHTML = `<div class="ag-empty">${icon('server')}<h3>Aucun serveur relié</h3><p>Relie le serveur du projet depuis le Mac (onglet Serveur).</p></div>`; return; }
+    const h = await native.call('agent', 'server', { project: p.id, op: 'hosts' }, 10000);
+    box.innerHTML = serverForm((h.hosts as { alias: string; hostname: string }[]) ?? []); return;
+  }
+  box.innerHTML = serverHTML(st);
+  box.dataset.st = JSON.stringify(st);
+  sessions.bindComposer(box, p, r => { sessions.select(r.session || null); void go(p.id, 'sessions'); });
 }
 
 // ---------- Tableau de bord ----------
@@ -130,7 +176,7 @@ async function dashboard(root: HTMLElement, p: Project, f: Folder | null): Promi
   // Activité : commits par jour (dépôt local sur le Mac, sinon GitHub).
   void (async () => {
     let days: Record<string, number> | null = null, src = '';
-    if (f?.path) { const r = await native.call('agent', 'commits', { project: p.id, days: 30 }, 20000); if (r.ok) { days = r.days as Record<string, number>; src = 'toutes branches'; } }
+    if (f?.path || (!bridge.local() && bridge.where())) { const r = await bridge.call('agent', 'commits', { project: p.id, days: 30 }, 20000); if (r.ok && r.found !== false) { days = r.days as Record<string, number>; src = 'toutes branches'; } }
     if (!days && repo && github.connected()) { try { days = await github.commitsPerDay(repo, 30); src = 'branche principale'; } catch { /* plus bas */ } }
     if (!days) return fill(root, '[data-ch="commits"]', muted(repo ? 'Connecte GitHub ou choisis le dossier du projet pour voir son activité.' : 'Associe un dépôt ou choisis le dossier du projet.'));
     const n = sum(days), pts = chart.lastDays(30, days);
@@ -138,9 +184,9 @@ async function dashboard(root: HTMLElement, p: Project, f: Folder | null): Promi
   })();
   // Claude Code : tokens écrits par jour.
   void (async () => {
-    if (!cc.onMac()) return fill(root, '[data-ch="tokens"]', muted('La consommation de Claude Code se lit depuis l’app Mac.'));
-    if (!f?.path) return fill(root, '[data-ch="tokens"]', muted('Choisis le dossier du projet pour suivre Claude Code.'));
-    const r = await native.call('agent', 'daily', { project: p.id, days: 30 }, 30000);
+    if (!bridge.where()) return fill(root, '[data-ch="tokens"]', muted('La consommation de Claude Code se lit depuis l’app Mac, ou depuis un appareil lié au Mac.'));
+    if (bridge.local() && !f?.path) return fill(root, '[data-ch="tokens"]', muted('Choisis le dossier du projet pour suivre Claude Code.'));
+    const r = await bridge.call('agent', 'daily', { project: p.id, days: 30 }, 30000);
     const tok = (r.tokens as Record<string, number>) ?? {}, n = sum(tok), ses = sum((r.sessions as Record<string, number>) ?? {});
     fill(root, '[data-ch="tokens"]', n ? kpi(chart.fmt(n), `tokens écrits sur 30 jours`, `<em>${ses} session${ses > 1 ? 's' : ''}</em>`) + chart.bars(chart.lastDays(30, tok), { color: 'violet', unit: 'token', summary: `${n} tokens écrits par Claude Code sur 30 jours` }) : muted('Aucune session Claude Code ces 30 derniers jours.'));
   })();
@@ -158,8 +204,8 @@ async function dashboard(root: HTMLElement, p: Project, f: Folder | null): Promi
   chart.bindTips(root);
 }
 async function agentsStrip(root: HTMLElement, p: Project): Promise<void> {
-  const box = $('[data-ov="agents"]', root); if (!box || !cc.onMac()) return;
-  const r = await native.call('agent', 'list', { project: p.id }, 10000), list = ((r.runs as sessions.AgentRun[] | undefined) ?? []).filter(x => x.status === 'running' || x.status === 'starting');
+  const box = $('[data-ov="agents"]', root); if (!box || !bridge.where()) return;
+  const r = await bridge.call('agent', 'list', { project: p.id }, 10000), list = ((r.runs as sessions.AgentRun[] | undefined) ?? []).filter(x => x.status === 'running' || x.status === 'starting');
   box.innerHTML = list.map(x => `<button class="pj-agent" data-pj-agent="${esc(x.session)}"><i class="ss-live on"></i><span>${esc(x.prompt)}</span><em>${esc(x.lastText || 'Démarrage…')}</em>${icon('chevronRight')}</button>`).join('');
 }
 
@@ -186,6 +232,7 @@ async function hydrate(root: HTMLElement, p: Project, tab: string): Promise<void
     fill(root, '[data-sec="branches"] .pj-sec-body', list.length ? list.map(b => `<div class="pj-br"><code>${esc(b.name)}</code>${b.name === f?.branch ? '<em class="pj-badge approved">actuelle</em>' : ''}${b.upstream ? '' : '<em class="pj-badge">locale</em>'}<span>${b.ahead ? `↑${b.ahead} ` : ''}${b.behind ? `↓${b.behind}` : ''}</span><time>${esc(rel(Date.parse(b.date)))}</time></div>`).join('') : '<p class="hm-empty">Choisis le dossier du projet pour voir ses branches.</p>');
   }
   if (tab === 'site' && p.site && native.available()) void checkSite(root, p);
+  if (tab === 'server') void server(root, p);
   if (tab === 'overview') {
     void overview(root, p, f); void dashboard(root, p, f); void agentsStrip(root, p);
     sessions.bindComposer(root, p, r => { sessions.select(r.session || null); void go(p.id, 'sessions'); });
@@ -268,6 +315,13 @@ export function mount(main: HTMLElement): void {
       const i = need<HTMLInputElement>('input', f), v = i.value; if (!v.trim()) return;
       i.value = ''; await todo.add(v, p.id); refresh();
     }
+    if (f.closest('.sv-form')) {
+      e.preventDefault();
+      const v = (n: string) => need<HTMLInputElement>(`[name=${n}]`, f).value.trim();
+      const r = await native.call('agent', 'server', { project: p.id, op: 'set', host: v('host'), path: v('path') }, 10000);
+      if (!r.ok) { toast(r.message ?? 'Configuration refusée.'); return; }
+      toast('Serveur relié au projet'); const box = $('.sv-box', root); if (box) box.innerHTML = '<div class="pj-skel"></div>'; void server(root, p); return;
+    }
     if (f.closest('.pj-site-form')) {
       e.preventDefault();
       const v = need<HTMLInputElement>('input', f).value.trim();
@@ -280,6 +334,15 @@ export function mount(main: HTMLElement): void {
     if (open) { await go(open.dataset.pjOpen || null); return; }
     const tb = t.closest('[data-pj-tab]');
     if (tb && p) { await app.setView({ type: 'projets', project: p.id, tab: tb.dataset.pjTab ?? 'overview' }); return; }
+    const sv = t.closest('[data-sv]');
+    if (sv && p) {
+      const act = sv.dataset.sv, box = $('.sv-box', root);
+      if (act === 'refresh') { if (box) box.innerHTML = '<div class="pj-skel"></div>'; void server(root, p); }
+      if (act === 'terminal') { const r = await native.call('agent', 'server', { project: p.id, op: 'terminal' }, 10000); if (!r.ok) toast(r.message ?? 'Impossible.'); }
+      if (act === 'edit' && box) { const h = await native.call('agent', 'server', { project: p.id, op: 'hosts' }, 10000); box.innerHTML = serverForm((h.hosts as { alias: string; hostname: string }[]) ?? [], JSON.parse(box.dataset.st || '{}') as ServerStatus); }
+      if (act === 'cancel') void server(root, p);
+      return;
+    }
     const ag = t.closest('[data-pj-agent]');
     if (ag && p) { sessions.select(ag.dataset.pjAgent || null); await go(p.id, 'sessions'); return; }
     const issue = t.closest('.lv-row[data-issue]');

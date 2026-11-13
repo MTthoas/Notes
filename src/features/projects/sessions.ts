@@ -2,6 +2,7 @@
 // relire et publier leur travail, reprendre une session. Tout s'exécute sur le Mac où se trouve le dossier
 // du projet (voir native/Shared/Agents.swift pour les garde-fous).
 import * as native from '../../core/native.ts';
+import * as bridge from '../../integrations/remote.ts';
 import * as usage from '../../integrations/usage.ts';
 import * as ai from '../../integrations/ai.ts';
 import * as github from '../../integrations/github/api.ts';
@@ -14,7 +15,7 @@ interface Tokens { input: number; output: number; cacheRead: number; cacheWrite:
 interface Session { id: string; title: string; branch: string; worktree: string; started: string; updated: string; live: boolean; models: string[]; prompts: number; lastPrompt: string; tokens: Tokens; tools: Record<string, number>; files: string[] }
 interface Quota { status?: string; resetsAt?: number; rateLimitType?: string; isUsingOverage?: boolean }
 interface Action { at: string; kind: string; text: string }
-export interface AgentRun { run: string; mode: string; prompt: string; status: string; session: string; worktree: string; started: string; finished: string; result: string; lastText: string; turns: number; denials: string[]; quota?: Quota | null }
+export interface AgentRun { machine?: string; host?: string; run: string; mode: string; prompt: string; status: string; session: string; worktree: string; started: string; finished: string; result: string; lastText: string; turns: number; denials: string[]; quota?: Quota | null }
 interface Worktree { name: string; branch: string; changes: number; ahead: number; pushed: boolean }
 
 let selected: string | null = null, timer: ReturnType<typeof setInterval> | undefined, tick = 0;
@@ -28,14 +29,15 @@ const STATUS: Record<string, [string, string]> = { starting: ['amber', 'Démarra
 const pill = (s: string) => { const [c, l] = STATUS[s] ?? ['gray', s]; return `<span class="ag-pill${s === 'running' || s === 'starting' ? ' live' : ''}" style="--c:var(--c-${c})">${l}</span>`; };
 
 // ---------- Consigne ----------
-export function composerHTML(p: Project, { session = '', compact = false } = {}): string {
+export function composerHTML(p: Project, { session = '', compact = false, machine = '' } = {}): string {
   const models = ai.CC_MODELS.map(([v, l]) => `<option value="${v}">${v ? l : 'Modèle par défaut'}</option>`).join('');
-  if (session) return `<form class="ag-compose ag-continue" data-session="${esc(session)}"><textarea name="prompt" rows="2" placeholder="Continuer cette session : précise, corrige, demande la suite…" aria-label="Continuer la session"></textarea>
+  if (session) return `<form class="ag-compose ag-continue" data-session="${esc(session)}"${machine ? ` data-machine="${esc(machine)}"` : ''}><textarea name="prompt" rows="2" placeholder="Continuer cette session : précise, corrige, demande la suite…" aria-label="Continuer la session"></textarea>
     <div class="ag-opts"><span class="ag-hint">${icon('history')}Reprend la session là où elle s’est arrêtée, dans le même dossier.</span><button class="btn btn-primary">${icon('play')}Envoyer<kbd>⌘↩</kbd></button></div></form>`;
   return `<form class="ag-compose${compact ? ' compact' : ''}"><textarea name="prompt" rows="${compact ? 1 : 3}" placeholder="Que doit faire Claude Code dans ${esc(p.name)} ? Ex. « Ajoute des tests au parseur de dates »" aria-label="Consigne pour Claude Code"></textarea>
     <div class="ag-opts">
       <div class="ag-seg" role="radiogroup" aria-label="Mode"><label><input type="radio" name="mode" value="edit" checked><span>${icon('pencil')}Modifier</span></label><label><input type="radio" name="mode" value="read"><span>${icon('search')}Analyser</span></label></div>
-      <label class="ag-check" title="Autorise npm test et npm run … : le code du projet peut alors s’exécuter"><input type="checkbox" name="tests">Tests npm</label>
+      ${bridge.local() && machine !== 'server' ? '<label class="ag-check" title="Autorise npm test et npm run … : le code du projet peut alors s’exécuter"><input type="checkbox" name="tests">Tests npm</label>' : ''}
+      <select class="field" name="machine" aria-label="Où travailler"${machine === 'server' ? '' : ' hidden'}><option value="mac">Sur le Mac</option>${machine === 'server' ? '<option value="server" selected>Sur le serveur</option>' : ''}</select>
       <select class="field" name="model" aria-label="Modèle">${models}</select>
       <span class="ag-hint" data-hint>${icon('shield')}Copie isolée du dépôt : ton dossier reste intact.</span>
       <button class="btn btn-primary">${icon('play')}Lancer<kbd>⌘↩</kbd></button></div></form>`;
@@ -61,10 +63,10 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
     const btn = need<HTMLButtonElement>('button.btn-primary', f), label = btn.innerHTML;
     const val = (n: string) => (f.elements.namedItem(n) as HTMLInputElement | null);
     const body: Record<string, unknown> = { project: p.id, prompt };
-    if (f.dataset.session) body.session = f.dataset.session;
-    else { body.mode = f.querySelector<HTMLInputElement>('[name=mode]:checked')?.value ?? 'edit'; body.tests = !!val('tests')?.checked; body.model = val('model')?.value ?? ''; }
+    if (f.dataset.session) { body.session = f.dataset.session; if (f.dataset.machine) body.machine = f.dataset.machine; }
+    else { body.mode = f.querySelector<HTMLInputElement>('[name=mode]:checked')?.value ?? 'edit'; body.tests = !!val('tests')?.checked; body.model = val('model')?.value ?? ''; const mc = val('machine'); if (mc && !mc.hidden) body.machine = mc.value; }
     btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Démarrage…';
-    const r = await native.call('agent', 'start', body, 60000);
+    const r = await bridge.call('agent', 'start', body, 60000);
     btn.disabled = false; btn.innerHTML = label;
     if (!r.ok) { toast(r.message ?? 'Lancement impossible.'); return; }
     ta.value = '';
@@ -85,7 +87,7 @@ function quotaHTML(q: Quota | null): string {
 
 function runCard(r: AgentRun): string {
   return `<article class="ag-run${live(r) ? ' live' : ''}">
-    <header>${pill(r.status)}<span class="ag-mode">${r.mode === 'edit' ? `${icon('pencil')}Modifier` : `${icon('search')}Analyser`}</span><time>${esc(elapsed(r))}${r.turns ? ` · ${r.turns} étape${r.turns > 1 ? 's' : ''}` : ''}</time></header>
+    <header>${pill(r.status)}${r.machine === 'server' ? `<span class="ag-mode">${icon('server')}${esc(r.host ?? 'serveur')}</span>` : ''}<span class="ag-mode">${r.mode === 'edit' ? `${icon('pencil')}Modifier` : `${icon('search')}Analyser`}</span><time>${esc(elapsed(r))}${r.turns ? ` · ${r.turns} étape${r.turns > 1 ? 's' : ''}` : ''}</time></header>
     <p class="ag-prompt">${esc(r.prompt)}</p>
     ${live(r) && r.lastText ? `<p class="ag-last">${esc(r.lastText)}</p>` : ''}
     ${!live(r) && r.result ? `<p class="ag-last">${esc(r.result.replace(/[#*`>]/g, '').slice(0, 220))}</p>` : ''}
@@ -95,7 +97,7 @@ function runCard(r: AgentRun): string {
 
 function treeRow(w: Worktree): string {
   return `<div class="ag-tree"><span class="ag-tree-main"><code>${esc(w.branch || w.name)}</code><em>${w.changes ? `${w.changes} fichier${w.changes > 1 ? 's' : ''} modifié${w.changes > 1 ? 's' : ''}` : 'aucun changement en attente'}${w.ahead ? ` · ${w.ahead} commit${w.ahead > 1 ? 's' : ''}` : ''}${w.pushed ? ' · poussée' : ''}</em></span>
-    <span class="ag-tree-act"><button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${w.changes || w.ahead ? '' : ' disabled'}>${icon('upload')}Publier</button><button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button></span></div>`;
+    <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${w.changes || w.ahead ? '' : ' disabled'}>${icon('upload')}Publier</button><button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
 }
 
 function listHTML(list: Session[], quota: Quota | null): string {
@@ -123,7 +125,7 @@ function detailHTML(raw: Partial<Session> & { actions?: Action[] }, root: string
   return `<div class="ss-dhead"><i class="ss-live${s.live || run ? ' on' : ''}"></i><h2>${esc(s.title)}</h2>${run ? `${pill(run.status)}<button class="btn" data-ag="stop" data-run="${esc(run.run)}">${icon('stop')}Arrêter</button>` : ''}</div>
     <p class="ss-meta">${s.worktree ? `${icon('pencil')}copie isolée <code>${esc(s.worktree)}</code> · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${esc(s.models.map(modelName).join(', '))} · ${h ? `${h} h ` : ''}${mn} min · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}</p>
     <div class="ss-totals"><div><strong>${usage.fmt(s.tokens.output)}</strong><span>tokens écrits</span></div><div><strong>${usage.fmt(s.tokens.input + s.tokens.cacheWrite)}</strong><span>tokens lus</span></div><div><strong>${usage.fmt(s.tokens.cacheRead)}</strong><span>relus du cache</span></div><div><strong>${Object.values(s.tools).reduce((a, b) => a + b, 0)}</strong><span>actions</span></div></div>
-    ${tree ? `<div class="ag-trees">${treeRow(tree)}</div>` : `<div class="ss-actions"><button class="btn" data-pj="review-working">${icon('sparkle')}Revue des changements en cours</button><button class="btn" data-pj="vscode">${icon('code')}Ouvrir dans VS Code</button></div>`}
+    ${tree ? `<div class="ag-trees">${treeRow(tree)}</div>` : remote ? '' : `<div class="ss-actions"><button class="btn" data-pj="review-working">${icon('sparkle')}Revue des changements en cours</button><button class="btn" data-pj="vscode">${icon('code')}Ouvrir dans VS Code</button></div>`}
     ${s.files.length ? `<h3 class="ss-h">Fichiers modifiés <span>${s.files.length}</span></h3><div class="ss-files">${s.files.map(f => `<code>${esc(short(f, root))}</code>`).join('')}</div>` : ''}
     <h3 class="ss-h">Fil de la session <span>les ${s.actions.length} dernières étapes</span></h3>
     <div class="ss-feed">${s.actions.map(a => { const [c, who] = kind(a.kind); return `<div class="ss-step ${c}"><span class="ss-who">${c === 'tool' ? icon('bolt') : ''}${esc(who ?? '')}</span><p>${esc(c === 'tool' ? short(a.text, root) : a.text)}</p><time>${esc(rel(ms(a.at)))}</time></div>`; }).join('')}</div>`;
@@ -159,42 +161,62 @@ async function publish(p: Project, wt: string, root: HTMLElement): Promise<void>
 }
 
 async function refreshTrees(p: Project): Promise<void> {
-  const r = await native.call('agent', 'worktrees', { project: p.id }, 30000);
+  const r = await bridge.call('agent', 'worktrees', { project: p.id }, 30000);
   trees = r.ok ? (r.worktrees as Worktree[]) : [];
 }
 
 // ---------- Montage ----------
-let folderPath: string | null = null;
+let folderPath: string | null = null, remote = '';
 async function paint(box: HTMLElement, p: Project): Promise<void> {
   const zone = $('.ag-zone', box); if (!zone || !box.isConnected) { clearInterval(timer); return; }
-  const l = await native.call('agent', 'list', { project: p.id }, 10000); runs = l.ok ? (l.runs as AgentRun[]) : runs;
+  const l = await bridge.call('agent', 'list', { project: p.id }, 10000); runs = l.ok ? (l.runs as AgentRun[]) : runs;
   if (tick++ % 4 === 0) await refreshTrees(p);
   if (selected) {
-    const d = await native.call('project', 'session', { project: p.id, session: selected }, 20000);
+    const d = await bridge.call('project', 'session', { project: p.id, session: selected }, 20000);
     if (!box.isConnected) return;
-    if (!d.ok) { zone.innerHTML = `<p class="hm-empty">${esc(d.message ?? 'Session introuvable.')}</p>`; return; }
+    if (!d.ok) {
+      // Agent sur un serveur : on suit les étapes reçues de son flux.
+      const r = runs.find(x => x.session === selected);
+      if (r) {
+        const rd = await bridge.call('agent', 'run', { run: r.run }, 10000);
+        if (rd.ok && box.isConnected) { zone.innerHTML = detailHTML({ id: selected, title: r.prompt, worktree: r.worktree, branch: r.host ? `sur ${r.host}` : '', started: r.started, updated: r.finished || new Date().toISOString(), live: live(r), actions: (rd.actions as Action[]) ?? [] }, folderPath); return; }
+      }
+      zone.innerHTML = `<p class="hm-empty">${esc(d.message ?? 'Session introuvable.')}</p>`; return;
+    }
     const feed = $('.ss-feed', zone), atEnd = !feed || feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
     zone.innerHTML = detailHTML({ ...(d as unknown as Partial<Session> & { actions?: Action[] }), id: selected }, folderPath); // « id » de la réponse = numéro de demande
     const nf = $('.ss-feed', zone); if (nf && atEnd) nf.scrollTop = nf.scrollHeight;
     return;
   }
-  const r = await native.call('project', 'sessions', { project: p.id }, 20000);
+  const r = await bridge.call('project', 'sessions', { project: p.id }, 20000);
   if (!box.isConnected) return;
   zone.innerHTML = listHTML(r.found ? (r.sessions as Session[]) ?? [] : [], (r.quota as Quota | null) ?? runs.find(x => x.quota)?.quota ?? null);
 }
 
+let serverLabel = '';
 function shell(box: HTMLElement, p: Project): void {
-  box.innerHTML = selected
-    ? `<button class="lv-back" data-ss="">${icon('back')}Toutes les sessions</button><div class="ag-zone"><p class="hm-empty">Chargement…</p></div>${composerHTML(p, { session: selected })}`
-    : `${composerHTML(p)}<div class="ag-zone"><p class="hm-empty">Chargement…</p></div>`;
+  const selRun = selected ? runs.find(r => r.session === selected) : undefined;
+  box.innerHTML = (remote ? `<p class="ag-remote">${icon('devices')}Piloté à distance sur <strong>${esc(remote)}</strong> · relecture et publication depuis le Mac</p>` : '') + (selected
+    ? `<button class="lv-back" data-ss="">${icon('back')}Toutes les sessions</button><div class="ag-zone"><p class="hm-empty">Chargement…</p></div>${composerHTML(p, { session: selected, machine: selRun?.machine === 'server' ? 'server' : '' })}`
+    : `${composerHTML(p)}<div class="ag-zone"><p class="hm-empty">Chargement…</p></div>`);
+  const mc = $<HTMLSelectElement>('select[name=machine]', box);
+  if (mc && serverLabel && !selected) { mc.insertAdjacentHTML('beforeend', `<option value="server">Sur ${esc(serverLabel)}</option>`); mc.hidden = false; }
 }
 
 /** Dessine l'onglet et le garde à jour toutes les 3 secondes tant qu'il est affiché. */
 export function mount(box: HTMLElement, p: Project, folder: string | null): void {
   clearInterval(timer); folderPath = folder; tick = 0;
-  if (!ai.cc.onMac()) { box.innerHTML = `<div class="ag-empty">${icon('terminal')}<h3>Claude Code tourne sur ton Mac</h3><p>Ouvre ce projet dans l’app Studio pour Mac : tu pourras y donner des consignes à Claude Code, suivre ses sessions en direct et publier son travail.</p></div>`; return; }
+  const at = bridge.where();
+  if (!at) { box.innerHTML = `<div class="ag-empty">${icon('terminal')}<h3>Claude Code tourne sur ton Mac</h3><p>Ouvre ce projet dans l’app Studio pour Mac. Pour le piloter d’ici, lie cet appareil au Mac (Réglages → Appareils) et autorise-le, sur le Mac, à piloter Claude Code.</p></div>`; return; }
+  remote = at.kind === 'remote' ? at.name : '';
+  if (remote && !folder) { void bridge.call('project', 'info', { project: p.id }, 15000).then(r => mount(box, p, typeof r.path === 'string' ? r.path : '')); box.innerHTML = '<p class="hm-empty">Connexion au Mac…</p>'; return; }
   if (!folder) { box.innerHTML = `<div class="ag-empty">${icon('folder')}<h3>Choisis le dossier du projet</h3><p>Claude Code travaille dans le dépôt du projet sur ce Mac, toujours dans une copie isolée quand il modifie quelque chose.</p><button class="btn btn-primary" data-pj="pick">Choisir le dossier</button></div>`; return; }
   shell(box, p);
+  void bridge.call('agent', 'server', { project: p.id, op: 'status' }, 25000).then(r => {
+    serverLabel = r.ok && r.configured ? String(r.host) : '';
+    const mc = $<HTMLSelectElement>('.ag-compose:not(.ag-continue) select[name=machine]', box);
+    if (mc && serverLabel && !mc.querySelector('[value=server]')) { mc.insertAdjacentHTML('beforeend', `<option value="server">Sur ${esc(serverLabel)}</option>`); mc.hidden = false; }
+  });
   bindComposer(box, p, r => { if (r.session) selected = r.session; shell(box, p); void paint(box, p); });
   box.onclick = async e => {
     const t = e.target as HTMLElement;
@@ -202,7 +224,7 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
     if (row) { selected = row.dataset.ss || null; shell(box, p); void paint(box, p); return; }
     const b = t.closest<HTMLElement>('[data-ag]'); if (!b) return;
     const wt = b.dataset.wt ?? '';
-    if (b.dataset.ag === 'stop') { const r = await native.call('agent', 'stop', { run: b.dataset.run }, 10000); toast(r.ok ? 'Agent arrêté' : r.message ?? 'Impossible.'); void paint(box, p); }
+    if (b.dataset.ag === 'stop') { const r = await bridge.call('agent', 'stop', { run: b.dataset.run }, 10000); toast(r.ok ? 'Agent arrêté' : r.message ?? 'Impossible.'); void paint(box, p); }
     if (b.dataset.ag === 'review') await review.review(p, 'working', wt);
     if (b.dataset.ag === 'vscode') { const r = await native.call('project', 'open', { project: p.id, app: 'vscode', worktree: wt }, 15000); if (!r.ok) toast(r.message ?? 'Impossible d’ouvrir.'); }
     if (b.dataset.ag === 'push') await publish(p, wt, box);

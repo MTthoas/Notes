@@ -7,6 +7,7 @@ import * as ai from '../integrations/ai.ts';
 import * as linear from '../integrations/linear/api.ts';
 import * as notifs from '../integrations/linear/notifications.ts';
 import * as github from '../integrations/github/api.ts';
+import * as bridge from '../integrations/remote.ts';
 import * as link from '../integrations/link.ts';
 import * as schema from '../lib/schema.ts';
 import * as qr from '../lib/qr.ts';
@@ -60,6 +61,11 @@ export function init(api: HubApi) {
   link.on(e => {
     if (e.type === 'synced' && (e.got || e.sent)) toast(`Synchronisé avec ${e.name} · ${e.got} reçue(s), ${e.sent} envoyée(s)`);
     if (e.type === 'paired') toast(`Appareil lié : ${e.name}`);
+    if (e.type === 'remote') {
+      // Toute action pilotée à distance est signalée sur le Mac.
+      toast(`${e.name} pilote Claude Code : ${e.what}`);
+      window.webkit?.messageHandlers?.carnet?.postMessage({ type: 'notify', title: `Claude Code piloté depuis ${e.name}`, body: e.what, url: '' });
+    }
     if (e.type === 'status' || e.type === 'devices') { refreshConnections(); if (app.view() === 'home') app.renderMain(); }
   });
   vault.onChange(refreshConnections);
@@ -592,7 +598,8 @@ function tabDevices() {
   if (!vault.enabled()) return needVault('Les clés de liaison des appareils');
   const devs = link.devices(), mine = link.me();
   return `<section class="cx-sec"><h4>${icon('devices')}Cet appareil</h4><form class="cx-row" data-f="rename"><input class="field" name="devname" value="${esc(mine.name)}" aria-label="Nom de cet appareil"><button class="btn">Renommer</button></form></section>
-    <section class="cx-sec"><h4>Appareils liés</h4>${devs.length ? devs.map(d => `<div class="cx-dev"><span class="dot ${link.status(d.secret) === 'connecté' ? 'on' : ''}"></span><div><strong>${esc(d.name)}</strong><span>${esc(link.status(d.secret))}${d.lastSync ? ` · synchro ${esc(rel(d.lastSync))}` : ''}</span></div><button class="icon-btn" data-dev-packet="${d.secret}" title="Envoyer un paquet chiffré (AirDrop…)" aria-label="Paquet chiffré">${icon('share')}</button><button class="icon-btn" data-dev-forget="${d.secret}" title="Oublier" aria-label="Oublier">${icon('trash')}</button></div>`).join('') : '<p>Aucun pour l’instant.</p>'}
+    <section class="cx-sec"><h4>Appareils liés</h4>${devs.length ? devs.map(d => `<div class="cx-dev"><span class="dot ${link.status(d.secret) === 'connecté' ? 'on' : ''}"></span><div><strong>${esc(d.name)}</strong><span>${esc(link.status(d.secret))}${d.lastSync ? ` · synchro ${esc(rel(d.lastSync))}` : ''}</span>${bridge.local() ? `<label class="cx-remote"><input type="checkbox" data-dev-remote="${d.secret}"${d.remote ? ' checked' : ''}>Peut piloter Claude Code sur ce Mac</label>` : ''}</div><button class="icon-btn" data-dev-packet="${d.secret}" title="Envoyer un paquet chiffré (AirDrop…)" aria-label="Paquet chiffré">${icon('share')}</button><button class="icon-btn" data-dev-forget="${d.secret}" title="Oublier" aria-label="Oublier">${icon('trash')}</button></div>`).join('') : '<p>Aucun pour l’instant.</p>'}
+      ${bridge.local() && devs.length ? `<p class="modal-hint">${icon('shield')}Pilotage à distance : un appareil autorisé peut lancer, suivre, reprendre et arrêter les agents Claude Code de tes projets, tant que Studio est ouvert sur ce Mac. Il ne peut ni publier, ni supprimer une copie, ni autoriser les commandes ; chaque action est signalée ici.</p>` : ''}
       <div class="cx-grid"><button class="btn btn-primary" data-v="pair">${icon('phone')}Lier un appareil</button><button class="btn" data-v="join">J’ai un code</button>${devs.length ? `<button class="btn" data-v="sync">${icon('refresh')}Synchroniser</button>` : ''}<button class="btn" data-v="packet-in">Importer un paquet</button></div></section>
     <section class="cx-sec"><label class="cx-check"><input type="checkbox" data-lan${link.lanOnly() ? ' checked' : ''}> Même réseau Wi-Fi uniquement (aucun serveur STUN)</label>
     <p class="modal-hint">Comment ça marche : le code de liaison (128 bits) ne transite par aucun réseau. Il sert à chiffrer une courte poignée de main relayée par <code>ntfy.sh</code> — qui ne voit que du chiffré — puis les notes passent en direct d’appareil à appareil (WebRTC), et en temps réel tant que les deux sont ouverts. Sans réseau : « Paquet chiffré » via AirDrop.</p></section>`;
@@ -674,6 +681,7 @@ function onConnChange(e: Event): void {
   else if (t.dataset.cfg) ai.setConfig({ [t.dataset.cfg]: t.value.trim() });
   else if (t.matches('[data-autolock]')) vault.setSetting('autolock', Number(t.value));
   else if (t.matches('[data-lan]')) link.setLanOnly(t.checked);
+  else if (t.dataset.devRemote) void link.setRemote(t.dataset.devRemote, t.checked).then(() => toast(t.checked ? 'Cet appareil peut piloter Claude Code sur ce Mac' : 'Pilotage à distance retiré'));
   else if (t.matches('[data-nf-sys]')) { notifs.setSystem(t.checked); if (t.checked && notifs.systemState() === 'default') void notifs.askPermission().then(refreshConnections); }
 }
 

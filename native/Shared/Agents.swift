@@ -23,6 +23,9 @@ final class Agents {
         var result = "", lastText = "", cost = 0.0, turns = 0, denials: [String] = []
         var finished: Date?
         var quota: [String: Any]?
+        var machine = "mac", host = ""
+        /// Étapes reçues du flux (pour suivre un agent qui tourne sur un serveur).
+        var actions: [[String: String]] = []
         init(id: String, project: String, mode: String, prompt: String) { self.id = id; self.project = project; self.mode = mode; self.prompt = prompt }
     }
     private var runs: [String: Run] = [:]
@@ -47,7 +50,14 @@ final class Agents {
         return ["run": r.id, "project": r.project, "mode": r.mode, "prompt": r.prompt, "status": r.status, "session": r.session,
                 "worktree": r.worktree, "started": f.string(from: r.started), "finished": r.finished.map { f.string(from: $0) } ?? "",
                 "result": r.result, "lastText": r.lastText, "cost": r.cost, "turns": r.turns, "denials": r.denials,
-                "quota": r.quota ?? NSNull()]
+                "quota": r.quota ?? NSNull(), "machine": r.machine, "host": r.host]
+    }
+
+    /// Un agent et ses dernières étapes.
+    func detail(_ id: String) -> [String: Any] {
+        lock.lock(); defer { lock.unlock() }
+        guard let r = runs[id] else { return ["ok": false, "message": "Agent introuvable."] }
+        var s = summary(r); s["ok"] = true; s["actions"] = r.actions.suffix(80); return s
     }
 
     func list(project: String) -> [String: Any] {
@@ -67,8 +77,12 @@ final class Agents {
     /// `done` est appelé dès que la session est créée (ou en cas d'échec), l'agent continue ensuite seul.
     func start(project pid: String, body: [String: Any], done: @escaping ([String: Any]) -> Void) {
         let folders = ProjectFolders.shared
-        guard let dir = folders.path(pid) else { return done(["ok": false, "message": "Choisis d'abord le dossier du projet sur ce Mac."]) }
-        guard let bin = ClaudeCode.shared.binary() else { return done(["ok": false, "message": "Claude Code n'est pas installé sur ce Mac."]) }
+        let onServer = body["machine"] as? String == "server"
+        let server = onServer ? Servers.shared.config(pid) : nil
+        if onServer && server == nil { return done(["ok": false, "message": "Aucun serveur configuré pour ce projet (onglet Serveur)."]) }
+        guard let dir = onServer ? server?.path : folders.path(pid) else { return done(["ok": false, "message": "Choisis d'abord le dossier du projet sur ce Mac."]) }
+        let bin = onServer ? "/usr/bin/ssh" : (ClaudeCode.shared.binary() ?? "")
+        if bin.isEmpty { return done(["ok": false, "message": "Claude Code n'est pas installé sur ce Mac."]) }
         let prompt = (body["prompt"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, prompt.utf8.count <= 100_000 else { return done(["ok": false, "message": "Consigne vide ou trop longue."]) }
         lock.lock(); let busy = runs.values.filter { $0.status == "running" || $0.status == "starting" }.count >= maxRunning; lock.unlock()
@@ -80,9 +94,14 @@ final class Agents {
                     "--setting-sources", "", "--strict-mcp-config", "--disable-slash-commands"]
         if !resume.isEmpty {
             // Reprise : même dossier que la session d'origine, qui doit appartenir au projet.
-            guard let c = ClaudeSessions.shared.cwd(project: dir, session: resume) else { return done(["ok": false, "message": "Session introuvable pour ce projet."]) }
-            cwd = c; mode = c == dir ? "read" : "edit"
+            let known: String? = onServer ? { lock.lock(); defer { lock.unlock() }; return runs.values.first { $0.session == resume && $0.machine == "server" && $0.project == pid }?.cwd }() : ClaudeSessions.shared.cwd(project: dir, session: resume)
+            guard let c = known, c == dir || c.hasPrefix(dir + "/.claude/worktrees/") || onServer else { return done(["ok": false, "message": "Session introuvable pour ce projet."]) }
+            cwd = c; mode = c.contains("/.claude/worktrees/") ? "edit" : "read"
             args += ["--resume", resume]
+        } else if mode == "edit" && onServer {
+            let stamp = DateFormatter(); stamp.dateFormat = "MMdd-HHmm"
+            let base = Self.slug(body["name"] as? String ?? prompt)
+            args += ["--worktree", "studio-" + (base.isEmpty ? "agent" : base) + "-" + stamp.string(from: Date())]
         } else if mode == "edit" {
             guard folders.isRepo(dir) else { return done(["ok": false, "message": "Le mode « modifier » demande un dépôt Git : il travaille dans une copie isolée."]) }
             folders.excludeWorktrees(dir)
@@ -91,7 +110,7 @@ final class Agents {
             let name = "studio-" + (base.isEmpty ? "agent" : base) + "-" + stamp.string(from: Date())
             args += ["--worktree", name]
         }
-        let tests = mode == "edit" && body["tests"] as? Bool == true
+        let tests = mode == "edit" && body["tests"] as? Bool == true && !onServer
         let tools = (mode == "edit" ? Self.editTools : Self.readTools) + (tests ? ["Bash"] : [])
         args += ["--tools", tools.joined(separator: ",")]
         if let model = body["model"] as? String, !model.isEmpty,
@@ -105,10 +124,20 @@ final class Agents {
 
         let run = Run(id: UUID().uuidString, project: pid, mode: mode, prompt: String(prompt.prefix(500)))
         if !resume.isEmpty { run.session = resume; run.cwd = cwd; run.worktree = cwd.range(of: "/.claude/worktrees/").map { String(cwd[$0.upperBound...]) } ?? "" }
+        run.actions.append(["at": ISO8601DateFormatter().string(from: Date()), "kind": "prompt", "text": String(prompt.prefix(400))])
         let p = Process()
         p.executableURL = URL(fileURLWithPath: bin)
-        p.arguments = args
-        p.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
+        if let server {
+            // Sur le serveur : modèle de commande fixe, chaque argument protégé, Claude Code cherché aux emplacements usuels.
+            run.machine = "server"; run.host = server.host
+            let exclude = mode == "edit" && resume.isEmpty ? "(grep -qxF '.claude/worktrees/' .git/info/exclude 2>/dev/null || echo '.claude/worktrees/' >> .git/info/exclude) 2>/dev/null; " : ""
+            let remote = "cd \(Servers.qPath(cwd)) && \(exclude)PATH=\"$HOME/.local/bin:$HOME/.claude/local:$PATH\" exec claude " + args.map(Servers.q).joined(separator: " ")
+            p.arguments = Servers.shared.sshArgs(server.host, remote)
+            p.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        } else {
+            p.arguments = args
+            p.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
+        }
         var env = ProcessInfo.processInfo.environment
         env["DISABLE_AUTOUPDATER"] = "1"; env["NO_COLOR"] = "1"
         p.environment = env
@@ -169,10 +198,19 @@ final class Agents {
             answer(withOk(run))
         case "assistant":
             lock.lock(); run.turns += 1
+            let now = ISO8601DateFormatter().string(from: Date())
             if let m = e["message"] as? [String: Any] {
-                for b in m["content"] as? [[String: Any]] ?? [] where b["type"] as? String == "text" {
-                    if let t = b["text"] as? String, !t.isEmpty { run.lastText = String(t.prefix(300)) }
+                for b in m["content"] as? [[String: Any]] ?? [] {
+                    if b["type"] as? String == "text", let t = b["text"] as? String, !t.isEmpty {
+                        run.lastText = String(t.prefix(300)); run.actions.append(["at": now, "kind": "text", "text": String(t.prefix(400))])
+                    }
+                    if b["type"] as? String == "tool_use", let name = b["name"] as? String {
+                        let input = b["input"] as? [String: Any] ?? [:]
+                        let detail = input["file_path"] as? String ?? input["path"] as? String ?? input["pattern"] as? String ?? input["command"] as? String ?? ""
+                        run.actions.append(["at": now, "kind": "tool:" + name, "text": String(detail.prefix(240))])
+                    }
                 }
+                if run.actions.count > 150 { run.actions.removeFirst(run.actions.count - 150) }
             }
             lock.unlock()
         case "rate_limit_event":

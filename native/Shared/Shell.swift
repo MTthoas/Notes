@@ -161,6 +161,15 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         case "push": bg { folders.commitPush(pid, name: body["worktree"] as? String ?? "", message: body["message"] as? String ?? "") }
         case "discard": bg { folders.removeWorktree(pid, name: body["worktree"] as? String ?? "") }
         case "commits": bg { folders.commits(pid, days: body["days"] as? Int ?? 30) }
+        case "run": send(Agents.shared.detail(body["run"] as? String ?? ""))
+        case "server":
+            switch body["op"] as? String ?? "" {
+            case "hosts": bg { Servers.shared.hosts() }
+            case "set": bg { Servers.shared.set(pid, host: body["host"] as? String ?? "", path: body["path"] as? String ?? "") }
+            case "forget": Servers.shared.forget(pid); send(["ok": true])
+            case "terminal": send(Servers.shared.terminal(pid))
+            default: bg { Servers.shared.status(pid) }
+            }
         case "daily":
             guard let dir = folders.path(pid) else { send(["ok": true, "tokens": [:], "sessions": [:]]); return }
             ClaudeSessions.shared.daily(project: dir, days: body["days"] as? Int ?? 30, done: send)
