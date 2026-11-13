@@ -112,6 +112,11 @@ final class ClaudeSessions {
 
     /// Met à jour l'état d'une session en lisant seulement la fin ajoutée du fichier.
     private func refresh(_ url: URL) -> State? {
+        touched[url.path] = Date()
+        // Rien de nouveau dans le fichier (cas le plus fréquent, à chaque rafraîchissement) : on ne l'ouvre même pas.
+        if let known = states[url.path],
+           let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.uint64Value,
+           size == known.offset { return known }
         guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? h.close() }
         let st = states[url.path] ?? State()
@@ -130,6 +135,23 @@ final class ClaudeSessions {
         return st
     }
 
+    /// Dernière lecture de chaque état, et dernier passage du ménage.
+    private var touched: [String: Date] = [:]
+    private var pruned = Date()
+
+    /// Libère la mémoire des fils qu'on ne regarde plus (au plus une fois par minute) : ceux des sous-agents
+    /// restés dix minutes sans lecture, et ceux dont le journal a disparu. Un fil rouvert est simplement relu.
+    private func prune() {
+        let now = Date()
+        guard now.timeIntervalSince(pruned) > 60 else { return }
+        pruned = now
+        for path in Array(states.keys) {
+            let idle = path.contains("/subagents/") && now.timeIntervalSince(touched[path] ?? .distantPast) > 600
+            if idle || !FileManager.default.fileExists(atPath: path) { forget(path) }
+        }
+    }
+    private func forget(_ path: String) { states[path] = nil; touched[path] = nil; metas[path] = nil }
+
     private func summary(_ url: URL, _ st: State) -> [String: Any] {
         let mtime = self.mtime(url)
         let worktree = st.cwd.range(of: "/.claude/worktrees/").map { String(st.cwd[$0.upperBound...]) } ?? ""
@@ -145,6 +167,7 @@ final class ClaudeSessions {
     /// Sessions du dossier, les plus récentes d'abord, et l'état de la limite d'utilisation de Claude Code.
     func list(project folder: String, done: @escaping ([String: Any]) -> Void) {
         queue.async {
+            self.prune()
             let files = self.files(for: folder).prefix(25)
             if files.isEmpty { return done(["ok": true, "sessions": [], "found": false]) }
             var out: [[String: Any]] = [], quota: [String: Any]? = nil
@@ -235,7 +258,12 @@ final class ClaudeSessions {
             guard let f = self.file(folder, session) else { return done(["ok": false, "message": "Session introuvable."]) }
             do {
                 try FileManager.default.trashItem(at: f, resultingItemURL: nil)
-                self.states[f.path] = nil
+                self.forget(f.path)
+                // Les fils de ses sous-agents (dossier du même nom, à côté du journal) partent avec elle,
+                // et leurs états en mémoire sont libérés tout de suite.
+                let side = f.deletingPathExtension()
+                for k in Array(self.states.keys) + Array(self.metas.keys) where k.hasPrefix(side.path + "/") { self.forget(k) }
+                if FileManager.default.fileExists(atPath: side.path) { try? FileManager.default.trashItem(at: side, resultingItemURL: nil) }
                 done(["ok": true])
             } catch { done(["ok": false, "message": "Suppression impossible : \(error.localizedDescription)"]) }
         }
