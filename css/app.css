@@ -1359,6 +1359,27 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .us-sum em { font-style: normal; color: var(--text-3); font-size: var(--t-1); opacity: .8; }
 .us-rows + .cx-row, .us-sum + .cx-row { margin-top: 14px; }
 
+/* Réglages → Consignes et contexte */
+.tn-sum { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.tn-text { border-top: 1px solid var(--border); }
+.tn-text summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; cursor: pointer; font-weight: 500; list-style: none; }
+.tn-text summary::-webkit-details-marker { display: none; }
+.tn-text summary span::before { content: "›"; display: inline-block; width: 14px; color: var(--text-3); transition: transform .12s; }
+.tn-text[open] summary span::before { transform: rotate(90deg); }
+.tn-text summary em { flex: none; font-style: normal; font-weight: 400; color: var(--text-3); font-size: var(--t-1); font-variant-numeric: tabular-nums; }
+.tn-text summary em b { font-weight: 500; color: var(--c-amber, var(--text-2)); }
+.tn-text .field.area { margin: 8px 0 0; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--t-1); min-height: 76px; }
+.tn-text .tn-reset { display: inline-block; margin: 8px 0 14px; font-size: var(--t-1); }
+.cx-sec .tn-hint { margin: 0 0 4px; }
+.tn-text .tn-hint { margin: 0; }
+.tn-row, .tn-check { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.tn-row > span:first-child { flex: 1; font-weight: 500; }
+.tn-row > span:last-child:not(:first-child) { flex: none; width: 76px; color: var(--text-3); font-size: var(--t-1); }
+.cx-row.tn-num .field { flex: none; width: 120px; }
+.cx-row.tn-line .field, .cx-row.tn-choice .field { flex: none; width: min(300px, 55%); }
+.tn-check + .tn-hint, .tn-row + .tn-hint { margin: 4px 0 0; }
+.tn-saved { margin: 0 0 12px; }
+
 /* Revue IA */
 .modal.rv { max-width: 760px; }
 .rv-stat { margin: 0; max-height: 180px; overflow: auto; padding: 10px 12px; border-radius: 8px; background: var(--code); border: 1px solid var(--border); font: 12px/1.5 var(--mono); white-space: pre; }

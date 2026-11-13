@@ -213,6 +213,15 @@ Studio se branche sur **Claude**, **OpenAI** ou un **modèle local** : les appel
 - La consommation passe par les limites de ton abonnement : elle est comptée à part du budget des clés API.
 - **Utilisation de l'abonnement** : les tokens consommés par Claude Code sur ce Mac (5 dernières heures, aujourd'hui, 7 jours, par modèle), lus dans ses journaux locaux, toutes sessions confondues. Sur demande (**Afficher mes limites**), la part utilisée de la session de 5 heures et de la semaine, comme `/usage` : Studio lit alors la connexion de Claude Code dans le trousseau (macOS demande ton accord) et interroge `api.anthropic.com`, en lecture seule. Le jeton ne quitte jamais l'app native et n'est jamais renouvelé par Studio. Une fois activée, la part restante s'affiche aussi sous la consigne de l'onglet **Claude Code** de chaque projet, y compris depuis un appareil autorisé à piloter le Mac (il ne reçoit que les pourcentages).
 
+**Consignes et contexte** — Réglages → Consignes et contexte réunit tout ce que Studio envoie à l'IA en plus de ta demande, avec une estimation en tokens :
+
+- **Agents Claude Code** : les blocs ajoutés à leur consigne (cadre, mode Modifier ou Analyser, économie de contexte, façon de travailler, tes propres consignes), le seuil à partir duquel le contexte est résumé, et les appels accessoires. Gardés sur le Mac, ils valent pour tous les agents, y compris ceux lancés depuis un appareil lié.
+- **Automatisations** : les blocs de la consigne système (rôle, compte rendu, sous-agent, règles), le nombre d'étapes au plus, la taille du résultat d'un sous-agent, le cache de prompt.
+- **Tâches de fond** : le modèle léger des noms de conversation, messages de commit et résumés du journal, leurs consignes, celle de la revue de code.
+- **Contexte envoyé** : la taille maximale des notes jointes, du diff, des demandes d'une journée.
+
+Chaque consigne peut être rétablie à son texte d'origine, et tout d'un coup.
+
 ### Synchronisation entre appareils
 
 Réglages → Appareils → « Lier un appareil ». Un secret de 128 bits passe d'un écran à l'autre (QR code ou copier-coller via le presse-papiers universel). Il chiffre une courte poignée de main relayée par `ntfy.sh` — qui ne voit que du chiffré, non stocké — puis les notes passent en direct entre appareils (WebRTC), et en temps réel tant que les deux sont ouverts.
@@ -286,6 +295,7 @@ src/                               TypeScript strict
   integrations/     services extérieurs, appelés directement depuis l'app
     ai.ts             Claude, OpenAI, modèle local : boucle d'agent et outils
     usage.ts          consommation de l'IA : tokens par mois, fournisseur et modèle
+    tuning.ts         consignes et limites de contexte de l'IA, modifiables dans les réglages
     link.ts           liaison et synchronisation entre appareils (WebRTC)
     remote.ts         pont vers les agents Claude Code, sur le Mac ou via un Mac lié
     linear/           api.ts (GraphQL typé), page.ts, render.ts, notifications.ts

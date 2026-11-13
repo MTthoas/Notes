@@ -4,15 +4,12 @@ import * as store from '../../core/store.ts';
 import * as native from '../../core/native.ts';
 import * as ai from '../../integrations/ai.ts';
 import * as usage from '../../integrations/usage.ts';
+import * as tuning from '../../integrations/tuning.ts';
 import { esc, renderMarkdown } from '../../lib/markdown.ts';
 import { icon, modal, need, toast, errMsg } from '../../ui/kit.ts';
 import type { Project } from './model.ts';
 
-const PROMPT = `Fais la revue de code de ces changements, comme un relecteur senior exigeant.
-Classe tes remarques par gravité : **Bloquant**, **Important**, **Mineur**. Pour chacune : le fichier (et la ligne si possible), le problème, la correction proposée, en une ou deux phrases.
-Regarde en priorité : bugs et régressions probables, sécurité (secrets, injections, données non validées), cas limites, cohérence avec le reste du code. Puis lisibilité.
-Pas de compliments ni de résumé du diff. S'il n'y a rien de grave, dis-le en une ligne.
-Termine par les corrections à faire, en cases - [ ].`;
+// La consigne de la revue se règle dans Réglages → Consignes et contexte (voir integrations/tuning.ts).
 
 export async function review(p: Project, scope: 'working' | 'branch', worktree = ''): Promise<void> {
   if (!native.available()) { toast('La revue lit les changements du dossier : disponible dans l’app Studio pour Mac.'); return; }
@@ -35,7 +32,7 @@ export async function review(p: Project, scope: 'working' | 'branch', worktree =
     go.disabled = true; status.innerHTML = '<span class="spin"></span> Relecture en cours…';
     const before = usage.all();
     try {
-      const r = await ai.run({ prompt: PROMPT, tools: [], context: `Projet : ${p.name}\nChangements (${scope === 'working' ? 'non commités' : 'de la branche'}) :\n\n${stat}\n\n\`\`\`diff\n${patch}\n\`\`\`` });
+      const r = await ai.run({ prompt: tuning.text('small.review'), tools: [], context: `Projet : ${p.name}\nChangements (${scope === 'working' ? 'non commités' : 'de la branche'}) :\n\n${stat}\n\n\`\`\`diff\n${patch}\n\`\`\`` });
       text = r.text;
       out.innerHTML = renderMarkdown(text || '*(réponse vide)*'); out.hidden = false;
       status.textContent = `Relu par ${ai.PROVIDERS[r.provider]} · ${usage.fmt(usage.all() - before)} tokens`;

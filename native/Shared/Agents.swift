@@ -49,18 +49,7 @@ final class Agents {
     private static let readTools = ["Read", "Glob", "Grep"]
     private static let editTools = ["Read", "Glob", "Grep", "Edit", "Write"]
     private static let testCommands = ["Bash(npm test)", "Bash(npm run test)", "Bash(npm run *)"]
-    /// Consignes des agents qui modifient : pas de commit, conflits, et le message de commit qu'ils proposent.
-    private static let editRules = """
-        Tu travailles dans une copie isolée du dépôt ; ne fais pas de commit, l'utilisateur relira tes changements. \
-        Si un fichier contient des marqueurs de conflit (<<<<<<< ======= >>>>>>>), c'est que ta copie a été remise sur la dernière \
-        version de la branche principale : fusionne les deux côtés à la main en gardant leurs intentions, et retire tous les marqueurs. \
-        Quand ton travail précédent a été fusionné dans la branche principale, Studio remet ta copie sur sa dernière version, \
-        sur une nouvelle branche : ce travail y est déjà, ne le refais pas et ne le propose plus. \
-        Quand tu as modifié des fichiers, termine ton compte rendu par une dernière ligne, seule, de la forme \
-        « Commit: type(portée): résumé » au format Conventional Commits (feat, fix, refactor, docs, test, chore, perf, style, build, ci ; \
-        72 caractères au plus ; à l'impératif ; en anglais sauf si le dépôt est rédigé dans une autre langue ; sans point final). \
-        Elle décrit l'ensemble des changements présents dans la copie, jamais la demande elle-même (pas de « résout le conflit »).
-        """
+    // Les consignes ajoutées à celle de Claude Code et les réglages de contexte : voir AgentTuning, en bas de ce fichier.
     private static let modelRe = try! NSRegularExpression(pattern: "^[a-z0-9][a-z0-9.\\-]{0,40}$")
     private static let efforts: Set<String> = ["low", "medium", "high", "xhigh", "max"]
 
@@ -301,17 +290,8 @@ final class Agents {
         let effortOK = Self.efforts.contains(useEffort)
         if modelOK { args += ["--model", useModel] }
         if effortOK { args += ["--effort", useEffort] }
-        args += ["--append-system-prompt", """
-            Tu es lancé depuis Studio. L'utilisateur lit tes messages dans un fil de discussion et peut te répondre ensuite \
-            en reprenant la session, mais personne ne répond pendant que tu travailles : ce qu'il t'écrit pendant ton tour \
-            t'est remis d'un bloc à la fin de celui-ci. \
-            \(mode == "edit" ? Self.editRules : "Tu es en lecture seule : analyse et propose, sans modifier de fichier.") \
-            Si l'utilisateur demande une tâche précise, mène-la de façon autonome jusqu'au bout, puis termine par un compte rendu \
-            court en Markdown : ce qui a été fait, les fichiers touchés, ce qui reste à décider. \
-            S'il veut au contraire réfléchir, discuter, comparer des options ou avoir ton avis, ne te lance pas dans la réalisation : \
-            réponds comme dans une conversation, donne ton analyse et ta recommandation, pose tes questions, et attends sa réponse \
-            avant de modifier quoi que ce soit.
-            """]
+        let added = AgentTuning.prompt(mode: mode, tests: tests)
+        if !added.isEmpty { args += ["--append-system-prompt", added] }
         args += ["--allowedTools"] + tools.filter { $0 != "Bash" } + (tests ? Self.testCommands : [])
 
         let run = Run(id: UUID().uuidString, project: pid, mode: mode, prompt: String(prompt.prefix(500)))
@@ -332,7 +312,8 @@ final class Agents {
                     + "git worktree add -q --no-track -b \(Servers.q("worktree-" + newWorktree)) \(Servers.q(wt)) \"$B\" && cd \(Servers.q(wt)) && "
             }
             // Première ligne du flux : le numéro du processus distant (exec le conserve), pour pouvoir l'arrêter.
-            let remote = "cd \(Servers.qPath(cwd)) && \(prep)echo \"{\\\"type\\\":\\\"studio_pid\\\",\\\"pid\\\":$$}\" && PATH=\"$HOME/.local/bin:$HOME/.claude/local:$PATH\" exec claude " + args.map(Servers.q).joined(separator: " ")
+            let remote = "cd \(Servers.qPath(cwd)) && \(prep)echo \"{\\\"type\\\":\\\"studio_pid\\\",\\\"pid\\\":$$}\" && PATH=\"$HOME/.local/bin:$HOME/.claude/local:$PATH\" "
+                + AgentTuning.env().sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value) " }.joined() + "exec claude " + args.map(Servers.q).joined(separator: " ")
             p.arguments = Servers.shared.sshArgs(server.host, remote)
             p.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         } else {
@@ -341,6 +322,7 @@ final class Agents {
         }
         var env = ProcessInfo.processInfo.environment
         env["DISABLE_AUTOUPDATER"] = "1"; env["NO_COLOR"] = "1"
+        for (k, v) in AgentTuning.env() { env[k] = v }
         p.environment = env
         let out = Pipe(), input = Pipe()
         p.standardOutput = out; p.standardError = FileHandle.nullDevice; p.standardInput = input
@@ -447,6 +429,111 @@ final class Agents {
             lock.unlock()
         default: break
         }
+    }
+}
+
+/// Consignes ajoutées à celle de Claude Code pour chaque agent, et réglages qui bornent son contexte.
+/// Modifiables dans Réglages → Consignes et contexte (app Mac) ; seules les valeurs modifiées sont gardées
+/// (UserDefaults), les autres suivent les valeurs d'origine ci-dessous. Elles sont lues à chaque lancement,
+/// y compris ceux de l'orchestrateur, des messages en attente et des appareils liés.
+enum AgentTuning {
+    private static let store = "studio.agents.tuning"
+    private static let textKeys = ["intro", "edit", "read", "economy", "tests", "behavior", "extra"]
+
+    static let defaults: [String: Any] = [
+        "intro": """
+            Tu es lancé depuis Studio. L'utilisateur lit tes messages dans un fil de discussion et peut te répondre ensuite \
+            en reprenant la session, mais personne ne répond pendant que tu travailles : ce qu'il t'écrit pendant ton tour \
+            t'est remis d'un bloc à la fin de celui-ci.
+            """,
+        // Agents qui modifient : pas de commit, conflits, et le message de commit qu'ils proposent (Studio relit la ligne « Commit: »).
+        "edit": """
+            Tu travailles dans une copie isolée du dépôt ; ne fais pas de commit, l'utilisateur relira tes changements. \
+            Si un fichier contient des marqueurs de conflit (<<<<<<< ======= >>>>>>>), c'est que ta copie a été remise sur la dernière \
+            version de la branche principale : fusionne les deux côtés à la main en gardant leurs intentions, et retire tous les marqueurs. \
+            Quand ton travail précédent a été fusionné dans la branche principale, Studio remet ta copie sur sa dernière version, \
+            sur une nouvelle branche : ce travail y est déjà, ne le refais pas et ne le propose plus. \
+            Quand tu as modifié des fichiers, termine ton compte rendu par une dernière ligne, seule, de la forme \
+            « Commit: type(portée): résumé » au format Conventional Commits (feat, fix, refactor, docs, test, chore, perf, style, build, ci ; \
+            72 caractères au plus ; à l'impératif ; en anglais sauf si le dépôt est rédigé dans une autre langue ; sans point final). \
+            Elle décrit l'ensemble des changements présents dans la copie, jamais la demande elle-même (pas de « résout le conflit »). \
+            Modifie avec Edit plutôt que de réécrire un fichier entier avec Write.
+            """,
+        "read": "Tu es en lecture seule : analyse et propose, sans modifier de fichier.",
+        // Un agent relit tout son contexte à chaque appel d'outil : ce qu'il y fait entrer (fichiers entiers, relectures,
+        // dossiers générés, copies des autres agents) se paie à chaque tour suivant.
+        "economy": """
+            Économise ton contexte, il est relu en entier à chaque tour : cherche avec Grep ou Glob avant de lire, puis ne lis \
+            que la partie utile des gros fichiers (offset et limit) ; ne relis pas un fichier déjà lu ou que tu viens de modifier ; \
+            lance dans le même tour les recherches et les lectures indépendantes ; laisse de côté node_modules, dist, build, \
+            les fichiers générés ou minifiés, les verrous de dépendances et les autres copies du dépôt sous .claude/worktrees/ ; \
+            ne commente pas chaque étape et ne recopie pas de code dans ton compte rendu.
+            """,
+        "tests": "Lance les tests les plus ciblés possible, une fois tes changements faits plutôt qu'après chaque modification.",
+        "behavior": """
+            Si l'utilisateur demande une tâche précise, mène-la de façon autonome jusqu'au bout, puis termine par un compte rendu \
+            court en Markdown : ce qui a été fait, les fichiers touchés, ce qui reste à décider. \
+            S'il veut au contraire réfléchir, discuter, comparer des options ou avoir ton avis, ne te lance pas dans la réalisation : \
+            réponds comme dans une conversation, donne ton analyse et ta recommandation, pose tes questions, et attends sa réponse \
+            avant de modifier quoi que ce soit.
+            """,
+        "extra": "",
+        // Le contexte est résumé dès ce nombre de tokens, même avec un modèle qui en accepte un million : une longue
+        // conversation ne fait pas relire des centaines de milliers de tokens à chaque appel d'outil. 0 : réglage de Claude Code.
+        "compactWindow": 200_000,
+        // Pas d'appels au modèle pour l'accessoire (textes d'attente, suggestions).
+        "lean": true,
+    ]
+
+    private static var saved: [String: Any] { UserDefaults.standard.dictionary(forKey: store) ?? [:] }
+
+    static func text(_ key: String) -> String {
+        (saved[key] as? String ?? defaults[key] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    static var compactWindow: Int { saved["compactWindow"] as? Int ?? 200_000 }
+    static var lean: Bool { saved["lean"] as? Bool ?? true }
+
+    /// Texte ajouté à la consigne système de Claude Code, selon le mode de l'agent.
+    static func prompt(mode: String, tests: Bool) -> String {
+        [text("intro"), text(mode == "edit" ? "edit" : "read"), text("economy"), tests ? text("tests") : "", text("behavior"), text("extra")]
+            .filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// Réglages passés à Claude Code par son environnement (une variable inconnue de la version installée est ignorée).
+    static func env() -> [String: String] {
+        var e: [String: String] = [:]
+        if compactWindow > 0 { e["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = String(compactWindow) }
+        if lean { e["DISABLE_NON_ESSENTIAL_MODEL_CALLS"] = "1" }
+        return e
+    }
+
+    /// Valeurs en vigueur, valeurs d'origine, et clés modifiées (pour la page de réglages).
+    static func state() -> [String: Any] {
+        var values = defaults
+        for k in textKeys { values[k] = saved[k] as? String ?? defaults[k] as? String ?? "" }
+        values["compactWindow"] = compactWindow
+        values["lean"] = lean
+        var changed = textKeys.filter { (values[$0] as? String) != (defaults[$0] as? String) }
+        if compactWindow != 200_000 { changed.append("compactWindow") }
+        if !lean { changed.append("lean") }
+        return ["ok": true, "values": values, "defaults": defaults, "changed": changed]
+    }
+
+    /// Applique une demande de la page de réglages : `set` (clé → valeur) et `reset` (une clé, ou « all »).
+    static func apply(_ body: [String: Any]) {
+        var s = saved
+        if let r = body["reset"] as? String { if r == "all" { s = [:] } else { s[r] = nil } }
+        for (k, v) in body["set"] as? [String: Any] ?? [:] {
+            if textKeys.contains(k) {
+                if let t = v as? String, t.utf8.count <= 12_000 { s[k] = t }
+            } else if k == "compactWindow" {
+                // 0 : laisser Claude Code décider ; sinon borné, pour qu'une faute de frappe ne résume pas tout à chaque tour.
+                if let n = (v as? NSNumber)?.intValue { s[k] = n <= 0 ? 0 : min(2_000_000, max(50_000, n)) }
+            } else if k == "lean" {
+                if let b = v as? Bool { s[k] = b }
+            }
+        }
+        UserDefaults.standard.set(s, forKey: store)
     }
 }
 #endif

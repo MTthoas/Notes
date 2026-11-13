@@ -178,6 +178,8 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
             var b = body; b["internal"] = nil
             DispatchQueue.global(qos: .userInitiated).async { Agents.shared.start(project: pid, body: b, done: send) }
         case "list": send(Agents.shared.list(project: pid))
+        // Consignes et réglages de contexte des agents (Réglages → Consignes et contexte) : lecture, modification, retour à l'origine.
+        case "tuning": AgentTuning.apply(body); send(AgentTuning.state())
         case "unqueue": send(Agents.shared.unqueue(project: pid, id: body["queued"] as? String ?? ""))
         case "stop": send(Agents.shared.stop(body["run"] as? String ?? ""))
         case "worktrees": bg { folders.worktrees(pid) }

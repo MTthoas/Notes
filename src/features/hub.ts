@@ -16,6 +16,8 @@ import * as usage from '../integrations/usage.ts';
 import * as update from '../core/update.ts';
 import * as news from './news.ts';
 import * as journal from './journal.ts';
+import * as tuning from '../integrations/tuning.ts';
+import * as tuningUI from './tuning.ts';
 import type { AppEvent } from '../core/events.ts';
 import { renderMarkdown, esc, plain } from '../lib/markdown.ts';
 import { fold } from '../lib/fuzzy.ts';
@@ -364,6 +366,8 @@ function tick(): void {
 }
 
 // ---------- Demander à l'IA ----------
+/** Note ouverte jointe à la demande : bornée, comme une note lue par l'outil lire_note (elle est renvoyée à chaque étape). */
+const noteContext = (body: string): string => { const max = tuning.num('ctx.note'); return body.length > max ? body.slice(0, max) + '\n…(note tronquée)' : body; };
 export function askAI(prefill = ''): void {
   const n = app.current(), cfg = ai.config();
   const canCtx = !!n && !n.deletedAt && !store.isLocked(n) && ai.shareable(n);
@@ -381,7 +385,7 @@ export function askAI(prefill = ''): void {
     busy = true; status.innerHTML = '<span class="spin"></span> Réflexion…'; steps.innerHTML = ''; out.hidden = true;
     const opt = (k: string) => !!$<HTMLInputElement>(`[data-o="${k}"]`, m.node)?.checked;
     try {
-      const ctx = n && opt('ctx') ? `Note ouverte : « ${titleOf(n)} »\n\n${store.getBody(n) ?? ''}` : '';
+      const ctx = n && opt('ctx') ? `Note ouverte : « ${titleOf(n)} »\n\n${noteContext(store.getBody(n) ?? '')}` : '';
       void journal.record(ta.value, n && opt('ctx') ? `Demander à l’IA · ${titleOf(n)}` : 'Demander à l’IA');
       const r = await ai.run({ prompt: ta.value, provider: p, context: ctx, tools: ['notes', 'linear', 'agents'].filter(opt) },
         { approve, onWrite: app.refreshNote, onStep: e => steps.insertAdjacentHTML('beforeend', `<div>${icon('bolt')}${esc(stepLabel(e))}</div>`) });
@@ -456,6 +460,7 @@ export async function newAgentNote(): Promise<void> {
 const TABS: [string, string, string, string][] = [
   ['coffre', 'shield', 'Sécurité', 'Chiffrement de tout le carnet, déverrouillage et verrouillage automatique.'],
   ['ia', 'sparkle', 'Intelligence artificielle', 'Ton abonnement Claude via Claude Code, ou une clé Claude, OpenAI, ou un modèle local.'],
+  ['consignes', 'gear', 'Consignes et contexte', 'Tout ce que Studio envoie à l’IA en plus de ta demande : consignes, limites de contexte, modèles. Modifiable, et rétablissable d’un clic.'],
   ['linear', 'linear', 'Linear', 'Tickets, projets et notifications Linear, sans intermédiaire.'],
   ['github', 'github', 'GitHub', 'L’actualité de tes dépôts, en lecture seule.'],
   ['appareils', 'devices', 'Appareils', 'Relie ton téléphone et tes ordinateurs, sans serveur, chiffré de bout en bout.'],
@@ -480,7 +485,7 @@ export function mountSettings(main: HTMLElement, tab: string): void {
   refreshConnections();
 }
 
-const TAB_BODY: Record<string, () => string> = { coffre: () => tabVault(), ia: () => tabAI(), linear: () => tabLinear(), github: () => tabGithub(), appareils: () => tabDevices(), apparence: () => tabLook(), donnees: () => tabData(), maj: () => tabUpdate() };
+const TAB_BODY: Record<string, () => string> = { coffre: () => tabVault(), ia: () => tabAI(), consignes: () => tuningUI.html(), linear: () => tabLinear(), github: () => tabGithub(), appareils: () => tabDevices(), apparence: () => tabLook(), donnees: () => tabData(), maj: () => tabUpdate() };
 function refreshConnections(): void {
   const r = root(); if (!r) return;
   const active = document.activeElement as HTMLInputElement | null;
@@ -492,6 +497,7 @@ function refreshConnections(): void {
   if (curTab === 'github' && github.connected()) github.viewer().then(v => { const x = $('[data-gh-who]', body); if (x) x.textContent = `Connecté : ${v.login}`; }).catch(e => { const x = $('[data-gh-who]', body); if (x) x.textContent = 'Erreur : ' + e.message; });
   if (curTab === 'linear' && linear.connected()) linear.viewer().then(v => { const x = $('.cx-who', body); if (x) x.textContent = `Connecté : ${v.viewer.name} · ${v.organization.name}`; }).catch(e => { const x = $('.cx-who', body); if (x) x.textContent = 'Erreur : ' + e.message; });
   if (curTab === 'ia') ccRefresh();
+  if (curTab === 'consignes') tuningUI.mount();
   if (curTab === 'maj' && update.supported() && !update.current() && !update.working() && !update.outdatedShell()) void update.check();
   if (curTab === 'donnees') navigator.storage?.estimate?.().then(e => { const x = $('.cx-usage', body); if (x) x.textContent = `${((e.usage ?? 0) / 1048576).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo utilisés sur cet appareil.`; });
 }
@@ -686,6 +692,7 @@ function tabDevices() {
 async function onConnClick(e: MouseEvent) {
   const t = target(e);
   const tab = t.closest('[data-tab]'); if (tab) { openConnections(tab.dataset.tab); return; }
+  if (curTab === 'consignes' && await tuningUI.onClick(t, refreshConnections)) return;
   const del = t.closest('[data-del-key]'); if (del) { if (await confirmBox({ title: 'Supprimer la clé ?', text: 'Elle sera effacée du coffre de cet appareil.', ok: 'Supprimer', danger: true })) await vault.setSecret(del.dataset.delKey ?? '', null); return; }
   const fg = t.closest('[data-dev-forget]'); if (fg) { if (await confirmBox({ title: 'Oublier cet appareil ?', text: 'La liaison sera supprimée ici. Fais de même sur l’autre appareil.', ok: 'Oublier', danger: true })) await link.forget(fg.dataset.devForget ?? ''); return; }
   const pk = t.closest('[data-dev-packet]'); if (pk) { const dev = link.devices().find(d => d.secret === pk.dataset.devPacket); if (dev) await sendPacket(dev); return; }
@@ -764,6 +771,7 @@ async function onConnSubmit(e: SubmitEvent) {
 
 function onConnChange(e: Event): void {
   const t = target(e) as HTMLInputElement;
+  if (curTab === 'consignes' && tuningUI.onChange(t)) return;
   if (t.name === 'provider') ai.setConfig({ provider: t.value as ai.Provider });
   else if (t.name === 'theme') app.setTheme(t.value);
   else if (t.dataset.cfg === 'budgetM') { ai.setConfig({ budgetM: Math.max(0, Number(t.value) || 0) }); refreshConnections(); }
