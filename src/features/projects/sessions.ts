@@ -84,6 +84,13 @@ function noteSubs(session: string, list: unknown): void {
   }
   if (renamed) savePins();
 }
+/** Ferme les sous-agents des conversations qu'on ne regarde plus : leur liste n'est plus tenue à jour une fois
+ *  la conversation quittée (un point « en cours » y resterait allumé pour rien). Les épinglés gardent leur nom. */
+function closeSubs(keep: string | null): void {
+  for (const k of [...subsOf.keys()]) if (k !== keep) subsOf.delete(k);
+}
+/** Fil (conversation, ou conversation/sous-agent) vu au repos au dernier passage : il est relu moins souvent. */
+let calm = '';
 function togglePin(pid: string, session: string, agent: string): void {
   const had = pinned(session, agent), t = subName(session, agent);
   pins = pins.filter(x => !(x.s === session && x.a === agent));
@@ -445,9 +452,17 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
 }
 
 // ---------- Vues ----------
+// Cartes d'agents terminés retirées de la liste par l'utilisateur (la conversation, elle, reste dans « Sessions »).
+const HIDDEN = 'studio.cc.hiddenruns';
+let hiddenRuns: string[] = (() => { try { const v = JSON.parse(localStorage.getItem(HIDDEN) || '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []; } catch { return []; } })();
+function hideRuns(ids: string[]): void {
+  hiddenRuns = [...new Set([...hiddenRuns, ...ids])].slice(-200);
+  try { localStorage.setItem(HIDDEN, JSON.stringify(hiddenRuns)); } catch { /* stockage plein */ }
+}
+
 function runCard(r: AgentRun): string {
   return `<article class="ag-run${live(r) ? ' live' : ''}">
-    <header>${pill(r.status)}${r.machine === 'server' ? `<span class="ag-mode">${icon('server')}${esc(r.host ?? 'serveur')}</span>` : ''}<span class="ag-mode">${r.mode === 'edit' ? `${icon('pencil')}Modifier` : `${icon('search')}Analyser`}</span><time>${esc(elapsed(r))}${r.turns ? ` · ${r.turns} étape${r.turns > 1 ? 's' : ''}` : ''}</time></header>
+    <header>${pill(r.status)}${r.machine === 'server' ? `<span class="ag-mode">${icon('server')}${esc(r.host ?? 'serveur')}</span>` : ''}<span class="ag-mode">${r.mode === 'edit' ? `${icon('pencil')}Modifier` : `${icon('search')}Analyser`}</span><time>${esc(elapsed(r))}${r.turns ? ` · ${r.turns} étape${r.turns > 1 ? 's' : ''}` : ''}</time>${live(r) ? '' : `<button class="icon-btn ag-hide" data-ag="hide-run" data-run="${esc(r.run)}" title="Retirer de la liste (la conversation reste dans Sessions)" aria-label="Retirer cet agent de la liste">${icon('x')}</button>`}</header>
     <p class="ag-prompt">${esc(r.prompt)}</p>
     ${live(r) && r.lastText ? `<p class="ag-last">${esc(r.lastText)}</p>` : ''}
     ${!live(r) && r.result ? `<p class="ag-last">${esc(r.result.replace(/[#*`>]/g, '').slice(0, 220))}</p>` : ''}
@@ -470,17 +485,18 @@ function treeRow(w: Worktree): string {
 }
 
 function listHTML(list: Session[]): string {
-  const running = runs.filter(live), recent = runs.filter(r => !live(r)).slice(0, 4);
-  const tot = list.reduce((t, s) => ({ input: t.input + s.tokens.input + s.tokens.cacheWrite, output: t.output + s.tokens.output, cacheRead: t.cacheRead + s.tokens.cacheRead }), { input: 0, output: 0, cacheRead: 0 });
-  return `${running.length || recent.length ? `<h3 class="ss-h">Agents <span>${running.length ? `${running.length} en cours` : 'lancés depuis Studio'}</span></h3><div class="ag-runs">${[...running, ...recent].map(runCard).join('')}</div>` : ''}
+  const running = runs.filter(live), recent = runs.filter(r => !live(r) && !hiddenRuns.includes(r.run)).slice(0, 4);
+  const canClean = !remote && list.some(s => idle(s));
+  const tot =list.reduce((t, s) => ({ input: t.input + s.tokens.input + s.tokens.cacheWrite, output: t.output + s.tokens.output, cacheRead: t.cacheRead + s.tokens.cacheRead }), { input: 0, output: 0, cacheRead: 0 });
+  return `${running.length || recent.length ? `<h3 class="ss-h">Agents <span>${running.length ? `${running.length} en cours` : 'lancés depuis Studio'}</span>${recent.length > 1 ? `<button class="link-btn ss-h-act" data-ag="hide-runs">Retirer les terminés</button>` : ''}</h3><div class="ag-runs">${[...running, ...recent].map(runCard).join('')}</div>` : ''}
     ${trees.length ? `<h3 class="ss-h">Copies à relire <span>travail des agents, isolé de ton dossier</span></h3><div class="ag-trees">${trees.map(treeRow).join('')}</div>` : ''}
-    <h3 class="ss-h">Sessions <span>tout ce que Claude Code a fait dans ce projet</span></h3>
+    <h3 class="ss-h">Sessions <span>tout ce que Claude Code a fait dans ce projet</span>${canClean ? `<button class="link-btn ss-h-act" data-ag="clean" title="Supprimer plusieurs conversations terminées d’un coup">Faire le ménage</button>` : ''}</h3>
     <div class="ss-totals"><div><strong>${list.length}</strong><span>session${list.length > 1 ? 's' : ''}</span></div><div><strong>${usage.fmt(tot.output)}</strong><span>tokens écrits</span></div><div><strong>${usage.fmt(tot.input)}</strong><span>tokens lus</span></div><div><strong>${usage.fmt(tot.cacheRead)}</strong><span>relus du cache</span></div></div>
     <div class="ss-list">${list.map(s => {
       const top = Object.entries(s.tools).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${esc(k)} ${v}`).join(' · ');
-      return `<button class="ss-row${s.id === selected ? ' sel' : ''}" data-ss="${esc(s.id)}"><i class="ss-live${s.live ? ' on' : ''}" title="${s.live ? 'En cours' : 'Inactive'}"></i>
+      return `<div class="ss-row${s.id === selected ? ' sel' : ''}"><button class="ss-open" data-ss="${esc(s.id)}"><i class="ss-live${s.live ? ' on' : ''}" title="${s.live ? 'En cours' : 'Inactive'}"></i>
         <span class="ss-main"><strong>${esc(nameOf(s))}</strong><em>${s.worktree ? `${icon('pencil')}copie · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${esc(s.models.map(modelName).join(', '))} · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}${top ? ` · ${top}` : ''}</em></span>
-        <span class="ss-tok">${usage.fmt(s.tokens.output)}<small>écrits</small></span><time>${esc(rel(ms(s.updated)))}</time></button>`;
+        <span class="ss-tok">${usage.fmt(s.tokens.output)}<small>écrits</small></span><time>${esc(rel(ms(s.updated)))}</time></button>${remote ? '' : `<button class="icon-btn ss-del" data-ag="delete" data-session="${esc(s.id)}" title="Supprimer la conversation" aria-label="Supprimer la conversation ${esc(nameOf(s))}">${icon('trash')}</button>`}</div>`;
     }).join('') || '<p class="hm-empty">Aucune session Claude Code dans ce dossier pour l’instant. Donne une consigne ci-dessus pour lancer la première.</p>'}</div>`;
 }
 
@@ -891,6 +907,9 @@ async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
     syncStop(box);
     // La liste sert encore à la barre latérale : on la relit de temps en temps, sans attendre.
     if (!known.has(p.id) || tick % 5 === 0) void loadList(p);
+    // Fil au repos (plus rien ne s'y écrit, aucun agent n'y travaille) : relu une fois sur quatre seulement.
+    const feedId = sb ? `${sel}/${sb}` : sel;
+    if (calm === feedId && tick % 4 !== 0 && !runs.some(r => r.session === sel && live(r)) && $('.ss-feed', zone)?.dataset.id === feedId) return;
     if (sb) {
       // Fil d'un sous-agent de la conversation.
       const a = await bridge.call('project', 'subagent', { project: p.id, session: sel, agent: sb }, 20000);
@@ -898,6 +917,7 @@ async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
       if (!a.ok || !a.agent) { zone.innerHTML = `<p class="hm-empty">${esc(a.message === 'Action inconnue.' || a.message === 'Action non autorisée à distance.' ? 'Mets à jour l’app Studio pour Mac pour lire les fils des sous-agents.' : a.message ?? 'Sous-agent introuvable.')}</p>`; return; }
       noteSubs(sel, a.subagents);
       showDetail(zone, { ...(a as unknown as Partial<Session> & { actions?: Action[] }), id: sel }, folderPath, a.agent as SubAgent);
+      calm = (a.agent as SubAgent).live ? '' : feedId;
       return;
     }
     const d = await bridge.call('project', 'session', { project: p.id, session: sel }, 20000);
@@ -914,6 +934,8 @@ async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
     }
     noteSubs(sel, d.subagents);
     showDetail(zone, { ...(d as unknown as Partial<Session> & { actions?: Action[] }), id: selected }, folderPath); // « id » de la réponse = numéro de demande
+    // Un sous-agent peut travailler longtemps sans que le journal de la conversation bouge : elle n'est alors pas au repos.
+    calm = d.live || queued.some(q => q.session === sel) || (subsOf.get(sel) ?? []).some(x => x.live) ? '' : feedId;
     return;
   }
   const list = await loadList(p) ?? [];
@@ -940,34 +962,94 @@ function shell(box: HTMLElement, p: Project): void {
 
 /** Ouvre une conversation dans l'onglet affiché (`null` : retour à la liste). */
 export function open(id: string | null): void {
-  selected = id; selTitle = ''; sub = null; subTitle = '';
+  selected = id; selTitle = ''; sub = null; subTitle = ''; calm = '';
+  closeSubs(id);
   if (cur?.box.isConnected) { selFor = cur.p.id; shell(cur.box, cur.p); again = painting; void paint(cur.box, cur.p); }
   notify();
 }
 /** Ouvre le fil d'un sous-agent de la conversation affichée (`null` : retour à la conversation). */
 export function openSub(agent: string | null): void {
   if (!selected) return;
-  sub = agent; subTitle = '';
+  sub = agent; subTitle = ''; calm = '';
   if (cur?.box.isConnected) { shell(cur.box, cur.p); again = painting; void paint(cur.box, cur.p); }
   notify();
 }
 
-/** Supprime la conversation ouverte : son agent est arrêté s'il tourne, son journal part dans la corbeille du Mac. */
-async function removeSession(p: Project, id: string): Promise<void> {
-  const busy = runs.filter(r => r.session === id && live(r));
-  if (!await confirmBox({ title: 'Supprimer cette conversation ?', text: `${busy.length ? 'L’agent qui y travaille sera arrêté. ' : ''}Elle disparaît de Studio et son journal part dans la corbeille du Mac. La copie du dépôt et ses changements ne sont pas touchés.`, ok: 'Supprimer', danger: true })) return;
-  for (const r of busy) await bridge.call('agent', 'stop', { run: r.run }, 10000);
-  if (busy.length) await new Promise(r => setTimeout(r, 1500)); // le temps que Claude Code rende la main
+/** Conversation au repos : ni session active, ni agent de Studio qui y travaille. */
+const idle = (s: Session): boolean => !s.live && !runs.some(r => r.session === s.id && live(r));
+
+/** Supprime une conversation sur le Mac (journal à la corbeille) et l'oublie dans Studio. Renvoie '' si c'est fait, sinon la raison de l'échec. */
+async function dropSession(p: Project, id: string): Promise<string> {
   const r = await native.call('project', 'deleteSession', { project: p.id, session: id }, 20000);
-  if (!r.ok) { toast(r.message === 'Action inconnue.' ? 'Mets à jour l’app Studio pour Mac pour supprimer une conversation.' : r.message ?? 'Suppression impossible.'); return; }
+  if (!r.ok) return r.message === 'Action inconnue.' ? 'Mets à jour l’app Studio pour Mac pour supprimer une conversation.' : r.message ?? 'Suppression impossible.';
   delete titles[id]; saveTitles();
   saved.dropDraft(`${p.id}|s:${id}`); saved.forgetSession(id);
   if (pins.some(x => x.s === id)) { pins = pins.filter(x => x.s !== id); savePins(); }
-  subsOf.delete(id);
+  subsOf.delete(id); nameFailed.delete(id);
   const k = known.get(p.id); if (k) k.list = k.list.filter(s => s.id !== id);
   runs = runs.filter(x => x.session !== id || live(x));
+  return '';
+}
+
+/** Supprime une conversation (ouverte, ou choisie dans la liste) : son agent est arrêté s'il tourne, son journal part dans la corbeille du Mac. */
+async function removeSession(p: Project, id: string): Promise<void> {
+  const busy = runs.filter(r => r.session === id && live(r));
+  const s = known.get(p.id)?.list.find(x => x.id === id), name = id === selected && selTitle ? selTitle : s ? nameOf(s) : '';
+  if (!await confirmBox({ title: 'Supprimer cette conversation ?', text: `${busy.length ? 'L’agent qui y travaille sera arrêté. ' : ''}${name ? `« ${name} » disparaît` : 'Elle disparaît'} de Studio et son journal part dans la corbeille du Mac. La copie du dépôt et ses changements ne sont pas touchés.`, ok: 'Supprimer', danger: true })) return;
+  for (const r of busy) await bridge.call('agent', 'stop', { run: r.run }, 10000);
+  if (busy.length) await new Promise(r => setTimeout(r, 1500)); // le temps que Claude Code rende la main
+  const err = await dropSession(p, id);
+  if (err) { toast(err); return; }
   toast('Conversation supprimée');
-  if (selected === id) open(null); else notify();
+  if (selected === id) open(null);
+  else { notify(); if (cur?.box.isConnected) void paint(cur.box, cur.p); }
+}
+
+/** Ménage : choisir d'un coup les conversations au repos à supprimer (celles qui travaillent ne sont pas proposées). */
+function cleanUp(p: Project): void {
+  const list = (known.get(p.id)?.list ?? []).filter(idle);
+  if (!list.length) { toast('Aucune conversation terminée à supprimer.'); return; }
+  const week = Date.now() - 7 * 864e5;
+  const m = modal({ title: 'Faire le ménage', cls: 'ss-clean', html: `
+    <p class="modal-text">Coche les conversations à supprimer. Celles où un agent travaille encore ne sont pas proposées.</p>
+    <div class="ss-pick-bar"><button type="button" class="link-btn" data-pick="all">Tout cocher</button><button type="button" class="link-btn" data-pick="old">Plus de 7 jours</button><button type="button" class="link-btn" data-pick="none">Tout décocher</button></div>
+    <div class="ss-picks">${list.map(s => `<label class="ss-pick"><input type="checkbox" value="${esc(s.id)}"${ms(s.updated) < week ? ' data-old' : ''}><span>${esc(nameOf(s))}</span><time>${esc(rel(ms(s.updated)))}</time></label>`).join('')}</div>
+    <p class="modal-hint">${icon('shield')}Leurs journaux partent dans la corbeille du Mac. Les copies du dépôt et leurs changements ne sont pas touchés.</p>
+    <div class="rv-status"></div>
+    <div class="modal-actions"><button class="btn" data-x>Annuler</button><button class="btn btn-danger" data-go disabled>Supprimer</button></div>` });
+  const boxes = Array.from(m.node.querySelectorAll<HTMLInputElement>('.ss-pick input')), go = need<HTMLButtonElement>('[data-go]', m.node), st = need('.rv-status', m.node);
+  const picked = () => boxes.filter(b => b.checked).map(b => b.value);
+  let working = false;
+  const sync = () => { const n = picked().length; go.disabled = working || !n; go.textContent = n ? `Supprimer (${n})` : 'Supprimer'; };
+  m.node.addEventListener('change', sync);
+  m.node.querySelectorAll<HTMLElement>('[data-pick]').forEach(b => { b.onclick = () => {
+    if (working) return;
+    const how = b.dataset.pick;
+    for (const x of boxes) x.checked = how === 'all' || (how === 'old' && x.dataset.old !== undefined);
+    sync();
+  }; });
+  need('[data-x]', m.node).onclick = m.close;
+  go.onclick = async () => {
+    const ids = picked(); if (!ids.length || working) return;
+    working = true; sync(); boxes.forEach(b => { b.disabled = true; });
+    let done = 0, why = '';
+    for (const id of ids) {
+      st.innerHTML = `<span class="spin"></span>Suppression ${done + 1} sur ${ids.length}…`;
+      const err = await dropSession(p, id);
+      if (err) { why = err; if (/Mets à jour/.test(err)) break; continue; }
+      done++;
+      m.node.querySelector(`.ss-pick input[value="${id}"]`)?.closest('.ss-pick')?.remove();
+    }
+    const failed = ids.length - done;
+    notify(); if (cur?.box.isConnected) void paint(cur.box, cur.p);
+    if (done) toast(`${done} conversation${done > 1 ? 's' : ''} supprimée${done > 1 ? 's' : ''}${failed ? ` · ${failed} en échec` : ''}`);
+    if (!failed) { m.close(); return; }
+    // Ce qui n'a pas pu être supprimé reste coché, avec la raison.
+    working = false;
+    for (const b of boxes) b.disabled = false;
+    st.innerHTML = `<span class="err">${esc(why)}</span>`;
+    sync();
+  };
 }
 
 /** Dessine l'onglet et le garde à jour toutes les 3 secondes tant qu'il est affiché. */
@@ -975,6 +1057,7 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
   clearInterval(timer); folderPath = folder; tick = 0;
   // La conversation sélectionnée appartient à un projet : on ne la garde pas en changeant de projet.
   if (selFor !== p.id) { selected = null; selTitle = ''; sub = null; subTitle = ''; }
+  calm = ''; closeSubs(selected);
   selFor = p.id; cur = { box, p };
   const at = bridge.where();
   if (!at) { box.innerHTML = `<div class="ag-empty">${icon('terminal')}<h3>Claude Code tourne sur ton Mac</h3><p>Ouvre ce projet dans l’app Studio pour Mac. Pour le piloter d’ici, lie cet appareil au Mac (Réglages → Appareils) et autorise-le, sur le Mac, à piloter Claude Code.</p></div>`; return; }
@@ -995,6 +1078,7 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
     const row = t.closest<HTMLElement>('[data-ss]');
     if (row) { open(row.dataset.ss || null); return; }
     const b = t.closest<HTMLElement>('[data-ag]'); if (!b) return;
+    calm = ''; // une action de l'utilisateur : le fil est relu tout de suite
     const wt = b.dataset.wt ?? '';
     if (b.dataset.ag === 'pin-sub') { if (selected && sub) { togglePin(p.id, selected, sub); again = painting; void paint(box, p); } return; }
     if (b.dataset.ag === 'end') { const f = $('.ss-feed', box); f?.scrollTo({ top: f.scrollHeight, behavior: 'smooth' }); b.hidden = true; return; }
@@ -1018,7 +1102,12 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
       toast(r.ok ? 'Messages transmis à Claude' : r.message ?? 'Envoi impossible.');
       void paint(box, p); return;
     }
-    if (b.dataset.ag === 'delete' && selected) { await removeSession(p, selected); return; }
+    if (b.dataset.ag === 'delete') { const sid = b.dataset.session || selected; if (sid) await removeSession(p, sid); return; }
+    if (b.dataset.ag === 'clean') { cleanUp(p); return; }
+    if (b.dataset.ag === 'hide-run' || b.dataset.ag === 'hide-runs') {
+      hideRuns(b.dataset.ag === 'hide-run' ? [b.dataset.run ?? ''].filter(Boolean) : runs.filter(r => !live(r)).map(r => r.run));
+      again = painting; void paint(box, p); return;
+    }
     if (b.dataset.ag === 'review') await review.review(p, 'working', wt);
     if (b.dataset.ag === 'vscode') { const r = await native.call('project', 'open', { project: p.id, app: 'vscode', worktree: wt }, 15000); if (!r.ok) toast(r.message ?? 'Impossible d’ouvrir.'); }
     if (b.dataset.ag === 'push') await publish(p, wt, box);
@@ -1046,6 +1135,6 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
   void paint(box, p);
   timer = setInterval(() => { if (!document.hidden) void paint(box, p); }, 3000);
 }
-export const stop = (): void => { clearInterval(timer); cur = null; };
+export const stop = (): void => { clearInterval(timer); cur = null; calm = ''; };
 /** Choisit la conversation à afficher à la prochaine ouverture de l'onglet Claude Code du projet. */
-export const select = (id: string | null, pid: string, agent: string | null = null): void => { selected = id; selFor = pid; selTitle = ''; sub = id ? agent : null; subTitle = ''; notify(); };
+export const select = (id: string | null, pid: string, agent: string | null = null): void => { selected = id; selFor = pid; selTitle = ''; sub = id ? agent : null; subTitle = ''; calm = ''; closeSubs(id); notify(); };

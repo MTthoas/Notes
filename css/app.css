@@ -1268,6 +1268,18 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ss-tok { flex: none; display: flex; flex-direction: column; align-items: flex-end; font-weight: 600; font-variant-numeric: tabular-nums; }
 .ss-tok small { color: var(--text-3); font-size: var(--t-1); font-weight: 400; }
 .ss-row time { flex: none; width: 84px; text-align: right; color: var(--text-3); font-size: var(--t-1); }
+.ss-open { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; gap: 12px; text-align: left; }
+.ss-del, .ag-hide { color: var(--text-3); }
+.ss-del:hover, .ag-hide:hover { color: var(--text); background: var(--hover); }
+.ag-hide { width: 22px; height: 22px; margin-right: -4px; }
+.ss-h-act { margin-left: auto; font-weight: 400; }
+.ss-pick-bar { display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 8px; font-size: var(--t-1); }
+.ss-picks { display: flex; flex-direction: column; max-height: min(46dvh, 360px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.ss-pick { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 4px 10px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.ss-pick:last-child { border-bottom: 0; }
+.ss-pick:hover { background: var(--hover); }
+.ss-pick span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-pick time { flex: none; color: var(--text-3); font-size: var(--t-1); }
 .ss-dhead { display: flex; align-items: center; gap: 10px; margin: 6px 0 4px; }
 .ss-dhead h2 { flex: 1; margin: 0; font-size: var(--t-5); font-weight: 600; }
 .ss-meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin: 0 0 14px; color: var(--text-3); font-size: var(--t-1); }
