@@ -32,6 +32,7 @@ Mémoire du dépôt pour les agents : à lire **en premier**, avant toute recher
 - **Ajouter une consigne ou une limite côté web** : une entrée dans `DEFS` de `src/integrations/tuning.ts` suffit, la page de réglages se construit dessus.
 - **Ajouter un plugin optionnel** : un fichier `src/plugins/<id>.ts` exportant un `Plugin` (`optional: true`, `settings`, `hosts`, `start`, `sidebar`, `commands`, `actions`), un `registry.register` dans `builtin.ts`, et ses domaines dans `connect-src` de `index.html` (sinon la CSP bloque ses requêtes) ; le README les liste.
 - **Annoncer une fonction visible** : une entrée en tête de `NEWS` dans `src/features/news.ts` (identifiant stable), et le README.
+- **Conflit sur `NEWS`** (chaque PR ajoute son entrée en tête, donc les fusions avec `main` s'y heurtent souvent) : garder les entrées des deux côtés, la plus récente en tête, sans en perdre ni en dupliquer. Vérifier ensuite que chaque `id` présent sur `origin/main` l'est encore.
 - **Vérifier** : `npm run verify` (types, build, cache hors ligne, aucun secret). C'est ce que lance la CI.
 
 ## Build et versions
