@@ -6,7 +6,8 @@
 // journaux au bout de 30 jours, le journal de Studio les garde. Une fiche par jour : { id: AAAA-MM-JJ, demandes, activité, résumé }.
 //
 // Mise en page : celle du reste de l'app — colonne de liste à gauche (comme les notes), page à la manière
-// de l'Accueil à droite (date, titre, phrase de situation, sections). Pas de style propre au journal.
+// de l'Accueil à droite (date, titre, sections), avec des cartes propres au journal (classes `jr-*` de css/app.css) :
+// tuiles de chiffres, carte du résumé, une carte par session avec l'heure en colonne.
 import * as db from '../core/db.ts';
 import * as store from '../core/store.ts';
 import * as native from '../core/native.ts';
@@ -282,37 +283,49 @@ function promptRow(p: JPrompt, { project = false, q = '' } = {}): string {
   let text = esc(p.text);
   // Surlignage sur le texte déjà échappé, avec la recherche échappée de la même façon.
   if (q) { const re = new RegExp(esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'); text = text.replace(re, m => `<mark>${m}</mark>`); }
-  const where = project ? `<small><i class="tag-dot" style="--c:var(--c-${p.source === 'studio' ? 'gray' : projectHue(p.project, p.pname)})"></i>${esc(p.source === 'studio' ? 'Assistant Studio' : projectName(p.project, p.pname))}</small>` : '';
-  return `<div class="hm-feed jr-p" data-jr-p="${esc(p.id)}" title="Cliquer pour tout afficher">${icon(p.source === 'studio' ? 'sparkle' : 'terminal')}<span>${where}${text}</span><em>${hm(p.at)}</em><button class="icon-btn jr-copy" data-jr-copy title="Copier la demande" aria-label="Copier la demande">${icon('copy')}</button></div>`;
+  const where = project ? `<span class="jr-where"><i class="jr-dot" style="--c:var(--c-${p.source === 'studio' ? 'gray' : projectHue(p.project, p.pname)})"></i>${esc(p.source === 'studio' ? 'Assistant Studio' : projectName(p.project, p.pname))}${p.title && p.source !== 'studio' ? `<span> · ${esc(p.title)}</span>` : ''}</span>` : '';
+  const long = p.text.length > 260 || p.text.split('\n').length > 3;
+  return `<div class="jr-p${long ? ' long' : ''}" data-jr-p="${esc(p.id)}"${long ? ' title="Cliquer pour tout afficher"' : ''}><time>${hm(p.at)}</time><div class="jr-pb">${where}<div class="jr-pt">${text}</div></div><button class="icon-btn jr-copy" data-jr-copy title="Copier la demande" aria-label="Copier la demande">${icon('copy')}</button></div>`;
 }
 
 function sessionBlock(list: JPrompt[]): string {
-  const f = list[0]!; if (f.source === 'studio') return list.map(p => promptRow(p)).join('');
+  const f = list[0]!;
+  if (f.source === 'studio') return `<div class="jr-ses"><header class="jr-ses-h"><span class="jr-ses-t">${icon('sparkle')}Demander à l’IA</span></header>${list.map(p => promptRow(p)).join('')}</div>`;
   const exists = !!projectsModel.byId(f.project);
-  const meta = [f.worktree ? 'copie isolée' : '', f.branch].filter(Boolean).join(' · ');
-  return `<div class="jr-ses"><p class="hm-meta">${esc(f.title || 'Conversation')}${meta ? ` · ${esc(meta)}` : ''}${exists && f.session ? ` · <button class="hm-link" data-pj-open="${esc(f.project)}" data-pj-tab="sessions" data-pj-session="${esc(f.session)}">Ouvrir</button>` : ''}</p>${list.map(p => promptRow(p)).join('')}</div>`;
+  const meta = [f.branch ? `<code>${esc(f.branch)}</code>` : '', f.worktree ? 'copie isolée' : ''].filter(Boolean).join('');
+  return `<div class="jr-ses"><header class="jr-ses-h"><span class="jr-ses-t">${icon('terminal')}<span>${esc(f.title || 'Conversation')}</span></span>${meta ? `<span class="jr-ses-m">${meta}</span>` : ''}${exists && f.session ? `<button class="btn btn-ghost jr-open" data-pj-open="${esc(f.project)}" data-pj-tab="sessions" data-pj-session="${esc(f.session)}">Ouvrir${icon('chevronRight')}</button>` : ''}</header>${list.map(p => promptRow(p)).join('')}</div>`;
 }
 
-/** Phrase de situation, comme sur l'Accueil : chiffres de la journée et projets touchés. */
+/** Chiffres de la journée, en tuiles lisibles d'un coup d'œil, puis les projets touchés. */
 function situation(d: JDay): string {
-  if (!d.prompts.length && !d.stats.length) return 'Aucune demande pour l’instant';
+  if (!d.prompts.length && !d.stats.length) return '<p class="hm-sum">Aucune demande pour l’instant</p>';
   const groups = byProject(d), first = d.prompts[0], last = d.prompts[d.prompts.length - 1];
   const sessions = d.stats.reduce((n, s) => n + s.sessions, 0) || new Set(d.prompts.filter(p => p.session).map(p => p.session)).size;
   const files = d.stats.reduce((n, s) => n + s.files.length, 0), tokens = d.stats.reduce((n, s) => n + s.tokens, 0);
-  const bits = [plural(d.prompts.length, 'demande'), sessions ? plural(sessions, 'session') : '', first && last ? `${hm(first.at)} → ${hm(last.at)}` : '', files ? plural(files, 'fichier modifié', 'fichiers modifiés') : '', tokens ? `${fmtNum(tokens)} tokens écrits` : ''].filter(Boolean);
+  const tile = (value: string, label: string): string => `<div class="jr-stat"><b>${value}</b><span>${label}</span></div>`;
+  const tiles = [
+    tile(String(d.prompts.length), d.prompts.length > 1 ? 'demandes' : 'demande'),
+    sessions ? tile(String(sessions), sessions > 1 ? 'sessions' : 'session') : '',
+    first && last ? tile(first === last ? hm(first.at) : `${hm(first.at)}–${hm(last.at)}`, 'plage horaire') : '',
+    files ? tile(String(files), files > 1 ? 'fichiers modifiés' : 'fichier modifié') : '',
+    tokens ? tile(fmtNum(tokens), 'tokens écrits') : '',
+  ].join('');
   const daily = [...store.notes.values()].find(n => n.daily === d.id && !n.deletedAt);
-  if (daily) bits.push(`<button data-open-note="${daily.id}">Note du jour</button>`);
-  return bits.join('<i>·</i>') + (groups.length ? `<i>·</i>${groups.map(g => `<span class="jr-proj"><i class="tag-dot" style="--c:var(--c-${g.hue})"></i>${esc(g.name)}</span>`).join('')}` : '');
+  const chips = groups.map(g => `<span class="jr-chip"><i class="jr-dot" style="--c:var(--c-${g.hue})"></i>${esc(g.name)}</span>`).join('')
+    + (daily ? `<button class="jr-chip jr-chip-btn" data-open-note="${daily.id}">${icon('notes')}Note du jour</button>` : '');
+  return `<div class="jr-stats">${tiles}</div>${chips ? `<div class="jr-chips">${chips}</div>` : ''}`;
 }
 
 function summarySection(d: JDay): string {
   if (!d.prompts.length) return section('Résumé', `<p class="hm-empty">Chaque demande faite à Claude Code dans tes projets arrive ici, puis l’IA résume la journée.${native.available() ? '' : ' Les demandes sont recueillies par l’app Studio pour Mac.'}</p>`);
   const busy = pending.has(d.id), s = d.summary, stale = !!s && s.count < d.prompts.length, canAI = ai.ready();
   const shown = s ?? plainSummary(d);
-  const meta = busy ? '<span class="spin"></span>L’IA rédige le résumé…'
-    : (s ? `${esc(s.provider)} · ${esc(rel(s.at))}${stale ? ` · ${plural(d.prompts.length - s.count, 'nouvelle demande', 'nouvelles demandes')}` : ''}` : 'Aperçu sans IA')
-      + (canAI ? ` · <button class="hm-link" data-jr-sum>${s ? (stale ? 'Mettre à jour' : 'Régénérer') : 'Résumer avec l’IA'}</button>` : ' · <button class="hm-link" data-open-conn="ia">Connecter une IA</button>');
-  return section('Résumé', `<h2 class="jr-headline">${esc(shown.headline)}</h2><div class="md jr-sum${busy ? ' busy' : ''}">${renderMarkdown(shown.md || '')}</div>`, meta);
+  const foot = busy ? '<span class="spin"></span>L’IA rédige le résumé…'
+    : s ? `${icon('sparkle')}${esc(s.provider)} · ${esc(rel(s.at))}${stale ? ` · <b>${plural(d.prompts.length - s.count, 'nouvelle demande', 'nouvelles demandes')} depuis</b>` : ''}` : 'Aperçu sans IA : chiffres et premières demandes';
+  const action = busy ? '' : canAI
+    ? `<button class="btn btn-ghost" data-jr-sum>${icon(s ? 'refresh' : 'sparkle')}<span>${s ? (stale ? 'Mettre à jour' : 'Régénérer') : 'Résumer avec l’IA'}</span></button>`
+    : '<button class="btn btn-ghost" data-open-conn="ia">Connecter une IA</button>';
+  return `<section class="hm-sec jr-card${busy ? ' busy' : ''}"><h2 class="jr-headline">${esc(shown.headline)}</h2><div class="md jr-sum">${renderMarkdown(shown.md || '')}</div><footer class="jr-foot"><span>${foot}</span>${action}</footer></section>`;
 }
 
 function promptsSection(d: JDay): string {
@@ -320,18 +333,20 @@ function promptsSection(d: JDay): string {
   const view = prefs().view;
   const seg = `<div class="seg" role="tablist">${([['projects', 'Par projet', 'folder'], ['timeline', 'Chronologie', 'list']] as const).map(([k, l, ic]) => `<button role="tab" data-jr-view="${k}" aria-selected="${view === k}" aria-label="${l}" title="${l}">${icon(ic)}</button>`).join('')}</div>`;
   const body = view === 'timeline'
-    ? d.prompts.map(p => promptRow(p, { project: true })).join('')
-    : groups.map(g => `<details class="jr-group" open><summary class="list-label"><i class="tag-dot" style="--c:var(--c-${g.hue})"></i>${esc(g.name)}<em>${[plural(g.prompts.length, 'demande'), g.stat?.sessions ? plural(g.stat.sessions, 'session') : ''].filter(Boolean).join(' · ')}</em></summary>
-        ${g.stat?.files.length ? `<details class="up-notes jr-files"><summary>${plural(g.stat.files.length, 'fichier modifié', 'fichiers modifiés')}</summary><p class="hm-meta">${g.stat.files.map(f => `<code>${esc(f)}</code>`).join(' ')}</p></details>` : ''}
+    ? `<div class="jr-ses jr-tl">${d.prompts.map(p => promptRow(p, { project: true })).join('')}</div>`
+    : groups.map(g => `<details class="jr-group" open style="--c:var(--c-${g.hue})"><summary class="jr-gh">${icon('chevronRight')}<i class="jr-dot"></i><span class="jr-gn">${esc(g.name)}</span><span class="jr-gm">${[plural(g.prompts.length, 'demande'), g.stat?.sessions ? plural(g.stat.sessions, 'session') : ''].filter(Boolean).join(' · ')}</span></summary>
+        <div class="jr-gb">
+        ${g.stat?.files.length ? `<details class="jr-files"><summary>${icon('chevronRight')}${plural(g.stat.files.length, 'fichier modifié', 'fichiers modifiés')}</summary><div class="jr-fl">${g.stat.files.map(f => `<code title="${esc(f)}">${esc(f)}</code>`).join('')}</div></details>` : ''}
         ${bySession(g.prompts).map(sessionBlock).join('')}
+        </div>
       </details>`).join('');
-  return `<section class="hm-sec"><header><span class="hm-h">Demandes</span>${seg}</header>${body}</section>`;
+  return `<section class="hm-sec jr-prompts"><header><span class="hm-h">Demandes<span class="jr-n">${d.prompts.length}</span></span>${seg}</header>${body}</section>`;
 }
 
 function dayPage(d: JDay): string {
-  return `<p class="hm-date">${esc(relDay(d.id) || 'Journal')}</p>
+  return `<header class="jr-top"><p class="hm-date">${esc(relDay(d.id) || 'Journal')}</p>
     <h1 class="hm-hello">${esc(dayTitle(d.id))}</h1>
-    <p class="hm-sum">${situation(d)}</p>
+    ${situation(d)}</header>
     <div class="hm-col">${summarySection(d)}${promptsSection(d)}</div>`;
 }
 
@@ -340,7 +355,7 @@ function searchPage(q: string): string {
   const head = `<p class="hm-date">Journal</p><h1 class="hm-hello">Recherche</h1><p class="hm-sum">${hits.length ? `${plural(Math.min(hits.length, 300), 'demande trouvée', 'demandes trouvées')}${hits.length > 300 ? ' (300 premières)' : ''}` : `Aucune demande ne contient « ${esc(q)} »`}</p>`;
   const byDay = new Map<string, JPrompt[]>();
   for (const p of hits.slice(0, 300)) { const k = dayOf(p.at); byDay.set(k, [...(byDay.get(k) ?? []), p]); }
-  return head + `<div class="hm-col">${[...byDay].map(([k, list]) => `<section class="hm-sec"><header><button class="hm-h" data-jr-day="${k}">${esc(dayTitle(k))}${icon('chevronRight')}</button></header>${list.map(p => promptRow(p, { project: true, q })).join('')}</section>`).join('')}</div>`;
+  return head + `<div class="hm-col">${[...byDay].map(([k, list]) => `<section class="hm-sec"><header><button class="hm-h" data-jr-day="${k}">${esc(dayTitle(k))}${icon('chevronRight')}</button></header><div class="jr-ses jr-tl">${list.map(p => promptRow(p, { project: true, q })).join('')}</div></section>`).join('')}</div>`;
 }
 
 function paintSide(): void {
@@ -432,7 +447,7 @@ export function mount(main: HTMLElement): void {
     if (t.closest('[data-jr-sum]')) { void summarize(sel); return; }
     if ((x = t.closest('[data-jr-view]'))) { setPrefs({ view: x.dataset.jrView === 'timeline' ? 'timeline' : 'projects' }); paintPage(); return; }
     // Une demande longue : un clic l'affiche en entier (sauf si on sélectionne du texte).
-    if ((x = t.closest('.jr-p')) && !t.closest('a, button') && !getSelection()?.toString()) x.classList.toggle('open');
+    if ((x = t.closest('.jr-p.long')) &&!t.closest('a, button') && !getSelection()?.toString()) x.classList.toggle('open');
   };
   need('.toolbar', main).addEventListener('click', onClick);
   need('.jr', main).addEventListener('click', onClick);
