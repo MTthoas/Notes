@@ -222,7 +222,7 @@ async function agentsStrip(root: HTMLElement, p: Project): Promise<void> {
 
 function detailHTML(p: Project, tab: string): string {
   return `<div class="pj-head" style="--c:var(--c-${p.hue})"><button class="lv-back" data-pj-open="">${icon('back')}Projets</button>
-      <div class="pj-title"><span class="pj-dot"></span><h1>${esc(p.name)}</h1><button class="btn btn-ghost" data-pj="edit">Note du projet</button></div>
+      <div class="pj-title"><span class="pj-dot"></span><h1>${esc(p.name)}</h1><button class="btn pj-note" data-pj="edit">${icon('notes')}Note du projet</button></div>
       <div class="pj-links" data-k="${esc(`${p.repos.join(',')}|${p.site ?? ''}|${p.linear ?? ''}`)}">${p.repos.map(r => `<a class="lv-chip" href="https://github.com/${esc(r)}" target="_blank" rel="noopener">${icon('github')}${esc(r)}</a>`).join('')}${p.linear ? `<span class="lv-chip">${icon('linear')}${esc(p.linear)}</span>` : ''}${p.site ? `<a class="lv-chip" href="${esc(p.site)}" target="_blank" rel="noopener">${icon('link')}${esc(p.site.replace(/^https:\/\//, ''))}</a>` : ''}<span class="lv-chip">#${esc(p.tag)}</span></div>
       <nav class="lv-tabs pj-tabs">${TABS.map(([k, l]) => `<button data-pj-tab="${k}" class="${k === tab ? 'sel' : ''}">${esc(l)}</button>`).join('')}</nav></div>
     <div class="pj-body" data-tab="${tab}">${tabBody(p, tab)}</div>`;
