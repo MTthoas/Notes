@@ -159,11 +159,15 @@ final class ProjectFolders {
     }
     func isRepo(_ dir: String) -> Bool { git(["rev-parse", "--is-inside-work-tree"], in: dir)?.hasPrefix("true") == true }
 
-    /// Copies isolées du projet : branche, changements, commits d'avance sur la branche principale.
+    /// Copies isolées du projet : branche, changements, commits d'avance sur la branche principale,
+    /// et ce qui a déjà été livré. Une copie dont le travail est fusionné dans la branche principale repart
+    /// d'elle-même de sa dernière version, sur une nouvelle branche : Studio ne la propose plus à la publication.
     func worktrees(_ id: String) -> [String: Any] {
         guard let dir = path(id) else { return ["ok": true, "worktrees": []] }
+        // La fusion se passe sur GitHub : il faut relire le dépôt distant pour la voir (au plus toutes les 90 s).
+        fetchIfStale(dir)
         let raw = git(["worktree", "list", "--porcelain"], in: dir) ?? ""
-        let base = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], in: dir)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "HEAD"
+        let base = baseRef(dir, fetch: false)
         var found: [(path: String, name: String, branch: String)] = []
         for block in raw.components(separatedBy: "\n\n") {
             var wtPath = "", branch = ""
@@ -176,6 +180,15 @@ final class ProjectFolders {
             guard Self.validWorktree(name) else { continue }
             found.append((wtPath, name, branch))
         }
+        // Copies dont le travail est déjà fusionné : remises sur la branche principale, une à la fois
+        // (elles partagent la configuration du dépôt), jamais pendant qu'un agent ou une publication y travaille.
+        var recycled: [[String: String]] = []
+        for (i, f) in found.enumerated() where !Agents.shared.busy(project: id, worktree: f.name) && !Orchestrator.shared.busy(project: id, worktree: f.name) {
+            if let old = recycleIfDelivered(f.path, fetch: false) {
+                recycled.append(["worktree": f.name, "branch": old])
+                found[i].branch = currentBranch(f.path) ?? f.branch
+            }
+        }
         // Chaque copie est examinée en parallèle (plusieurs commandes git par copie : en série, l'écran ralentissait).
         var rows = [[String: Any]?](repeating: nil, count: found.count); let rowsLock = NSLock()
         DispatchQueue.concurrentPerform(iterations: found.count) { i in
@@ -183,16 +196,141 @@ final class ProjectFolders {
             let status = git(["status", "--porcelain"], in: wtPath) ?? ""
             let changes = status.split(separator: "\n").count
             let counts = git(["rev-list", "--left-right", "--count", "\(base)...HEAD"], in: wtPath)?.split(whereSeparator: { $0 == "\t" || $0 == " " || $0 == "\n" }).compactMap { Int($0) } ?? []
-            let upstream = git(["rev-parse", "--abbrev-ref", "@{upstream}"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let ahead = counts.count > 1 ? counts[1] : 0
+            // Poussée : la branche a sa propre branche distante (pas la branche principale, que Git donne parfois comme suivi).
+            let published = wasPublished(wtPath, branch: branch, base: base)
+            let head = git(["rev-parse", "HEAD"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let remote = published ? (git(["rev-parse", "-q", "--verify", "@{upstream}"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") : ""
+            // Déjà fusionnée dans la branche principale (le travail en cours éventuel est du nouveau travail).
+            let merged = published && delivered(wtPath, rev: "HEAD", base: base)
             // Titre du commit de la copie (pour le titre de sa PR) : seulement si elle a ses propres commits.
             let subject = ahead > 0 ? (git(["log", "-1", "--format=%s"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") : ""
             let row: [String: Any] = ["name": name, "branch": branch, "changes": changes, "behind": counts.first ?? 0, "ahead": ahead,
-                                      "pushed": !upstream.isEmpty, "conflicts": status.isEmpty ? [] : conflictFiles(wtPath), "subject": subject]
+                                      "pushed": published, "upToDate": published && !remote.isEmpty && remote == head, "merged": merged,
+                                      "conflicts": status.isEmpty ? [] : conflictFiles(wtPath), "subject": subject,
+                                      "history": history(dir, name: name, base: base)]
             rowsLock.lock(); rows[i] = row; rowsLock.unlock()
         }
         let out = rows.compactMap { $0 }
-        return ["ok": true, "worktrees": out, "base": base]
+        return ["ok": true, "worktrees": out, "base": base, "recycled": recycled]
+    }
+
+    // MARK: Travail déjà livré, plusieurs branches par copie
+
+    private var lastFetch: [String: Date] = [:]
+    private let fetchLock = NSLock()
+    /// Relit le dépôt distant si ça n'a pas été fait depuis `every` secondes (la liste des copies est relue souvent).
+    func fetchIfStale(_ dir: String, every: TimeInterval = 90) {
+        // Une seule clé par dépôt : les copies partagent le même dossier .git.
+        let common = git(["rev-parse", "--git-common-dir"], in: dir)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let key = common.isEmpty ? dir : common.hasPrefix("/") ? common : dir + "/" + common
+        fetchLock.lock()
+        let due = lastFetch[key].map { Date().timeIntervalSince($0) >= every } ?? true
+        if due { lastFetch[key] = Date() }
+        fetchLock.unlock()
+        if due { _ = gitRun(["fetch", "-q", "--prune", "origin"], in: dir, timeout: 15) }
+    }
+
+    func currentBranch(_ wt: String) -> String? {
+        guard let b = git(["rev-parse", "--abbrev-ref", "HEAD"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines), !b.isEmpty, b != "HEAD" else { return nil }
+        return b
+    }
+
+    /// La branche a-t-elle été poussée sous son propre nom (même si sa branche distante a été supprimée après la fusion) ?
+    /// Une copie créée depuis origin/main peut « suivre » origin/main : ce n'est pas une publication.
+    func wasPublished(_ wt: String, branch: String, base: String) -> Bool {
+        guard !branch.isEmpty else { return false }
+        let merge = git(["config", "--get", "branch.\(branch).merge"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let baseName = base.hasPrefix("origin/") ? String(base.dropFirst(7)) : base
+        return !merge.isEmpty && merge != "refs/heads/" + baseName && merge != "refs/heads/main" && merge != "refs/heads/master"
+    }
+
+    /// Tout le travail commité jusqu'à `rev` est-il déjà dans `base` ? Fusion classique ou rebase (ancêtre),
+    /// squash (fusionner `rev` dans `base` ne changerait rien), ou chaque commit a son équivalent dans `base`.
+    func delivered(_ dir: String, rev: String, base: String) -> Bool {
+        guard base != "HEAD", gitRun(["cat-file", "-e", rev + "^{commit}"], in: dir).ok else { return false }
+        if gitRun(["merge-base", "--is-ancestor", rev, base], in: dir).ok { return true }
+        let mt = gitRun(["merge-tree", "--write-tree", base, rev], in: dir, timeout: 15)
+        if mt.ok, let tree = mt.out.split(separator: "\n").first.map({ $0.trimmingCharacters(in: .whitespaces) }),
+           let bt = git(["rev-parse", base + "^{tree}"], in: dir)?.trimmingCharacters(in: .whitespacesAndNewlines), tree == bt { return true }
+        // Git trop ancien pour merge-tree, ou la branche principale a encore modifié les mêmes lignes depuis.
+        guard let cherry = git(["cherry", base, rev], in: dir, timeout: 15) else { return false }
+        let lines = cherry.split(separator: "\n")
+        return !lines.isEmpty && lines.allSatisfy { $0.hasPrefix("-") }
+    }
+
+    /// Branches déjà livrées par une copie (les plus récentes d'abord), avec leur état : fusionnée ou en attente.
+    /// Gardées dans la configuration locale du dépôt (studio.<copie>.delivered), jamais commitées.
+    private var mergedShas = Set<String>()
+    func history(_ dir: String, name: String, base: String) -> [[String: Any]] {
+        let raw = git(["config", "--get-all", "studio.\(name).delivered"], in: dir) ?? ""
+        let entries = raw.split(separator: "\n").compactMap { l -> (String, String, String, String)? in
+            let f = l.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
+            return f.count >= 3 ? (f[0], f[1], f[2], f.count > 3 ? f[3] : "") : nil
+        }
+        return entries.suffix(8).reversed().map { e -> [String: Any] in
+            let (branch, sha, state, subject) = e
+            var merged = state == "merged"
+            if !merged {
+                fetchLock.lock(); merged = mergedShas.contains(sha); fetchLock.unlock()
+                if !merged && delivered(dir, rev: sha, base: base) {
+                    merged = true
+                    fetchLock.lock(); mergedShas.insert(sha); fetchLock.unlock()
+                    _ = gitRun(["config", "--replace-all", "studio.\(name).delivered", [branch, sha, "merged", subject].joined(separator: "\t"), sha], in: dir)
+                }
+            }
+            return ["branch": branch, "subject": subject, "merged": merged]
+        }
+    }
+
+    /// Fait repartir une copie propre de la dernière version de la branche principale, sur une nouvelle branche.
+    /// L'ancienne branche est notée dans l'historique de la copie ; supprimée en local si elle est fusionnée,
+    /// gardée sinon (sa PR attend encore). Renvoie l'ancienne branche.
+    func startNewBranch(_ wt: String, base: String, merged: Bool) -> String? {
+        guard base != "HEAD", let old = currentBranch(wt), let sha = git(["rev-parse", "HEAD"], in: wt)?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        let name = (wt as NSString).lastPathComponent
+        let subject = (git(["log", "-1", "--format=%s"], in: wt) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\t", with: " ")
+        var next = "worktree-" + name, n = 1
+        while next == old || gitRun(["rev-parse", "-q", "--verify", "refs/heads/" + next], in: wt).ok { n += 1; next = "worktree-\(name)-\(n)" }
+        let sw = gitRun(["checkout", "-q", "--no-track", "-b", next, base], in: wt, timeout: 30)
+        guard sw.ok else { return nil }
+        recordDelivery(wt, branch: old, sha: sha, merged: merged, subject: subject)
+        let baseName = base.hasPrefix("origin/") ? String(base.dropFirst(7)) : base
+        if merged && old != baseName && old != "main" && old != "master" { _ = gitRun(["branch", "-D", old], in: wt) }
+        return old
+    }
+
+    /// Note une branche livrée dans l'historique de la copie.
+    func recordDelivery(_ wt: String, branch: String, sha: String, merged: Bool, subject: String) {
+        let name = (wt as NSString).lastPathComponent
+        let clean = subject.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ")
+        _ = gitRun(["config", "--add", "studio.\(name).delivered", [branch, sha, merged ? "merged" : "pending", clean].joined(separator: "\t")], in: wt)
+    }
+
+    /// Le travail poussé de la copie est fusionné et rien n'est en cours : elle repart de la branche principale.
+    /// Rien ne peut être perdu (copie propre, tout son travail commité est dans la branche principale).
+    @discardableResult
+    func recycleIfDelivered(_ wt: String, fetch: Bool) -> String? {
+        if fetch { fetchIfStale(wt, every: 0) }
+        let base = baseRef(wt, fetch: false)
+        guard base != "HEAD", let branch = currentBranch(wt), wasPublished(wt, branch: branch, base: base) else { return nil }
+        guard let status = git(["status", "--porcelain", "--untracked-files=all"], in: wt), status.isEmpty else { return nil }
+        guard delivered(wt, rev: "HEAD", base: base) else { return nil }
+        return startNewBranch(wt, base: base, merged: true)
+    }
+
+    /// Demande de l'utilisateur : garder la branche poussée pour sa PR et repartir de la branche principale
+    /// sur une nouvelle branche, dans la même copie (la discussion avec l'agent continue).
+    func newBranch(_ id: String, name: String) -> [String: Any] {
+        guard let wt = worktreeDir(id, name) else { return ["ok": false, "message": "Copie introuvable."] }
+        if let s = git(["status", "--porcelain", "--untracked-files=all"], in: wt), !s.isEmpty {
+            return ["ok": false, "message": "La copie a des changements non publiés : publie-les ou supprime-les d'abord."]
+        }
+        fetchIfStale(wt, every: 0)
+        let base = baseRef(wt, fetch: false)
+        guard let branch = currentBranch(wt), wasPublished(wt, branch: branch, base: base) else { return ["ok": false, "message": "Cette branche n'a pas encore été poussée."] }
+        guard let old = startNewBranch(wt, base: base, merged: delivered(wt, rev: "HEAD", base: base)) else { return ["ok": false, "message": "Nouvelle branche impossible."] }
+        return ["ok": true, "previous": old, "branch": currentBranch(wt) ?? ""]
     }
 
     /// Branche principale distante (origin/main en général), à jour si `fetch` ; HEAD du dépôt à défaut de dépôt distant.
@@ -210,7 +348,8 @@ final class ProjectFolders {
         guard Self.validWorktree(name) else { return (nil, "Nom de copie invalide.") }
         excludeWorktrees(dir)
         let base = baseRef(dir, fetch: true), wt = dir + "/.claude/worktrees/" + name
-        let r = gitRun(["worktree", "add", "-q", "-b", "worktree-" + name, wt, base], in: dir, timeout: 60)
+        // --no-track : la branche de l'agent ne « suit » pas la branche principale (sinon elle paraîtrait déjà poussée).
+        let r = gitRun(["worktree", "add", "-q", "--no-track", "-b", "worktree-" + name, wt, base], in: dir, timeout: 60)
         return r.ok ? (wt, "") : (nil, "Copie isolée impossible : \(Self.gitError(r.err))")
     }
 
@@ -315,6 +454,15 @@ final class ProjectFolders {
         guard git(["worktree", "remove", "--force", wt], in: dir, timeout: 30) != nil else { return ["ok": false, "message": "Suppression impossible."] }
         // La copie « studio-… » a été créée par Studio : sa branche locale aussi (même renommée en feat/…).
         if name.hasPrefix("studio-") && !branch.isEmpty && branch != "HEAD" { _ = git(["branch", "-D", branch], in: dir) }
+        // Branches livrées plus tôt par cette copie : déjà poussées, leurs copies locales ne servent plus.
+        if name.hasPrefix("studio-") {
+            let raw = git(["config", "--get-all", "studio.\(name).delivered"], in: dir) ?? ""
+            for l in raw.split(separator: "\n") {
+                guard let b = l.split(separator: "\t").first.map(String.init), b != "main", b != "master" else { continue }
+                _ = git(["branch", "-D", b], in: dir)
+            }
+        }
+        _ = git(["config", "--remove-section", "studio.\(name)"], in: dir)
         return ["ok": true]
     }
 

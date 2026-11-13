@@ -35,6 +35,15 @@ final class Agents {
     private let maxRunning = 3
     private let maxDuration: TimeInterval = 90 * 60
 
+    /// Messages secondaires : écrits pendant que l'agent d'une discussion travaille (clé : projet|session).
+    /// Claude Code (mode -p) ne lit rien en plein tour, et l'interrompre lui ferait perdre le fil : ils lui sont
+    /// remis ensemble, en une seule consigne, dès qu'il a fini son tour proprement.
+    private struct Queued { let id: String, session: String, text: String, at: Date, machine: String }
+    private var queues: [String: [Queued]] = [:]
+    private let maxQueued = 10
+    /// Les remises de messages se font une à une (deux fins d'agent simultanées ne relancent pas deux fois la même discussion).
+    private let flushQueue = DispatchQueue(label: "studio.agents.queue")
+
     private static let readTools = ["Read", "Glob", "Grep"]
     private static let editTools = ["Read", "Glob", "Grep", "Edit", "Write"]
     private static let testCommands = ["Bash(npm test)", "Bash(npm run test)", "Bash(npm run *)"]
@@ -43,6 +52,8 @@ final class Agents {
         Tu travailles dans une copie isolée du dépôt ; ne fais pas de commit, l'utilisateur relira tes changements. \
         Si un fichier contient des marqueurs de conflit (<<<<<<< ======= >>>>>>>), c'est que ta copie a été remise sur la dernière \
         version de la branche principale : fusionne les deux côtés à la main en gardant leurs intentions, et retire tous les marqueurs. \
+        Quand ton travail précédent a été fusionné dans la branche principale, Studio remet ta copie sur sa dernière version, \
+        sur une nouvelle branche : ce travail y est déjà, ne le refais pas et ne le propose plus. \
         Quand tu as modifié des fichiers, termine ton compte rendu par une dernière ligne, seule, de la forme \
         « Commit: type(portée): résumé » au format Conventional Commits (feat, fix, refactor, docs, test, chore, perf, style, build, ci ; \
         72 caractères au plus ; à l'impératif ; en anglais sauf si le dépôt est rédigé dans une autre langue ; sans point final). \
@@ -75,7 +86,69 @@ final class Agents {
     func list(project: String) -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         let mine = runs.values.filter { $0.project == project }.sorted { $0.started > $1.started }.prefix(20)
-        return ["ok": true, "runs": mine.map(summary)]
+        let f = ISO8601DateFormatter()
+        let queued = queues.filter { $0.key.hasPrefix(project + "|") }.values.flatMap { $0 }.sorted { $0.at < $1.at }
+            .map { ["id": $0.id, "session": $0.session, "text": String($0.text.prefix(4000)), "at": f.string(from: $0.at)] }
+        return ["ok": true, "runs": mine.map(summary), "queued": queued]
+    }
+
+    /// Met un message en attente pour la discussion dont l'agent travaille encore.
+    private func enqueue(project: String, session: String, text: String, machine: String) -> [String: Any] {
+        lock.lock(); defer { lock.unlock() }
+        let key = project + "|" + session
+        var q = queues[key] ?? []
+        guard q.count < maxQueued else { return ["ok": false, "message": "Déjà \(maxQueued) messages en attente : attends que Claude finisse son tour."] }
+        q.append(Queued(id: UUID().uuidString, session: session, text: text, at: Date(), machine: machine))
+        queues[key] = q
+        return ["ok": true, "queued": q.count, "session": session]
+    }
+
+    /// Retire un message en attente (l'utilisateur a changé d'avis).
+    func unqueue(project: String, id: String) -> [String: Any] {
+        lock.lock(); defer { lock.unlock() }
+        for (key, q) in queues where key.hasPrefix(project + "|") && q.contains(where: { $0.id == id }) {
+            let left = q.filter { $0.id != id }
+            queues[key] = left.isEmpty ? nil : left
+            return ["ok": true]
+        }
+        return ["ok": false, "message": "Ce message a déjà été transmis."]
+    }
+
+    /// Une seule consigne pour tous les messages en attente : l'ordre est gardé, chaque message est délimité,
+    /// et la règle en cas de contradiction est explicite (le plus récent l'emporte).
+    static func combine(_ queued: [String], _ prompt: String) -> String {
+        let all = queued + (prompt.isEmpty ? [] : [prompt])
+        guard all.count > 1 else { return all.first ?? "" }
+        let blocks = all.enumerated().map { "<message n=\"\($0.offset + 1)\">\n\($0.element)\n</message>" }.joined(separator: "\n\n")
+        return """
+            L'utilisateur t'a écrit \(all.count) messages pendant ton dernier tour. Les voici, du plus ancien au plus récent :
+
+            \(blocks)
+
+            Lis-les tous avant d'agir, et traite-les comme une seule demande : si deux messages se contredisent, \
+            le plus récent l'emporte ; ne refais pas ce qui est déjà fait.
+            """
+    }
+
+    /// Remet leurs messages en attente aux discussions dont l'agent a fini son tour proprement.
+    /// Après un arrêt ou une erreur, ils restent en attente : l'utilisateur les envoie quand il veut.
+    func flushQueues() {
+        flushQueue.async {
+            self.lock.lock()
+            let ready: [(project: String, session: String, machine: String)] = self.queues.compactMap { key, q in
+                guard let first = q.first else { return nil }
+                let mine = self.runs.values.filter { $0.project + "|" + $0.session == key }
+                guard !mine.contains(where: { $0.status == "running" || $0.status == "starting" }),
+                      mine.max(by: { $0.started < $1.started })?.status == "done" else { return nil }
+                return (String(key.prefix { $0 != "|" }), first.session, first.machine)
+            }
+            self.lock.unlock()
+            for r in ready {
+                let sem = DispatchSemaphore(value: 0)
+                self.start(project: r.project, body: ["session": r.session, "prompt": "", "machine": r.machine]) { _ in sem.signal() }
+                _ = sem.wait(timeout: .now() + 60)
+            }
+        }
     }
 
     /// Arrête un agent : Claude Code et tout ce qu'il a lancé (tests…), sur le Mac ou sur le serveur.
@@ -160,12 +233,25 @@ final class Agents {
         guard let dir = onServer ? server?.path : folders.path(pid) else { return done(["ok": false, "message": "Choisis d'abord le dossier du projet sur ce Mac."]) }
         let bin = onServer ? "/usr/bin/ssh" : (ClaudeCode.shared.binary() ?? "")
         if bin.isEmpty { return done(["ok": false, "message": "Claude Code n'est pas installé sur ce Mac."]) }
-        let prompt = (body["prompt"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, prompt.utf8.count <= 100_000 else { return done(["ok": false, "message": "Consigne vide ou trop longue."]) }
-        lock.lock(); let busy = runs.values.filter { $0.status == "running" || $0.status == "starting" }.count >= maxRunning; lock.unlock()
-        if busy { return done(["ok": false, "message": "Trois agents tournent déjà : attends qu'un se termine ou arrête-en un."]) }
-
+        var prompt = (body["prompt"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let resume = body["session"] as? String ?? ""
+        // Messages secondaires : pendant que l'agent de la discussion travaille, le message attend la fin de son tour ;
+        // à la reprise suivante, tous les messages en attente partent avec la consigne, en une seule fois.
+        // Les reprises lancées par l'orchestrateur (résolution de conflits) n'y touchent pas.
+        var taken: [String] = []
+        if !resume.isEmpty && body["internal"] as? Bool != true {
+            if self.busy(project: pid, session: resume) {
+                guard !prompt.isEmpty, prompt.utf8.count <= 100_000 else { return done(["ok": false, "message": "Message vide ou trop long."]) }
+                return done(enqueue(project: pid, session: resume, text: prompt, machine: onServer ? "server" : "mac"))
+            }
+            lock.lock(); let q = queues[pid + "|" + resume] ?? []; lock.unlock()
+            taken = q.map(\.id)
+            prompt = Self.combine(q.map(\.text), prompt)
+        }
+        guard !prompt.isEmpty, prompt.utf8.count <= 100_000 else { return done(["ok": false, "message": "Consigne vide ou trop longue."]) }
+        lock.lock(); let full = runs.values.filter { $0.status == "running" || $0.status == "starting" }.count >= maxRunning; lock.unlock()
+        if full { return done(["ok": false, "message": "Trois agents tournent déjà : attends qu'un se termine ou arrête-en un."]) }
+
         var cwd = dir, mode = body["mode"] as? String == "edit" ? "edit" : "read", newWorktree = ""
         var args = ["-p", "--output-format", "stream-json", "--verbose", "--restricted", "--permission-mode", "dontAsk",
                     "--setting-sources", "", "--strict-mcp-config", "--disable-slash-commands"]
@@ -175,6 +261,12 @@ final class Agents {
             guard let c = known, c == dir || c.hasPrefix(dir + "/.claude/worktrees/") || onServer else { return done(["ok": false, "message": "Session introuvable pour ce projet."]) }
             cwd = c; mode = c.contains("/.claude/worktrees/") ? "edit" : "read"
             args += ["--resume", resume]
+            // Le travail précédent de la discussion a été fusionné : l'agent repart de la dernière version de la branche
+            // principale, sur une nouvelle branche (une même discussion peut ainsi livrer plusieurs branches).
+            if !onServer, mode == "edit", let r = c.range(of: "/.claude/worktrees/") {
+                let name = String(c[r.upperBound...])
+                if !Orchestrator.shared.busy(project: pid, worktree: name) && !self.busy(project: pid, worktree: name) { folders.recycleIfDelivered(c, fetch: true) }
+            }
         } else if mode == "edit" {
             // Copie isolée créée par Studio à partir de la dernière version de la branche principale distante
             // (et non par « claude --worktree », qui part de la branche où se trouve ton dossier).
@@ -195,7 +287,8 @@ final class Agents {
            Self.modelRe.firstMatch(in: model, range: NSRange(model.startIndex..., in: model)) != nil { args += ["--model", model] }
         args += ["--append-system-prompt", """
             Tu es lancé depuis Studio. L'utilisateur lit tes messages dans un fil de discussion et peut te répondre ensuite \
-            en reprenant la session, mais personne ne répond pendant que tu travailles. \
+            en reprenant la session, mais personne ne répond pendant que tu travailles : ce qu'il t'écrit pendant ton tour \
+            t'est remis d'un bloc à la fin de celui-ci. \
             \(mode == "edit" ? Self.editRules : "Tu es en lecture seule : analyse et propose, sans modifier de fichier.") \
             Si l'utilisateur demande une tâche précise, mène-la de façon autonome jusqu'au bout, puis termine par un compte rendu \
             court en Markdown : ce qui a été fait, les fichiers touchés, ce qui reste à décider. \
@@ -219,7 +312,7 @@ final class Agents {
                 let wt = ".claude/worktrees/" + newWorktree
                 prep = "(grep -qxF '.claude/worktrees/' .git/info/exclude 2>/dev/null || echo '.claude/worktrees/' >> .git/info/exclude) 2>/dev/null; "
                     + "git fetch -q origin 2>/dev/null; B=$(git symbolic-ref -q --short refs/remotes/origin/HEAD || echo HEAD); "
-                    + "git worktree add -q -b \(Servers.q("worktree-" + newWorktree)) \(Servers.q(wt)) \"$B\" && cd \(Servers.q(wt)) && "
+                    + "git worktree add -q --no-track -b \(Servers.q("worktree-" + newWorktree)) \(Servers.q(wt)) \"$B\" && cd \(Servers.q(wt)) && "
             }
             // Première ligne du flux : le numéro du processus distant (exec le conserve), pour pouvoir l'arrêter.
             let remote = "cd \(Servers.qPath(cwd)) && \(prep)echo \"{\\\"type\\\":\\\"studio_pid\\\",\\\"pid\\\":$$}\" && PATH=\"$HOME/.local/bin:$HOME/.claude/local:$PATH\" exec claude " + args.map(Servers.q).joined(separator: " ")
@@ -245,11 +338,28 @@ final class Agents {
             self.lock.lock()
             if run.status == "running" || run.status == "starting" { run.status = proc.terminationStatus == 0 && !run.result.isEmpty ? "done" : "error" }
             run.finished = Date(); run.process = nil
+            let wt = run.machine == "mac" && run.mode == "edit" && !run.worktree.isEmpty ? run.cwd : "", name = run.worktree
             self.lock.unlock()
+            // Fin du tour, dans cet ordre : 1. si le travail de la copie a été fusionné entre-temps et que l'agent n'a rien
+            // changé, la copie repart de la branche principale (elle ne sera plus proposée à la publication) ;
+            // 2. les messages écrits pendant ce tour sont remis à l'agent (le flux a eu le temps de livrer son résultat).
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
+                if !wt.isEmpty && wt.contains("/.claude/worktrees/")
+                    && !Orchestrator.shared.busy(project: run.project, worktree: name) && !self.busy(project: run.project, worktree: name) {
+                    ProjectFolders.shared.recycleIfDelivered(wt, fetch: true)
+                }
+                self.flushQueues()
+            }
             answerOnce(["ok": false, "message": run.result.isEmpty ? "Claude Code s'est arrêté avant de démarrer." : run.result])
         }
         do { try p.run() } catch { return done(["ok": false, "message": "Impossible de lancer Claude Code."]) }
-        lock.lock(); runs[run.id] = run; lock.unlock()
+        lock.lock(); runs[run.id] = run
+        // Messages en attente transmis : ils sortent de la file (ceux arrivés entre-temps y restent pour le tour suivant).
+        if !taken.isEmpty {
+            let key = pid + "|" + resume, left = (queues[key] ?? []).filter { !taken.contains($0.id) }
+            queues[key] = left.isEmpty ? nil : left
+        }
+        lock.unlock()
         DispatchQueue.global(qos: .utility).async {
             try? input.fileHandleForWriting.write(contentsOf: Data(prompt.utf8)); try? input.fileHandleForWriting.close()
         }
