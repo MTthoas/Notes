@@ -18,6 +18,7 @@ import * as news from './news.ts';
 import * as journal from './journal.ts';
 import * as tuning from '../integrations/tuning.ts';
 import * as tuningUI from './tuning.ts';
+import * as pluginsUI from './plugins.ts';
 import type { AppEvent } from '../core/events.ts';
 import { renderMarkdown, esc, plain } from '../lib/markdown.ts';
 import { fold } from '../lib/fuzzy.ts';
@@ -463,6 +464,7 @@ const TABS: [string, string, string, string][] = [
   ['consignes', 'gear', 'Consignes et contexte', 'Tout ce que Studio envoie à l’IA en plus de ta demande : consignes, limites de contexte, modèles. Modifiable, et rétablissable d’un clic.'],
   ['linear', 'linear', 'Linear', 'Tickets, projets et notifications Linear, sans intermédiaire.'],
   ['github', 'github', 'GitHub', 'L’actualité de tes dépôts, en lecture seule.'],
+  ['extensions', 'plug', 'Extensions', 'Des fonctions en plus, à activer une par une : Spotify, n8n… Tout tourne sur cet appareil, sans serveur.'],
   ['appareils', 'devices', 'Appareils', 'Relie ton téléphone et tes ordinateurs, sans serveur, chiffré de bout en bout.'],
   ['apparence', 'palette', 'Apparence', 'Thème de l’interface.'],
   ['donnees', 'database', 'Données', 'Sauvegardes, import et export.'],
@@ -485,7 +487,9 @@ export function mountSettings(main: HTMLElement, tab: string): void {
   refreshConnections();
 }
 
-const TAB_BODY: Record<string, () => string> = { coffre: () => tabVault(), ia: () => tabAI(), consignes: () => tuningUI.html(), linear: () => tabLinear(), github: () => tabGithub(), appareils: () => tabDevices(), apparence: () => tabLook(), donnees: () => tabData(), maj: () => tabUpdate() };
+const TAB_BODY: Record<string, () => string> = { coffre: () => tabVault(), ia: () => tabAI(), consignes: () => tuningUI.html(), linear: () => tabLinear(), github: () => tabGithub(), extensions: () => pluginsUI.html(), appareils: () => tabDevices(), apparence: () => tabLook(), donnees: () => tabData(), maj: () => tabUpdate() };
+/** Pour les plugins : redessine l'onglet Extensions s'il est à l'écran. */
+export function refreshSettings(): void { if (curTab === 'extensions') refreshConnections(); }
 function refreshConnections(): void {
   const r = root(); if (!r) return;
   const active = document.activeElement as HTMLInputElement | null;
@@ -693,6 +697,7 @@ async function onConnClick(e: MouseEvent) {
   const t = target(e);
   const tab = t.closest('[data-tab]'); if (tab) { openConnections(tab.dataset.tab); return; }
   if (curTab === 'consignes' && await tuningUI.onClick(t, refreshConnections)) return;
+  if (curTab === 'extensions' && await pluginsUI.onClick(t, refreshConnections)) return;
   const del = t.closest('[data-del-key]'); if (del) { if (await confirmBox({ title: 'Supprimer la clé ?', text: 'Elle sera effacée du coffre de cet appareil.', ok: 'Supprimer', danger: true })) await vault.setSecret(del.dataset.delKey ?? '', null); return; }
   const fg = t.closest('[data-dev-forget]'); if (fg) { if (await confirmBox({ title: 'Oublier cet appareil ?', text: 'La liaison sera supprimée ici. Fais de même sur l’autre appareil.', ok: 'Oublier', danger: true })) await link.forget(fg.dataset.devForget ?? ''); return; }
   const pk = t.closest('[data-dev-packet]'); if (pk) { const dev = link.devices().find(d => d.secret === pk.dataset.devPacket); if (dev) await sendPacket(dev); return; }
@@ -748,6 +753,7 @@ async function onConnSubmit(e: SubmitEvent) {
   e.preventDefault();
   const f = target(e) as HTMLFormElement;
   const field = (n: string) => (f.elements.namedItem(n) as HTMLInputElement | null)?.value ?? '';
+  if (curTab === 'extensions' && await pluginsUI.onSubmit(f, refreshConnections)) return;
   if (f.dataset.f === 'create') {
     const a = field('p1'), b = field('p2'), err = need('.lock-err', f);
     if (a.length < 10) return void (err.textContent = '10 caractères minimum.');
@@ -772,6 +778,7 @@ async function onConnSubmit(e: SubmitEvent) {
 function onConnChange(e: Event): void {
   const t = target(e) as HTMLInputElement;
   if (curTab === 'consignes' && tuningUI.onChange(t)) return;
+  if (curTab === 'extensions' && pluginsUI.onChange(t, refreshConnections)) return;
   if (t.name === 'provider') ai.setConfig({ provider: t.value as ai.Provider });
   else if (t.name === 'theme') app.setTheme(t.value);
   else if (t.dataset.cfg === 'budgetM') { ai.setConfig({ budgetM: Math.max(0, Number(t.value) || 0) }); refreshConnections(); }

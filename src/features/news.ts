@@ -38,6 +38,11 @@ interface Item {
 
 // Les plus récentes d'abord.
 const NEWS: Item[] = [
+  { id: 'extensions', date: '2026-11-14', icon: 'plug', hue: 'green',
+    title: 'Des extensions : Spotify, n8n…',
+    text: 'Active ce dont tu as besoin dans Réglages → Extensions. Spotify affiche le titre en cours et ses commandes dans la barre latérale ; n8n reçoit tes captures, tes tâches terminées et tes notes. Toujours sans serveur.',
+    points: ['Spotify', 'n8n', 'Sans serveur'],
+    go: { label: 'Voir les extensions', view: { type: 'settings', tab: 'extensions' } } },
   { id: 'repo-memory', date: '2026-11-14', mac: true, icon: 'notes', hue: 'teal',
     title: 'Les agents se souviennent du dépôt',
     text: 'Chaque agent Claude Code lit d’abord contexte.md, à la racine du dépôt, au lieu de réexplorer le code. Il y note ce qu’il a appris de durable : le suivant démarre plus vite.',

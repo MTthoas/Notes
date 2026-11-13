@@ -241,7 +241,7 @@ Réglages → Appareils → « Lier un appareil ». Un secret de 128 bits passe 
 | **Stockage** | Tout vit sur l'appareil, dans IndexedDB. Aucun compte, aucun serveur, aucune télémétrie. |
 | **Coffre** | Une clé maîtresse aléatoire de 256 bits chiffre (AES-GCM) chaque enregistrement — notes, historique — ainsi que les clés API et les appareils liés. |
 | **Déverrouillage** | Mot de passe (PBKDF2, 600 000 itérations), jamais stocké ; en option, passkey Face ID / Touch ID dans un navigateur (WebAuthn, extension PRF) ou, dans les apps natives, secret aléatoire du trousseau que la biométrie libère. Verrouillage automatique après inactivité. |
-| **Réseau** | La politique de sécurité (CSP) de `index.html` n'autorise que `api.anthropic.com`, `api.openai.com`, `api.linear.app`, `api.github.com`, `ntfy.sh` et `localhost`. Une clé ne peut donc pas partir ailleurs, même en cas de faille. Aucune image distante n'est chargée. |
+| **Réseau** | La politique de sécurité (CSP) de `index.html` n'autorise que `api.anthropic.com`, `api.openai.com`, `api.linear.app`, `api.github.com`, `ntfy.sh`, `localhost`, et les domaines des extensions (`api.spotify.com`, `accounts.spotify.com`, `*.app.n8n.cloud`), contactés seulement si tu les actives. Une clé ne peut donc pas partir ailleurs, même en cas de faille. Aucune image distante n'est chargée. |
 | **IA** | Les notes chiffrées et celles taguées `#privé` ne sont jamais envoyées. Toute action d'écriture d'un agent (créer une note, une issue…) demande ton accord. |
 | **Synchronisation** | Chiffrée de bout en bout ; le relais ne voit que du chiffré. |
 | **Sauvegarde** | L'export JSON est chiffré par mot de passe quand le coffre est actif. |
@@ -306,7 +306,7 @@ src/                               TypeScript strict
     linear/           api.ts (GraphQL typé), page.ts, render.ts, notifications.ts
     github/           api.ts (actualité des dépôts), page.ts
   lib/              outils sans état : markdown, calc, schema, graph, qr, fuzzy, diff, zip
-  plugins/          registre d'extensions et plugins maison (GitHub, Linear)
+  plugins/          registre d'extensions, plugins maison (GitHub, Linear) et optionnels (Spotify, n8n)
   ui/               kit.ts (icônes, menus, fenêtres), caret.ts (curseur), chart.ts (graphiques)
   sw/sw.ts          service worker (compilé avec les types « worker »)
 native/             apps Mac et iPhone (Swift) et leurs scripts de build
@@ -338,7 +338,12 @@ contexte.md         mémoire du dépôt pour les agents : lue en premier, tenue 
 
 ### Plugins
 
-Les fonctions de Studio se branchent sur un registre d'extensions ([`src/plugins/registry.ts`](src/plugins/registry.ts)) : panneaux de la page projet, actions sur une tâche. GitHub et Linear y sont déjà enregistrés comme plugins maison ([`src/plugins/builtin.ts`](src/plugins/builtin.ts)). Prochaines étapes : plugins déclaratifs (modèles, thèmes), puis plugins avec code, isolés et soumis à permissions.
+Les fonctions de Studio se branchent sur un registre d'extensions ([`src/plugins/registry.ts`](src/plugins/registry.ts)). GitHub et Linear y sont enregistrés comme plugins maison ([`src/plugins/builtin.ts`](src/plugins/builtin.ts)) ; les plugins **optionnels** s'activent dans Réglages → Extensions et ne tournent que tant que Studio est ouvert, sans aucun serveur :
+
+- **Spotify** ([`src/plugins/spotify.ts`](src/plugins/spotify.ts)) : titre en cours et commandes de lecture en bas de la barre latérale, et dans la palette. Connexion OAuth PKCE avec ta propre app Spotify (Client ID seul, aucun secret) ; les commandes demandent Spotify Premium.
+- **n8n** ([`src/plugins/n8n.ts`](src/plugins/n8n.ts)) : envoie captures, tâches terminées, nouveautés Linear et GitHub, ou la note ouverte, à un webhook n8n (n8n Cloud ou n8n local).
+
+Un plugin est un objet `Plugin` : il déclare ses réglages (`settings`, la page se construit dessus ; `secret: true` range la valeur dans le coffre), les domaines qu'il contacte (`hosts`), et ce qu'il ajoute : bloc de barre latérale (`sidebar`), commandes de palette (`commands`), panneaux de projet, actions (`data-plug="<id>:<action>"`), abonnement aux événements de Studio et minuteries (`start`). Il ne reçoit que son `PluginAPI` : ses propres réglages et secrets, jamais le coffre. Pour en ajouter un : un fichier dans `src/plugins/`, un `registry.register(…)` dans `builtin.ts`, et ses domaines dans `connect-src` (`index.html`). Prochaine étape : des plugins chargés hors du dépôt, isolés et soumis à permissions.
 
 ### Intégration continue et versions
 

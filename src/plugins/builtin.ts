@@ -1,5 +1,7 @@
 // Plugins livrés avec Studio. Ils passent par le même registre que les futurs plugins.
 import * as registry from './registry.ts';
+import { spotify } from './spotify.ts';
+import { n8n } from './n8n.ts';
 import * as github from '../integrations/github/api.ts';
 import * as linear from '../integrations/linear/api.ts';
 import { issueRow } from '../integrations/linear/render.ts';
@@ -10,6 +12,10 @@ const CI: Record<github.CiState, [string, string]> = { success: ['green', 'CI ve
 const REVIEW: Record<github.ReviewState, string> = { approved: 'approuvée', changes: 'modifications demandées', pending: 'revue demandée', none: '' };
 
 export function registerBuiltins(): void {
+  // Plugins optionnels : inactifs tant qu'on ne les a pas activés dans Réglages → Extensions.
+  registry.register(spotify);
+  registry.register(n8n);
+
   registry.register({
     id: 'github', name: 'GitHub',
     projectPanels: [{

@@ -25,6 +25,7 @@ import * as news from './features/news.ts';
 import * as projectsPage from './features/projects/page.ts';
 import * as projectsModel from './features/projects/model.ts';
 import { registerBuiltins } from './plugins/builtin.ts';
+import * as plugins from './plugins/registry.ts';
 import * as caret from './ui/caret.ts';
 import * as biometric from './core/biometric.ts';
 import * as native from './core/native.ts';
@@ -207,6 +208,7 @@ function renderSidebar() {
       <div class="side-label">Explorer</div>
       <div class="side-group">${item('graph')}${item('trash')}${item('help')}</div>
     </div>
+    <div id="plug-side">${plugins.sidebarHTML()}</div>
     ${update.ready() ? `<button class="side-foot side-update" data-open-conn="maj" title="La nouvelle version est téléchargée : elle s’installe à la relance, ou quand tu quittes Studio">${icon('refresh')}<span>Relancer pour mettre à jour</span></button>`
       : update.available() ? `<button class="side-foot side-update" data-open-conn="maj" title="Une nouvelle version de Studio est disponible">${icon('download')}<span>Mise à jour disponible</span></button>` : ''}
     <button class="side-foot" data-open-conn="${vault.enabled() ? 'appareils' : 'coffre'}" title="Réglages (${keys(SC.settings)})">${icon(vault.isOpen() ? 'shield' : 'unlock')}<span>${vault.isOpen() ? 'Chiffré de bout en bout' : 'Non chiffré'}</span>${devs ? `<span class="side-count">${icon('devices')}${devs}</span>` : ''}</button>`;
@@ -832,6 +834,8 @@ function commands() {
     c('Afficher ou masquer la barre latérale', 'sidebar', toggleSidebar, SC.sidebar, 'sidebar'),
     c('Aide et raccourcis', 'help', openHelp, '?', 'aide help prise en main débuter comment'),
     c('Nouveautés de Studio', 'bolt', news.open, '', 'nouveautés quoi de neuf version changements mise à jour'),
+    ...plugins.commands().map(x => c(x.label, x.icon, x.run, '', x.kw)),
+    c('Extensions', 'plug', () => hub.openConnections('extensions'), '', 'plugins spotify n8n webhook modules'),
     c('Réglages', 'gear', () => hub.openConnections('coffre'), SC.settings, 'préférences paramètres options'),
   ];
 }
@@ -1005,6 +1009,7 @@ async function onClick(e: MouseEvent): Promise<void> {
     else if (act === 'backlinks') menu(anchor, [{ label: 'Rétroliens' }, ...store.backlinks(n).map(b => ({ label: titleOf(b), icon: 'notes', run: () => openNote(b.id) }))]);
     return;
   }
+  if (await plugins.click(t)) return;
   if (await hub.click(e)) return;
   let x: HTMLElement | null;
   if ((x = t.closest('[data-pj-open], [data-project-open]')) && !t.closest('.pj')) { if (x.dataset.pjOpen && x.dataset.pjSession !== undefined) projectsPage.openSession(x.dataset.pjOpen, x.dataset.pjSession || null, x.dataset.pjSub || null); await setView({ type: 'projets', project: x.dataset.pjOpen || x.dataset.projectOpen || null, ...(x.dataset.pjTab ? { tab: x.dataset.pjTab } : {}) }); return; }
@@ -1193,6 +1198,8 @@ async function start() {
     selection: () => { if (!ed?.ta) return null; const { selectionStart: a, selectionEnd: b, value: v } = ed.ta, [ls] = lineBounds(v, a), [, le] = lineBounds(v, b); return { text: a === b ? v.slice(ls, le) : v.slice(a, b), end: le }; },
     insertAtLineEnd: (pos, text) => { if (ed?.ta) replaceRange(ed.ta, pos, pos, text); },
   });
+  // Plugins optionnels (Spotify, n8n…) : démarrés ici, coffre ouvert, avant que l'adresse de la page ne soit nettoyée.
+  plugins.boot({ settings: hub.refreshSettings, note: () => { const n = store.get(ui.id); return n && !n.deletedAt && !store.isLocked(n) ? { title: n.title, body: store.getBody(n) ?? '' } : null; } });
   const firstRun = !store.notes.size && !read('carnet.seeded', false);
   if (firstRun) {
     const t = Date.now();

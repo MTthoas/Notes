@@ -118,6 +118,28 @@ button.side-label:hover { color: var(--text-2); }
 .side-foot span:first-of-type { flex: 1; }
 .side-foot .ic { width: 14px; height: 14px; }
 .side-foot:hover { background: var(--hover); color: var(--text-2); }
+/* Bloc des plugins dans la barre latérale (lecture Spotify en cours…). */
+.plug-np { margin: 0 8px 4px 10px; padding: 3px 2px 3px 8px; display: flex; align-items: center; gap: 2px; border-radius: var(--r); color: var(--text-2); font-size: var(--t-1); }
+.plug-np > a, .plug-np > div { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; }
+.plug-np > a > .ic, .plug-np > div > .ic { width: 14px; height: 14px; flex: none; color: var(--c-green); }
+.plug-np span { min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.plug-np strong, .plug-np em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plug-np strong { font-weight: 500; }
+.plug-np em { font-style: normal; color: var(--text-3); }
+.plug-np .icon-btn { width: 24px; height: 24px; }
+.plug-np .icon-btn .ic { width: 13px; height: 13px; }
+/* Réglages → Extensions. */
+.px-head { display: flex; align-items: flex-start; gap: 10px; }
+.px-head > .ic { width: 18px; height: 18px; margin-top: 1px; flex: none; color: var(--text-3); }
+.px-head > div { flex: 1; }
+.px-head p { margin: 0; }
+.px-head .cx-check { margin: 0; flex: none; }
+.px.on .px-head { margin-bottom: 8px; }
+.cx-sec .px-hosts { margin: 6px 0 0; color: var(--text-3); font-size: var(--t-1); }
+.px.on .px-hosts { margin-bottom: 12px; }
+.px-label { display: block; margin: 10px 0 4px; font-size: var(--t-1); font-weight: 500; color: var(--text-2); }
+.px .cx-key, .px .cx-row { margin-bottom: 10px; }
+a.btn { text-decoration: none; }
 .side-update { color: var(--c-blue); font-weight: 500; background: color-mix(in srgb, var(--c-blue) 9%, transparent); }
 .side-update:hover { color: var(--c-blue); background: color-mix(in srgb, var(--c-blue) 15%, transparent); }
 /* Réglages → Mises à jour */
