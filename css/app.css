@@ -1758,3 +1758,31 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
   .jr-side { width: auto; max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--border); }
   .jr .home { overflow: visible; }
 }
+
+/* ---------- Claude : conversation libre (features/chat.ts) ---------- */
+.side-chat { height: 24px; gap: 8px; padding-left: 30px; font-weight: 400; font-size: var(--t-1); color: var(--text-2); }
+.side-chat .ss-live { width: 6px; height: 6px; }
+.side-chat.sel { font-weight: 500; color: var(--text); }
+.cl { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.cl-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.cl-in { max-width: 760px; margin: 0 auto; padding: 32px 40px 24px; }
+.cl-foot { flex: none; padding: 0 40px 20px; }
+.cl-compose { max-width: 760px; margin: 0 auto; }
+.cl-compose textarea { min-height: 52px; resize: none; }
+.cl-bar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 6px 10px 10px 16px; }
+.cl-hint { flex: 1; color: var(--text-3); font-size: var(--t-1); }
+.cl-feed { display: flex; flex-direction: column; gap: 14px; }
+.cl-feed > * { flex: none; min-width: 0; }
+.cl .ss-tools li { display: block; padding: 2px 0; font: inherit; font-size: var(--t-1); line-height: 1.5; }
+.cl-prov { font-style: normal; color: var(--text-3); }
+.cl-err .md .err { margin: 0; }
+.cl-hero { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 6vh 0 24px; }
+.cl-logo { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: color-mix(in srgb, var(--c-orange) 14%, var(--bg)); color: var(--c-orange); }
+.cl-logo .ic { width: 24px; height: 24px; }
+.cl-hero h1 { margin: 16px 0 8px; font-size: var(--t-6); font-weight: 600; letter-spacing: -.02em; }
+.cl-hero > p { max-width: 520px; margin: 0; color: var(--text-2); font-size: var(--t-2); line-height: 1.55; }
+.cl-hero > p.cl-via { margin-top: 10px; color: var(--text-3); font-size: var(--t-1); }
+.cl-sugs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 22px; }
+.cl-sug { padding: 7px 12px; border: 1px solid var(--border); border-radius: 16px; color: var(--text-2); font-size: var(--t-1); transition: border-color .1s, background .1s; }
+.cl-sug:hover { border-color: var(--border-2); background: var(--hover); color: var(--text); }
+@media (max-width: 640px) { .cl-in { padding: 20px 16px 16px; } .cl-foot { padding: 0 12px 12px; } .cl-hint { display: none; } }

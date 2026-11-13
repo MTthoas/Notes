@@ -258,7 +258,7 @@ function agentBlock(note: Note, code: string, idx: number): string {
     <div class="ag-foot"><span class="ag-last">${last}</span><button class="btn btn-primary" data-agent-run="${idx}" ${running.has(key) ? 'disabled' : ''}>${icon('play')}Lancer</button></div></div>`;
 }
 
-function approve(action: ai.Approval): Promise<boolean> {
+export function approve(action: ai.Approval): Promise<boolean> {
   return new Promise<boolean>(res => {
     let done = false;
     const m = modal({ title: 'Autoriser cette action ?', cls: 'approve', onClose: () => { if (!done) res(false); },
@@ -268,9 +268,9 @@ function approve(action: ai.Approval): Promise<boolean> {
   });
 }
 
-const STEP: Record<string, (i: StepInput) => string> = { chercher_notes: (i: StepInput) => `Recherche « ${i.requete || '…'} »`, lire_note: (i: StepInput) => `Lecture de « ${i.titre} »`, lister_taches: () => 'Liste des tâches', creer_note: (i: StepInput) => `Création de « ${i.titre} »`, ajouter_a_note: (i: StepInput) => `Ajout à « ${i.titre} »`, ajouter_tache: (i: StepInput) => `Tâche « ${i.texte} »`, linear_chercher: () => 'Recherche dans Linear', linear_creer_issue: (i: StepInput) => `Issue Linear « ${i.titre} »`, lancer_agent: (i: StepInput) => `Délégation à l’agent « ${i.nom} »` };
+const STEP: Record<string, (i: StepInput) => string> = { chercher_notes: (i: StepInput) => `Recherche « ${i.requete || '…'} »`, lire_note: (i: StepInput) => `Lecture de « ${i.titre} »`, lister_taches: () => 'Liste des tâches', creer_note: (i: StepInput) => `Création de « ${i.titre} »`, ajouter_a_note: (i: StepInput) => `Ajout à « ${i.titre} »`, ajouter_tache: (i: StepInput) => `Tâche « ${i.texte} »`, linear_chercher: () => 'Recherche dans Linear', linear_creer_issue: (i: StepInput) => `Issue Linear « ${i.titre} »`, lancer_agent: (i: StepInput) => `Délégation à l’agent « ${i.nom} »`, boite_reception: () => 'Boîte de réception', ranger_note: (i: StepInput) => `Rangement de « ${i.titre} »`, linear_notifications: () => 'Notifications Linear', github_actualite: () => 'Actualité GitHub' };
 
-const stepLabel = (e: ai.Step): string => (STEP[e.name] ?? (() => e.name))(e.input || {});
+export const stepLabel = (e: ai.Step): string => (STEP[e.name] ?? (() => e.name))(e.input || {});
 
 function runEntry(title: string) {
   let d = $('#runs'); if (!d) { d = el('<div id="runs" aria-live="polite"></div>'); document.body.append(d); }

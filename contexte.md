@@ -21,6 +21,7 @@ Mémoire du dépôt pour les agents : à lire **en premier**, avant toute recher
 - **Pont web ↔ natif** : `native.call(type, action, …)` dans `src/core/native.ts` ; côté Swift, `userContentController` de `native/Shared/Shell.swift` aiguille selon `type`, et répond par `window.carnet.reply`. La page sait où elle tourne par `document.documentElement.dataset.native` (`mac`, `ios`, absent dans un navigateur).
 - **Consignes envoyées à l'IA** : `src/integrations/tuning.ts` pour les automatisations, les tâches de fond et les limites de contexte. Celles des agents Claude Code vivent sur le Mac : `AgentTuning`, en bas de `native/Shared/Agents.swift`.
 - **Agents Claude Code** : lancement et arguments de `claude` dans `native/Shared/Agents.swift` ; copies isolées dans `.claude/worktrees/studio-…` (`Projects.swift`) ; publication en pull request dans `Orchestrator.swift` ; l'interface dans `src/features/projects/sessions.ts`.
+- **Page Claude** (conversation libre, sans projet) : `src/features/chat.ts`, vue `claude` ; conversations dans le magasin IndexedDB `chats` (`db.ts`) ; consigne `auto.chat` et limite `ctx.chat` dans `src/integrations/tuning.ts` ; `ai.run({ chat: true })`.
 - **Couleur d'un projet** : `src/features/projects/page.ts` pose `--c:var(--c-<hue>)` sur `.pj-head` et `.pj-card` ; tout ce qui est dedans peut s'en teinter en CSS.
 - **Icônes** : table en tête de `src/ui/kit.ts` (`icon('nom')`).
 - **Commande `studio`** : `bin/studio` (sh POSIX), qui appelle `native/build-mac.sh`, lequel appelle `native/copy-web.sh` (build web puis copie dans l'app).
@@ -31,6 +32,7 @@ Mémoire du dépôt pour les agents : à lire **en premier**, avant toute recher
 - **Ajouter une consigne ou une limite côté web** : une entrée dans `DEFS` de `src/integrations/tuning.ts` suffit, la page de réglages se construit dessus.
 - **Ajouter un plugin optionnel** : un fichier `src/plugins/<id>.ts` exportant un `Plugin` (`optional: true`, `settings`, `hosts`, `start`, `sidebar`, `commands`, `actions`), un `registry.register` dans `builtin.ts`, et ses domaines dans `connect-src` de `index.html` (sinon la CSP bloque ses requêtes) ; le README les liste.
 - **Annoncer une fonction visible** : une entrée en tête de `NEWS` dans `src/features/news.ts` (identifiant stable), et le README.
+- **Conflit sur `NEWS`** (chaque PR ajoute son entrée en tête, donc les fusions avec `main` s'y heurtent souvent) : garder les entrées des deux côtés, la plus récente en tête, sans en perdre ni en dupliquer. Vérifier ensuite que chaque `id` présent sur `origin/main` l'est encore.
 - **Vérifier** : `npm run verify` (types, build, cache hors ligne, aucun secret). C'est ce que lance la CI.
 
 ## Build et versions
