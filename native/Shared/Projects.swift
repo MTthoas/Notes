@@ -184,8 +184,11 @@ final class ProjectFolders {
             let changes = status.split(separator: "\n").count
             let counts = git(["rev-list", "--left-right", "--count", "\(base)...HEAD"], in: wtPath)?.split(whereSeparator: { $0 == "\t" || $0 == " " || $0 == "\n" }).compactMap { Int($0) } ?? []
             let upstream = git(["rev-parse", "--abbrev-ref", "@{upstream}"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let row: [String: Any] = ["name": name, "branch": branch, "changes": changes, "behind": counts.first ?? 0, "ahead": counts.count > 1 ? counts[1] : 0,
-                                      "pushed": !upstream.isEmpty, "conflicts": status.isEmpty ? [] : conflictFiles(wtPath)]
+            let ahead = counts.count > 1 ? counts[1] : 0
+            // Titre du commit de la copie (pour le titre de sa PR) : seulement si elle a ses propres commits.
+            let subject = ahead > 0 ? (git(["log", "-1", "--format=%s"], in: wtPath)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") : ""
+            let row: [String: Any] = ["name": name, "branch": branch, "changes": changes, "behind": counts.first ?? 0, "ahead": ahead,
+                                      "pushed": !upstream.isEmpty, "conflicts": status.isEmpty ? [] : conflictFiles(wtPath), "subject": subject]
             rowsLock.lock(); rows[i] = row; rowsLock.unlock()
         }
         let out = rows.compactMap { $0 }

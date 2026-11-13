@@ -19,7 +19,7 @@ interface Session { id: string; title: string; branch: string; worktree: string;
 interface Quota { status?: string; resetsAt?: number; rateLimitType?: string; isUsingOverage?: boolean }
 interface Action { at: string; kind: string; text: string }
 export interface AgentRun { machine?: string; host?: string; run: string; mode: string; prompt: string; status: string; session: string; worktree: string; started: string; finished: string; result: string; lastText: string; turns: number; denials: string[]; quota?: Quota | null }
-interface Worktree { name: string; branch: string; changes: number; ahead: number; behind?: number; pushed: boolean; conflicts?: string[] }
+interface Worktree { name: string; branch: string; changes: number; ahead: number; behind?: number; pushed: boolean; conflicts?: string[]; /** Titre du dernier commit de la copie, si elle en a un. */ subject?: string }
 /** Tâche de l'orchestrateur (Orchestrator.swift) : publication ou mise à jour d'une copie. */
 interface Job { job: string; kind: 'publish' | 'sync'; worktree: string; status: 'running' | 'done' | 'error' | 'blocked'; step: string; log: string[]; conflicts: string[]; branch: string; message: string }
 
@@ -296,18 +296,41 @@ function guessType(text: string, files: string[]): string {
 }
 /** Fichiers listés par `git diff --stat`. */
 const statFiles = (stat: string): string[] => stat.split('\n').map(l => l.split('|')[0]?.trim() ?? '').filter(f => f && !/files? changed/.test(f));
-/** Proposition immédiate, sans IA : type, puis la consigne résumée. */
+/** Proposition de dernier recours, sans agent ni IA : le type, puis ce qui a changé d'après les fichiers.
+ *  La consigne ne sert qu'à deviner le type ; elle n'est jamais recopiée dans le message. */
 function draftMessage(prompt: string, files: string[]): string {
-  const first = prompt.split('\n')[0]?.replace(/[.!…]+$/, '').trim() ?? '';
-  const summary = (first.charAt(0).toLowerCase() + first.slice(1)).slice(0, 64) || 'update from Claude Code';
-  return `${guessType(prompt, files)}: ${summary}`;
+  const type = guessType(prompt, files), verb = type === 'fix' ? 'correct' : type === 'refactor' ? 'rework' : 'update';
+  // `git diff --stat` abrège les chemins longs (« .../x.ts ») et note les renommages (« a => b ») : on garde la cible.
+  const paths = files.map(f => (f.split(' => ').pop() ?? f).replace(/[{}]/g, '').replace(/^\.\.\.\//, ''));
+  const names = paths.map(f => f.split('/').pop() ?? f);
+  const dirs = [...new Set(paths.map(f => f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : ''))];
+  const what = !names.length ? 'project files'
+    : names.length === 1 ? names[0]
+    : names.length === 2 ? `${names[0]} and ${names[1]}`
+    : dirs.length === 1 && dirs[0] ? `${dirs[0]} (${names.length} files)` : `${names.length} files`;
+  const line = `${type}: ${verb} ${what}`;
+  return line.length > 72 ? `${type}: ${verb} ${names.length} file${names.length > 1 ? 's' : ''}` : line;
 }
 /** Ligne « Commit: … » que l'agent écrit à la fin de son compte rendu (il sait ce qu'il a fait, sur toute la copie). */
 function agentMessage(result: string): string {
   const line = result.split('\n').reverse().map(l => l.trim().replace(/^[-*>\s]+/, '').replace(/[`*]/g, '')).find(l => /^commit\s*:/i.test(l));
-  const msg = line?.replace(/^commit\s*:\s*/i, '').replace(/[.\s]+$/, '') ?? '';
+  const msg = line?.replace(/^commit\s*:\s*/i, '').replace(/[.\s]+$/, '').replace(/^[A-Za-z]+/, t => t.toLowerCase()) ?? '';
   return COMMIT_RE.test(msg) ? (msg.length > 72 ? msg.slice(0, 71).trimEnd() + '…' : msg) : '';
 }
+/** Message de l'agent retrouvé dans le fil de sa session, sur disque : les comptes rendus des agents
+ *  ne sont gardés qu'en mémoire, et disparaissent au redémarrage de Studio. */
+async function sessionMessage(p: Project, wt: string): Promise<string> {
+  try {
+    const l = await native.call('project', 'sessions', { project: p.id }, 20000);
+    const s = ((l.sessions as Session[] | undefined) ?? []).find(x => x.worktree === wt);
+    if (!s) return '';
+    const d = await native.call('project', 'session', { project: p.id, session: s.id }, 20000);
+    if (!d.ok) return '';
+    return ((d.actions as Action[] | undefined) ?? []).filter(a => a.kind === 'text').reverse().map(a => agentMessage(a.text)).find(Boolean) ?? '';
+  } catch { return ''; }
+}
+/** Titre tiré d'une branche déjà nommée par Studio : « feat/tasks-add-parser-tests » → « feat: tasks add parser tests ». */
+const subjectFromBranch = (branch: string): string => { const m = branch.match(new RegExp(`^(${TYPES})/(.+)$`)); return m ? `${m[1]}: ${m[2]!.replace(/[-_/]+/g, ' ')}` : ''; };
 /** Compte rendu sans la ligne de commit (pour la description de la PR). */
 const withoutCommitLine = (result: string) => result.split('\n').filter(l => !/^[-*>\s`]*commit\s*:/i.test(l.trim())).join('\n').trim();
 /** Nettoie la réponse de l'IA : 1 ligne de titre conforme, et au plus 1 ligne de détail. */
@@ -325,12 +348,13 @@ Réponds uniquement par le message, sans guillemets, sans bloc de code, sans exp
 Ligne 1 : type(portée): résumé — types : feat, fix, chore, docs, refactor, test, perf, style, build, ci ; portée facultative et courte ; 72 caractères au plus ; à l’impératif ; sans point final.
 Ligne 2 (facultative) : une seule phrase de détail, seulement si elle apporte quelque chose.
 Écris dans la même langue que les commits récents du dépôt, et dans le même style.
-Décris ce que fait le diff dans son ensemble. La consigne n'est qu'un contexte : elle peut être une simple demande de suivi (« résous le conflit », « continue ») ; ne parle jamais de conflit, de fusion ni de l'agent.`;
+Décris ce que fait le diff dans son ensemble. La consigne n'est qu'un contexte, ne la recopie et ne la paraphrase jamais : elle peut être une simple demande de suivi (« résous le conflit », « continue ») ; ne parle jamais de conflit, de fusion ni de l'agent.`;
 async function suggestMessage(p: Project, wt: string, run: AgentRun | undefined, forceAI = false): Promise<{ draft: string; fromAgent: boolean; ai: Promise<string> | null; files: string[] }> {
   const d = await native.call('project', 'diff', { project: p.id, scope: 'working', worktree: wt }, 30000);
   const stat = String(d.stat ?? ''), files = statFiles(stat), prompt = run?.prompt ?? wt.replace(/^studio-|-\d{4}-\d{4}$/g, '').replace(/-/g, ' ');
-  // 1. le message écrit par l'agent ; 2. l'IA d'après le diff ; 3. en dernier recours, la consigne résumée.
-  const fromAgent = agentMessage(runs.filter(r => r.worktree === wt && r.result).map(r => r.result)[0] ?? '');
+  // 1. le message écrit par l'agent (compte rendu le plus récent qui en contient un, sinon le fil de sa session) ;
+  // 2. l'IA d'après le diff ; 3. en dernier recours, un résumé des fichiers modifiés. Jamais la consigne telle quelle.
+  const fromAgent = runs.filter(r => r.worktree === wt && r.result).map(r => agentMessage(r.result)).find(Boolean) || await sessionMessage(p, wt);
   const draft = fromAgent || draftMessage(prompt, files);
   if ((fromAgent && !forceAI) || !d.ok || !ai.ready() || !String(d.patch ?? '').trim()) return { draft, fromAgent: !!fromAgent, ai: null, files };
   const user = `Consigne donnée à l’agent : ${prompt}\n\n${run?.result ? `Compte rendu de l’agent :\n${run.result.slice(0, 1500)}\n\n` : ''}Commits récents du dépôt :\n${String(d.log ?? '').trim() || '(aucun)'}\n\nFichiers modifiés :\n${stat}\n\nDiff (extrait) :\n\`\`\`diff\n${String(d.patch).slice(0, 20000)}\n\`\`\``;
@@ -395,7 +419,7 @@ async function publish(p: Project, wt: string, root: HTMLElement): Promise<void>
       if (!m.node.isConnected) return;
       if (!editedMsg) { msg.value = s.draft; sync(); }
       if (!s.ai) {
-        sugSt.textContent = s.fromAgent ? 'Message rédigé par l’agent à partir de son travail.' : ai.ready() ? 'Proposition tirée de la consigne : relis-la.' : 'Proposition tirée de la consigne : relis-la · connecte une IA pour un message rédigé d’après le diff.';
+        sugSt.textContent = s.fromAgent ? 'Message rédigé par l’agent à partir de son travail.' : ai.ready() ? 'Proposition tirée des fichiers modifiés : précise-la.' : 'Proposition tirée des fichiers modifiés : précise-la · connecte une IA pour un message rédigé d’après le diff.';
         resug.hidden = !ai.ready(); return;
       }
       sugSt.innerHTML = `<span class="spin"></span>L’IA rédige le message d’après le diff (${esc(ai.PROVIDERS[ai.config().provider])})…`;
@@ -467,7 +491,9 @@ async function openPR(p: Project, w: Worktree): Promise<void> {
   const repo = p.repos[0]; if (!repo) { toast('Associe un dépôt GitHub au projet.'); return; }
   let base = 'main';
   try { if (github.connected()) base = (await github.project(repo)).info.default_branch; } catch { /* main par défaut */ }
-  const run = runs.find(r => r.worktree === w.name), t = draftMessage(run?.prompt ?? w.name, []);
+  // Titre de la PR : celui du commit publié, à défaut le message de l'agent, à défaut le nom de la branche. Jamais la consigne.
+  const run = runs.find(r => r.worktree === w.name);
+  const t = w.subject || runs.filter(r => r.worktree === w.name && r.result).map(r => agentMessage(r.result)).find(Boolean) || subjectFromBranch(w.branch) || draftMessage(run?.prompt ?? '', []);
   window.open(compareURL(repo, base, w.branch, t, prBody(run, '')), '_blank', 'noopener');
 }
 
