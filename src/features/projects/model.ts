@@ -4,6 +4,7 @@
 //   nom: Studio
 //   dépôts: MTthoas/Studio, MTthoas/studio-site     (le premier est le principal)
 //   linear: Studio                                  (projet Linear, facultatif)
+//   site: https://studio.example.com                (site web du projet, facultatif)
 //   ```
 //
 // Une note ou une tâche appartient au projet si elle porte le tag #projet/<nom> (ou se trouve dans
@@ -25,6 +26,8 @@ export interface Project {
   repos: string[];
   /** Nom du projet Linear associé, s'il y en a un. */
   linear: string | null;
+  /** Site web du projet (https uniquement). */
+  site: string | null;
   hue: string;
 }
 
@@ -38,17 +41,18 @@ export const slugify = (s: string): string => fold(s).replace(/[^a-z0-9]+/g, '-'
 export function parse(n: Note): Project | null {
   const body = store.getBody(n); if (!body || !body.includes('```projet')) return null;
   const m = body.match(BLOCK_RE); if (!m) return null;
-  let name = n.title.trim(), repos: string[] = [], linear: string | null = null;
+  let name = n.title.trim(), repos: string[] = [], linear: string | null = null, site: string | null = null;
   for (const line of (m[1] ?? '').split('\n')) {
     const kv = line.match(/^\s*([\p{L}]+)\s*:\s*(.*)$/u); if (!kv) continue;
     const k = fold(kv[1] ?? ''), v = (kv[2] ?? '').trim();
     if (k === 'nom' || k === 'name') name = v || name;
     else if (k === 'depot' || k === 'depots' || k === 'repo' || k === 'repos' || k === 'github') repos = v.split(/[,\s]+/).map(r => r.replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '')).filter(r => REPO_RE.test(r));
     else if (k === 'linear') linear = v || null;
+    else if (k === 'site' || k === 'url' || k === 'web') site = /^https:\/\/[^\s]+$/i.test(v) ? v : null;
   }
   name = name || 'Projet';
   const slug = slugify(name);
-  return { id: n.id, note: n, name, slug, tag: `projet/${slug}`, repos, linear, hue: hue(slug) };
+  return { id: n.id, note: n, name, slug, tag: `projet/${slug}`, repos, linear, site, hue: hue(slug) };
 }
 
 let cache: { idx: object; list: Project[]; ofNote: Map<string, Project | null> } | null = null;
@@ -99,10 +103,21 @@ export async function setNoteProject(n: Note, p: Project | null): Promise<void> 
   await store.saveNote(n);
 }
 
+/** Écrit (ou remplace) un champ du bloc ```projet de la note du projet. */
+export async function setField(p: Project, key: 'dépôts' | 'linear' | 'site', value: string): Promise<void> {
+  const body = store.getBody(p.note); if (body == null) throw new Error('Déverrouille la note du projet.');
+  const re = key === 'dépôts' ? /^(\s*)d[ée]p[oô]ts?\s*:.*$/m : new RegExp(`^(\\s*)${key}\\s*:.*$`, 'm');
+  if (/[\r\n]/.test(value)) throw new Error('Valeur invalide.');
+  const line = `${key}: ${value}`;
+  const next = re.test(body) ? body.replace(re, (_, sp: string) => sp + line) : body.replace(/^(```projet[ \t]*\n[\s\S]*?)^```/m, (_, head: string) => `${head}${line}\n\`\`\``);
+  if (next === body) return;
+  store.touch(p.note); store.setBody(p.note, next); p.note.updated = Date.now(); await store.saveNote(p.note);
+}
+
 /** Crée la note d'un projet. */
-export async function createProject({ name, repos, linear, description }: { name: string; repos: string[]; linear: string | null; description?: string }): Promise<Project> {
+export async function createProject({ name, repos, linear, site, description }: { name: string; repos: string[]; linear: string | null; site?: string | null; description?: string }): Promise<Project> {
   const clean = repos.map(r => r.trim()).filter(r => REPO_RE.test(r));
-  const block = ['```projet', `nom: ${name.trim()}`, ...(clean.length ? [`dépôts: ${clean.join(', ')}`] : []), ...(linear ? [`linear: ${linear}`] : []), '```'].join('\n');
+  const block = ['```projet', `nom: ${name.trim()}`, ...(clean.length ? [`dépôts: ${clean.join(', ')}`] : []), ...(linear ? [`linear: ${linear}`] : []), ...(site && /^https:\/\//.test(site) ? [`site: ${site}`] : []), '```'].join('\n');
   const n = await store.createNote({ title: name.trim(), body: `${description?.trim() || 'Ce que ce projet doit accomplir, ses liens utiles, ses décisions.'}\n\n${block}\n` });
   const p = parse(n);
   if (!p) throw new Error('Projet invalide.');

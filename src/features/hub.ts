@@ -7,10 +7,12 @@ import * as ai from '../integrations/ai.ts';
 import * as linear from '../integrations/linear/api.ts';
 import * as notifs from '../integrations/linear/notifications.ts';
 import * as github from '../integrations/github/api.ts';
+import * as bridge from '../integrations/remote.ts';
 import * as link from '../integrations/link.ts';
 import * as schema from '../lib/schema.ts';
 import * as qr from '../lib/qr.ts';
 import * as events from '../core/events.ts';
+import * as usage from '../integrations/usage.ts';
 import type { AppEvent } from '../core/events.ts';
 import { renderMarkdown, esc, plain } from '../lib/markdown.ts';
 import { fold } from '../lib/fuzzy.ts';
@@ -59,6 +61,11 @@ export function init(api: HubApi) {
   link.on(e => {
     if (e.type === 'synced' && (e.got || e.sent)) toast(`Synchronisé avec ${e.name} · ${e.got} reçue(s), ${e.sent} envoyée(s)`);
     if (e.type === 'paired') toast(`Appareil lié : ${e.name}`);
+    if (e.type === 'remote') {
+      // Toute action pilotée à distance est signalée sur le Mac.
+      toast(`${e.name} pilote Claude Code : ${e.what}`);
+      window.webkit?.messageHandlers?.carnet?.postMessage({ type: 'notify', title: `Claude Code piloté depuis ${e.name}`, body: e.what, url: '' });
+    }
     if (e.type === 'status' || e.type === 'devices') { refreshConnections(); if (app.view() === 'home') app.renderMain(); }
   });
   vault.onChange(refreshConnections);
@@ -433,7 +440,7 @@ export async function newAgentNote(): Promise<void> {
 // ---------- Page « Réglages » ----------
 const TABS: [string, string, string, string][] = [
   ['coffre', 'shield', 'Sécurité', 'Chiffrement de tout le carnet, déverrouillage et verrouillage automatique.'],
-  ['ia', 'sparkle', 'Intelligence artificielle', 'Claude, OpenAI ou un modèle local, appelés directement depuis ce navigateur avec ta clé.'],
+  ['ia', 'sparkle', 'Intelligence artificielle', 'Ton abonnement Claude via Claude Code, ou une clé Claude, OpenAI, ou un modèle local.'],
   ['linear', 'linear', 'Linear', 'Tickets, projets et notifications Linear, sans intermédiaire.'],
   ['github', 'github', 'GitHub', 'L’actualité de tes dépôts, en lecture seule.'],
   ['appareils', 'devices', 'Appareils', 'Relie ton téléphone et tes ordinateurs, sans serveur, chiffré de bout en bout.'],
@@ -468,6 +475,7 @@ function refreshConnections(): void {
   if (focus) $(`[name="${focus}"]`, body)?.focus();
   if (curTab === 'github' && github.connected()) github.viewer().then(v => { const x = $('[data-gh-who]', body); if (x) x.textContent = `Connecté : ${v.login}`; }).catch(e => { const x = $('[data-gh-who]', body); if (x) x.textContent = 'Erreur : ' + e.message; });
   if (curTab === 'linear' && linear.connected()) linear.viewer().then(v => { const x = $('.cx-who', body); if (x) x.textContent = `Connecté : ${v.viewer.name} · ${v.organization.name}`; }).catch(e => { const x = $('.cx-who', body); if (x) x.textContent = 'Erreur : ' + e.message; });
+  if (curTab === 'ia') ccRefresh();
   if (curTab === 'donnees') navigator.storage?.estimate?.().then(e => { const x = $('.cx-usage', body); if (x) x.textContent = `${((e.usage ?? 0) / 1048576).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo utilisés sur cet appareil.`; });
 }
 
@@ -502,12 +510,53 @@ function tabVault() {
     <section class="cx-sec"><button class="btn btn-danger" data-v="off">Désactiver le coffre…</button></section>`;
 }
 
+/** Consommation du mois et ce qu'il reste du budget. */
+export function usageHTML(): string {
+  const c = ai.config(), { rows, total, subscription } = usage.month(), used = usage.billable(total), budget = (c.budgetM || 0) * 1e6;
+  const left = budget ? Math.max(0, budget - used) : 0, pct = budget ? Math.min(100, Math.round(used / budget * 100)) : 0;
+  return `<div class="us-sum"><div><strong>${usage.fmt(used)}</strong><span>tokens API ce mois-ci</span><em>${total.calls} appel${total.calls > 1 ? 's' : ''}</em></div>
+      ${budget ? `<div><strong class="${pct >= 90 ? 'err' : pct >= 70 ? 'warn' : 'ok'}">${usage.fmt(left)}</strong><span>restants sur ${usage.fmt(budget)}</span></div>` : '<div><strong>—</strong><span>pas de budget fixé</span></div>'}${subscription.calls ? `<div><strong>${usage.fmt(usage.billable(subscription))}</strong><span>via Claude Code</span><em>${subscription.calls} appel${subscription.calls > 1 ? 's' : ''} · abonnement</em></div>` : ''}</div>
+    ${budget ? `<span class="bar us-bar"><i style="width:${pct}%" class="${pct >= 90 ? 'err' : pct >= 70 ? 'warn' : ''}"></i></span>` : ''}
+    ${rows.length ? `<div class="us-rows">${rows.map(([k, r]) => `<div class="us-row"><span>${esc(k.replace(/^(\w+):/, (_, p: string) => (ai.PROVIDERS[p as ai.Provider] ?? p) + ' · '))}</span><em>${usage.fmt(r.input + r.cacheWrite)} entrée · ${usage.fmt(r.output)} sortie${r.cacheRead ? ` · ${usage.fmt(r.cacheRead)} cache` : ''}</em></div>`).join('')}</div>` : '<p class="modal-hint">Aucun appel ce mois-ci.</p>'}`;
+}
+
+// ---------- Claude Code (abonnement, app Mac) ----------
+const CC_INSTALL = 'curl -fsSL https://claude.ai/install.sh | bash';
+let ccChecked = 0;
+const pill = (tone: string, html: string) => `<span class="cc-pill" style="--c:var(--c-${tone})">${html}</span>`;
+
+function ccHTML(): string {
+  const s = ai.cc.last, c = ai.config(), active = c.provider === 'claudecode';
+  const head = (state: string) => `<div class="cc-head"><span class="cc-logo">${icon('terminal')}</span><div class="cc-title"><h4>Claude Code</h4><p>Ton abonnement Claude, sans clé API.</p></div>${state}</div>`;
+  if (!ai.cc.onMac()) return head(pill('gray', 'App Mac')) + '<p class="cc-text">Claude Code se branche depuis l’app Studio pour Mac, là où il est installé. Ici, utilise une clé API.</p>';
+  if (!s) return head(pill('gray', '<span class="spin"></span>Recherche'));
+  if (!s.installed) return head(pill('amber', 'Non installé')) + `<ol class="cc-steps">
+      <li><span>Colle cette commande dans le Terminal pour installer Claude Code.</span><div class="cc-cmd"><code>${esc(CC_INSTALL)}</code><button class="btn" data-v="cc-copy">${icon('copy')}Copier</button></div></li>
+      <li><span>Reviens ici une fois l’installation terminée.</span><button class="btn" data-v="cc-check">${icon('refresh')}Vérifier à nouveau</button></li></ol>`;
+  const facts = `<dl class="cc-facts"><div><dt>Version</dt><dd>${esc(s.version || '—')}</dd></div><div><dt>Installé via</dt><dd>${s.source === 'extension' ? 'Extension VS Code' : 'Terminal'}</dd></div>${s.loggedIn ? `<div><dt>Offre</dt><dd>${esc(ai.cc.plan(s) || 'Claude')}</dd></div>` : ''}</dl>`;
+  if (!s.loggedIn) return head(pill('amber', 'Non connecté')) + facts + `<div class="cc-act"><p>Connecte Claude Code à ton abonnement : la page de connexion de Claude s’ouvre dans ton navigateur.</p><button class="btn btn-primary" data-v="cc-login">Se connecter</button></div>`;
+  return head(pill('green', 'Connecté')) + facts + `<div class="cc-act">${active
+      ? `<p>${icon('check')}Claude Code répond à toutes les demandes d’IA de Studio sur ce Mac.</p>`
+      : '<p>Fais de Claude Code le fournisseur par défaut : revue de code, automatisations et questions passeront par ton abonnement.</p><button class="btn btn-primary" data-v="cc-use">Utiliser Claude Code</button>'}</div>
+    <label class="cc-model"><span>Modèle</span><select class="field" data-cfg="ccModel">${ai.CC_MODELS.map(([v, l]) => `<option value="${v}"${c.ccModel === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+    <p class="modal-hint">${icon('shield')}Claude Code tourne sans ses propres outils : il ne lance aucune commande et ne lit aucun fichier. Seules les actions de Studio sont possibles, et toujours avec ton accord. Les demandes comptent dans les limites de ton abonnement.</p>`;
+}
+function ccRefresh(force = false): void {
+  if (!ai.cc.onMac() || (!force && Date.now() - ccChecked < 15000)) return;
+  ccChecked = Date.now();
+  void ai.cc.status().then(() => { const x = $('#main .settings [data-cc]'); if (x) x.innerHTML = ccHTML(); });
+}
+
 function tabAI() {
-  if (!vault.enabled()) return needVault('Les clés des fournisseurs d’IA');
+  const cc = `<section class="cx-sec cc" data-cc>${ccHTML()}</section>`;
+  if (!vault.enabled()) return cc + needVault('Les clés des fournisseurs d’IA');
   const c = ai.config();
-  return `<section class="cx-sec"><h4>${icon('sparkle')}Fournisseur par défaut</h4><div class="cx-seg">${Object.entries(ai.PROVIDERS).map(([k, l]) => `<label><input type="radio" name="provider" value="${k}"${c.provider === k ? ' checked' : ''}>${l}</label>`).join('')}</div>
-    <p class="modal-hint">Les requêtes partent directement de ce navigateur vers le fournisseur, avec ta clé. Les notes chiffrées et celles taguées <code>#privé</code> ne sont jamais envoyées. Les actions qui modifient quelque chose demandent ton accord.</p></section>
-    <section class="cx-sec"><h4>Claude</h4>${keyField('anthropic', 'Clé Anthropic', 'sk-ant-…')}
+  return `${cc}<section class="cx-sec"><h4>${icon('bolt')}Consommation</h4>${usageHTML()}
+    <label class="cx-row us-budget"><span>Budget mensuel</span><input class="field" type="number" min="0" step="0.5" data-cfg="budgetM" value="${c.budgetM || ''}" placeholder="0"><span>millions de tokens</span></label>
+    <p class="modal-hint">Compté par Studio à chaque réponse. Les fournisseurs n’exposent pas ton crédit restant à une simple clé : fixe ici le budget que tu t’accordes pour les clés API, Studio t’indique ce qu’il en reste. Ce qui passe par Claude Code relève des limites de ton abonnement : il est compté à part, et l’état de la limite apparaît dans l’onglet Sessions IA de chaque projet.</p></section>
+    <section class="cx-sec"><h4>${icon('sparkle')}Fournisseur par défaut</h4><div class="cx-seg">${Object.entries(ai.PROVIDERS).map(([k, l]) => `<label><input type="radio" name="provider" value="${k}"${c.provider === k ? ' checked' : ''}>${l}</label>`).join('')}</div>
+    <p class="modal-hint">Avec une clé, les requêtes partent directement de Studio vers le fournisseur ; avec Claude Code, elles passent par ton Mac. Les notes chiffrées et celles taguées <code>#privé</code> ne sont jamais envoyées. Les actions qui modifient quelque chose demandent ton accord.</p></section>
+    <section class="cx-sec"><h4>Claude · clé API</h4>${keyField('anthropic', 'Clé Anthropic', 'sk-ant-…')}
       <div class="cx-grid"><select class="field" data-cfg="anthropicModel">${ai.CLAUDE_MODELS.map(([v, l]) => `<option value="${v}"${c.anthropicModel === v ? ' selected' : ''}>${l}</option>`).join('')}</select><select class="field" data-cfg="effort">${[['low', 'Effort : faible'], ['medium', 'Effort : moyen'], ['high', 'Effort : élevé'], ['xhigh', 'Effort : très élevé']].map(([v, l]) => `<option value="${v}"${c.effort === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div></section>
     <section class="cx-sec"><h4>OpenAI (ChatGPT)</h4>${keyField('openai', 'Clé OpenAI', 'sk-…')}<input class="field" data-cfg="openaiModel" value="${esc(c.openaiModel)}" placeholder="Modèle, ex. gpt-5" aria-label="Modèle OpenAI"></section>
     <section class="cx-sec"><h4>Modèle local — rien ne quitte ta machine</h4><p class="modal-hint">Ollama ou LM Studio (API compatible OpenAI). Pour Ollama, autorise l’origine de Studio : <code>OLLAMA_ORIGINS=${esc(location.origin)}</code></p><div class="cx-grid"><input class="field" data-cfg="localUrl" value="${esc(c.localUrl)}" placeholder="http://localhost:11434/v1" aria-label="Adresse du serveur local"><input class="field" data-cfg="localModel" value="${esc(c.localModel)}" placeholder="Modèle" aria-label="Modèle local"></div></section>
@@ -549,7 +598,8 @@ function tabDevices() {
   if (!vault.enabled()) return needVault('Les clés de liaison des appareils');
   const devs = link.devices(), mine = link.me();
   return `<section class="cx-sec"><h4>${icon('devices')}Cet appareil</h4><form class="cx-row" data-f="rename"><input class="field" name="devname" value="${esc(mine.name)}" aria-label="Nom de cet appareil"><button class="btn">Renommer</button></form></section>
-    <section class="cx-sec"><h4>Appareils liés</h4>${devs.length ? devs.map(d => `<div class="cx-dev"><span class="dot ${link.status(d.secret) === 'connecté' ? 'on' : ''}"></span><div><strong>${esc(d.name)}</strong><span>${esc(link.status(d.secret))}${d.lastSync ? ` · synchro ${esc(rel(d.lastSync))}` : ''}</span></div><button class="icon-btn" data-dev-packet="${d.secret}" title="Envoyer un paquet chiffré (AirDrop…)" aria-label="Paquet chiffré">${icon('share')}</button><button class="icon-btn" data-dev-forget="${d.secret}" title="Oublier" aria-label="Oublier">${icon('trash')}</button></div>`).join('') : '<p>Aucun pour l’instant.</p>'}
+    <section class="cx-sec"><h4>Appareils liés</h4>${devs.length ? devs.map(d => `<div class="cx-dev"><span class="dot ${link.status(d.secret) === 'connecté' ? 'on' : ''}"></span><div><strong>${esc(d.name)}</strong><span>${esc(link.status(d.secret))}${d.lastSync ? ` · synchro ${esc(rel(d.lastSync))}` : ''}</span>${bridge.local() ? `<label class="cx-remote"><input type="checkbox" data-dev-remote="${d.secret}"${d.remote ? ' checked' : ''}>Peut piloter Claude Code sur ce Mac</label>` : ''}</div><button class="icon-btn" data-dev-packet="${d.secret}" title="Envoyer un paquet chiffré (AirDrop…)" aria-label="Paquet chiffré">${icon('share')}</button><button class="icon-btn" data-dev-forget="${d.secret}" title="Oublier" aria-label="Oublier">${icon('trash')}</button></div>`).join('') : '<p>Aucun pour l’instant.</p>'}
+      ${bridge.local() && devs.length ? `<p class="modal-hint">${icon('shield')}Pilotage à distance : un appareil autorisé peut lancer, suivre, reprendre et arrêter les agents Claude Code de tes projets, tant que Studio est ouvert sur ce Mac. Il ne peut ni publier, ni supprimer une copie, ni autoriser les commandes ; chaque action est signalée ici.</p>` : ''}
       <div class="cx-grid"><button class="btn btn-primary" data-v="pair">${icon('phone')}Lier un appareil</button><button class="btn" data-v="join">J’ai un code</button>${devs.length ? `<button class="btn" data-v="sync">${icon('refresh')}Synchroniser</button>` : ''}<button class="btn" data-v="packet-in">Importer un paquet</button></div></section>
     <section class="cx-sec"><label class="cx-check"><input type="checkbox" data-lan${link.lanOnly() ? ' checked' : ''}> Même réseau Wi-Fi uniquement (aucun serveur STUN)</label>
     <p class="modal-hint">Comment ça marche : le code de liaison (128 bits) ne transite par aucun réseau. Il sert à chiffrer une courte poignée de main relayée par <code>ntfy.sh</code> — qui ne voit que du chiffré — puis les notes passent en direct d’appareil à appareil (WebRTC), et en temps réel tant que les deux sont ouverts. Sans réseau : « Paquet chiffré » via AirDrop.</p></section>`;
@@ -580,6 +630,14 @@ async function onConnClick(e: MouseEvent) {
     const r = root(), out = r && $('.cx-test', r); if (!out) return;
     out.innerHTML = ' <span class="spin"></span>';
     try { const r = await ai.run({ prompt: 'Réponds uniquement : « Connexion OK ».', tools: [] }); out.textContent = ' ' + r.text.slice(0, 80); } catch (err) { out.innerHTML = ` <span class="err">${esc(errMsg(err))}</span>`; }
+  }
+  if (v === 'cc-use') { ai.setConfig({ provider: 'claudecode' }); refreshConnections(); toast('Claude Code est maintenant ton fournisseur d’IA'); }
+  if (v === 'cc-check') { ai.cc.last = null; refreshConnections(); ccRefresh(true); }
+  if (v === 'cc-copy') { try { await navigator.clipboard.writeText(CC_INSTALL); toast('Commande copiée'); } catch { toast('Copie impossible : sélectionne la commande'); } }
+  if (v === 'cc-login') {
+    const b = t.closest<HTMLButtonElement>('[data-v]'); if (b) { b.disabled = true; b.innerHTML = '<span class="spin"></span>Connexion dans le navigateur…'; }
+    try { const s = await ai.cc.login(); toast(s?.loggedIn ? 'Claude Code est connecté' : 'Connexion non terminée'); } catch (err) { toast(errMsg(err)); }
+    refreshConnections();
   }
   if (v === 'export-json') void app.exportJSON();
   if (v === 'export-md') void app.exportZip();
@@ -619,9 +677,11 @@ function onConnChange(e: Event): void {
   const t = target(e) as HTMLInputElement;
   if (t.name === 'provider') ai.setConfig({ provider: t.value as ai.Provider });
   else if (t.name === 'theme') app.setTheme(t.value);
+  else if (t.dataset.cfg === 'budgetM') { ai.setConfig({ budgetM: Math.max(0, Number(t.value) || 0) }); refreshConnections(); }
   else if (t.dataset.cfg) ai.setConfig({ [t.dataset.cfg]: t.value.trim() });
   else if (t.matches('[data-autolock]')) vault.setSetting('autolock', Number(t.value));
   else if (t.matches('[data-lan]')) link.setLanOnly(t.checked);
+  else if (t.dataset.devRemote) void link.setRemote(t.dataset.devRemote, t.checked).then(() => toast(t.checked ? 'Cet appareil peut piloter Claude Code sur ce Mac' : 'Pilotage à distance retiré'));
   else if (t.matches('[data-nf-sys]')) { notifs.setSystem(t.checked); if (t.checked && notifs.systemState() === 'default') void notifs.askPermission().then(refreshConnections); }
 }
 

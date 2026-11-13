@@ -108,12 +108,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         r.notesShown = document.querySelectorAll('#list .note-item, .hm-note').length;
         try { r.github = (await fetch('https://api.github.com/zen', { credentials: 'omit' })).status; } catch (e) { r.github = String(e); }
         const pid = '\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_PROJECT"] ?? "")';
-        if (pid) r.project = await new Promise(res => {
-          const prev = window.carnet.reply;
-          window.carnet.reply = p => { if (p && p.id === 424242) { window.carnet.reply = prev; res(p); } else prev(p); };
-          window.webkit.messageHandlers.carnet.postMessage({ type: 'project', action: 'info', id: 424242, project: pid });
-          setTimeout(() => res('pas de réponse'), 8000);
+        let seq = 424240;
+        const ask = (action, extra, type = 'project', wait = 15000) => new Promise(res => {
+          const id = ++seq, prev = window.carnet.reply;
+          window.carnet.reply = p => { if (p && p.id === id) { window.carnet.reply = prev; res(p); } else prev(p); };
+          window.webkit.messageHandlers.carnet.postMessage({ type, action, id, project: pid, ...extra });
+          setTimeout(() => res('pas de réponse'), wait);
         });
+        if ('\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_AGENT"] ?? "")' && pid) {
+          const st = await ask('start', { mode: 'edit', prompt: 'Crée le fichier hello.md contenant « Bonjour de Studio ». Puis essaie de lancer la commande « touch pirate.txt ».', model: 'haiku' }, 'agent', 120000);
+          r.agentStart = { ok: st.ok, status: st.status, session: !!st.session, worktree: st.worktree, message: st.message };
+          let fin = null;
+          for (let i = 0; i < 90 && st.ok; i++) { await new Promise(z => setTimeout(z, 2000)); const l = await ask('list', {}, 'agent'); fin = (l.runs || []).find(x => x.run === st.run); if (fin && !['running', 'starting'].includes(fin.status)) break; }
+          r.agentEnd = fin && { status: fin.status, turns: fin.turns, denials: fin.denials, result: (fin.result || '').slice(0, 160) };
+          const w = await ask('worktrees', {}, 'agent'); r.worktrees = w.worktrees;
+          const ss = await ask('sessions', {}); r.agentSessions = (ss.sessions || []).map(x => ({ title: x.title, worktree: x.worktree }));
+          const dly = await ask('daily', { days: 30 }, 'agent'); r.daily = dly.tokens;
+          const cm = await ask('commits', { days: 30 }, 'agent'); r.commits = cm.days;
+          const df = await ask('diff', { scope: 'working', worktree: st.worktree }); r.wtDiff = df.ok ? { untracked: df.untracked } : df.message;
+          if (st.worktree) { const del = await ask('discard', { worktree: st.worktree }, 'agent'); r.discard = del.ok; }
+        }
+        if ('\(ProcessInfo.processInfo.environment["CARNET_SELFTEST_CLAUDE"] ?? "")') {
+          const st = await ask('status', {}, 'claude', 40000); r.claudeStatus = { installed: st.installed, loggedIn: st.loggedIn, plan: st.plan, version: st.version, source: st.source, path: st.path };
+          const t0 = Date.now(), x = await ask('run', { run: 'selftest-1', system: 'Tu es concis.', prompt: 'Réponds uniquement : ok', model: 'haiku' }, 'claude', 120000);
+          r.claudeRun = { ok: x.ok, text: x.text, models: x.models, message: x.message, ms: Date.now() - t0 };
+          const y = await ask('run', { run: 'selftest-2', system: 'Outils : creer_tache(texte).', prompt: 'Crée la tâche « Tester Studio ». Si tu appelles un outil, laisse reponse vide.', model: 'haiku', tools: true }, 'claude', 120000);
+          r.claudeTools = { ok: y.ok, structured: y.structured, message: y.message };
+        }
+        if (pid) {
+          r.project = await ask('info', {});
+          const b = await ask('branches', {}); r.branches = b.ok ? (b.branches || []).length : b;
+          const d = await ask('diff', { scope: 'working' }); r.diff = d.ok ? { lines: String(d.patch || '').split('\\n').length, base: d.base } : d;
+          const s = await ask('sessions', {}); r.sessions = s.ok ? { found: s.found, count: (s.sessions || []).length, first: s.sessions && s.sessions[0] ? { title: s.sessions[0].title, live: s.sessions[0].live, output: s.sessions[0].tokens.output } : null, quota: s.quota ? s.quota.status : null } : s;
+          if (s.sessions && s.sessions[0]) { const one = await ask('session', { session: s.sessions[0].id }); r.session = one.ok ? { actions: (one.actions || []).length, files: (one.files || []).length } : one; }
+          const hs = await ask('server', { op: 'hosts' }, 'agent'); r.sshHosts = (hs.hosts || []).length;
+          const badH = await ask('server', { op: 'set', host: '-oProxyCommand=touch /tmp/x', path: '/srv' }, 'agent'); r.serverRefusesBadHost = !badH.ok;
+          const bad2 = await ask('server', { op: 'set', host: 'vps', path: '/srv/$(id)' }, 'agent'); r.serverRefusesBadPath = !bad2.ok;
+          const none = await ask('server', { op: 'status' }, 'agent'); r.serverStatus = none.configured === false ? 'non configuré' : none;
+          const w = await ask('site', { url: 'https://github.com' }); r.site = w.ok ? { up: w.up, status: w.status } : w;
+          const bad = await ask('site', { url: 'http://127.0.0.1' }); r.siteRefusesLocal = !bad.ok;
+        }
         try { r.ntfy = (await fetch('https://ntfy.sh/carnet-autotest-' + crypto.randomUUID(), { method: 'POST', body: 'x', headers: { Cache: 'no' } })).status; } catch (e) { r.ntfy = String(e); }
         try { r.anthropic = (await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json', 'x-api-key': 'cle-invalide', 'anthropic-version': '2026-10-21', 'anthropic-dangerous-direct-browser-access': 'true' } })).status; } catch (e) { r.anthropic = String(e); }
         return JSON.stringify(r);

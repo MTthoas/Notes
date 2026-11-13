@@ -11,6 +11,8 @@ export interface ProjectPanel {
   icon: string;
   /** Ordre d'affichage : plus petit = plus haut. */
   order: number;
+  /** Onglet du projet où le panneau s'affiche (par défaut : vue d'ensemble). */
+  tab?: 'overview' | 'code' | 'flux' | 'sessions' | 'tasks' | 'notes' | 'site';
   /** Visible pour ce projet ? (ex. seulement s'il a un dépôt GitHub). */
   when?(p: Project): boolean;
   /** HTML du panneau ; peut être asynchrone (données distantes). */
@@ -40,7 +42,7 @@ export function register(p: Plugin): void {
   plugins.set(p.id, p);
 }
 export const list = (): Plugin[] => [...plugins.values()];
-export const projectPanels = (p: Project): ProjectPanel[] =>
-  list().flatMap(x => x.projectPanels ?? []).filter(x => !x.when || x.when(p)).sort((a, b) => a.order - b.order);
+export const projectPanels = (p: Project, tab = 'overview'): ProjectPanel[] =>
+  list().flatMap(x => x.projectPanels ?? []).filter(x => (x.tab ?? 'overview') === tab && (!x.when || x.when(p))).sort((a, b) => a.order - b.order);
 export const taskActions = (t: Task, p: Project | null): TaskAction[] =>
   list().flatMap(x => x.taskActions ?? []).filter(x => !x.when || x.when(t, p));

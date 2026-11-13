@@ -50,7 +50,9 @@ const midnight = (d = new Date()) => { const x = new Date(d); x.setHours(0, 0, 0
 const plusDays = (n: number) => { const d = midnight(); d.setDate(d.getDate() + n); return d; };
 
 export function parseDue(input: string): { text: string; due: string | null } {
-  const text = input.trim();
+  // Les tags en fin de saisie (« … demain #projet/studio ») ne cachent pas l'échéance : ils sont remis après.
+  const all = input.trim(), tags = all.match(/(?:\s+#[\p{L}\p{N}_/-]+)+$/u), tail = tags ? tags[0] : '';
+  const text = tags ? all.slice(0, tags.index).trim() : all;
   const rules: [RegExp, (m: RegExpMatchArray) => Date | null][] = [
     [/\s*\b(?:pour\s+)?(?:aujourd['’]hui|ce soir|ce matin)$/i, () => midnight()],
     [/\s*\b(?:pour\s+)?apr[eè]s[- ]demain$/i, () => plusDays(2)],
@@ -68,9 +70,9 @@ export function parseDue(input: string): { text: string; due: string | null } {
   for (const [re, fn] of rules) {
     const m = text.match(re); if (!m) continue;
     const d = fn(m), rest = text.slice(0, m.index).trim();
-    if (d && rest) return { text: rest, due: store.dayKey(d) };
+    if (d && rest) return { text: rest + tail, due: store.dayKey(d) };
   }
-  return { text, due: null };
+  return { text: all, due: null };
 }
 
 function dueLabel(iso: string): string {
@@ -128,6 +130,8 @@ function collect(only?: (t: Task) => boolean) {
     undated: open.filter(t => !t.due && t.own && !t.ticket),
     notes: open.filter(t => !t.due && !t.own),
     done: all.filter(t => t.done && t.own),
+    /** Toutes les tâches cochées (liste et notes), pour l'avancement d'un projet. */
+    doneAll: all.filter(t => t.done),
     doing: open.filter(t => t.status === 'doing'),
     openCount: open.length + subsOpen,
   };
@@ -254,9 +258,7 @@ function line(t: Task, { source = false } = {}): string {
     ${t.ticket ? ticketChip(t.ticket) : ''}
     ${t.due ? `<span class="td-due${late ? ' late' : t.due === store.dayKey() ? ' today' : ''}">${esc(dueLabel(t.due))}</span>` : ''}
     ${source && !t.own ? `<button class="td-src" data-open-note="${t.note.id}">${esc(titleOf(t.note))}</button>` : ''}
-    ${t.own && !t.sub ? `<button class="icon-btn td-del" data-td-proj title="Projet" aria-label="Choisir le projet">${icon('folder')}</button>` : ''}
-    ${t.own && !t.sub && !t.done ? `<button class="icon-btn td-del" data-td-sub title="Ajouter une sous-tâche" aria-label="Ajouter une sous-tâche">${icon('plus')}</button>` : ''}
-    ${t.own ? `<button class="icon-btn td-del" data-td-del title="Supprimer" aria-label="Supprimer">${icon('trash')}</button>` : ''}
+    ${t.own ? `<span class="td-acts">${t.sub ? '' : `<button class="icon-btn td-del" data-td-proj title="Projet" aria-label="Choisir le projet">${icon('folder')}</button>`}${!t.sub && !t.done ? `<button class="icon-btn td-del" data-td-sub title="Ajouter une sous-tâche" aria-label="Ajouter une sous-tâche">${icon('plus')}</button>` : ''}<button class="icon-btn td-del" data-td-del title="Supprimer" aria-label="Supprimer">${icon('trash')}</button></span>` : ''}
   </div>`;
 }
 function row(t: Task, opts?: { source?: boolean }): string {
@@ -317,7 +319,7 @@ function localCard(t: Task, i: number): string {
   const late = !!t.due && t.due < store.dayKey() && !t.done, n = t.subs.length, d = t.subs.filter(x => x.done).length;
   return `<article class="kb-card${t.done ? ' done' : ''}" draggable="true" data-key="${t.note.id}:${t.line}" data-note="${t.note.id}" data-line="${t.line}">
     <p>${esc(plain(t.text))}</p>
-    <footer>${t.due ? `<span class="td-due${late ? ' late' : t.due === store.dayKey() ? ' today' : ''}">${esc(dueLabel(t.due))}</span>` : ''}${t.ticket ? ticketChip(t.ticket) : ''}${n ? `<span class="td-prog">${d}/${n}</span>` : ''}${t.own ? '' : `<button class="td-src" data-open-note="${t.note.id}">${esc(titleOf(t.note))}</button>`}${board.moveButtons(i === 0, i === COLS.length - 1)}</footer></article>`;
+    <footer>${t.due ? `<span class="td-due${late ? ' late' : t.due === store.dayKey() ? ' today' : ''}">${esc(dueLabel(t.due))}</span>` : ''}${projectChip(t)}${t.ticket ? ticketChip(t.ticket) : ''}${n ? `<span class="td-prog">${d}/${n}</span>` : ''}${t.own ? '' : `<button class="td-src" data-open-note="${t.note.id}">${esc(titleOf(t.note))}</button>`}${board.moveButtons(i === 0, i === COLS.length - 1)}</footer></article>`;
 }
 function localBoard(): string {
   const c = collect(scope());

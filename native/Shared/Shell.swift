@@ -87,6 +87,8 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         if type == "badge", let n = body["count"] as? Int { Notifier.shared.badge(max(0, n)) }
         if type == "bio", let action = body["action"] as? String, let id = body["id"] as? Int { biometric(action, id: id, body: body) }
         if type == "project", let action = body["action"] as? String, let id = body["id"] as? Int { project(action, id: id, body: body) }
+        if type == "agent", let action = body["action"] as? String, let id = body["id"] as? Int { agent(action, id: id, body: body) }
+        if type == "claude", let action = body["action"] as? String, let id = body["id"] as? Int { claude(action, id: id, body: body) }
         if type == "voice", let action = body["action"] as? String {
             Dictation.shared.send = { [weak self] payload in
                 guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
@@ -118,16 +120,80 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         case "info":
             DispatchQueue.global(qos: .userInitiated).async { var r = folders.info(pid); r["id"] = id; self.answer(r) }
         case "open":
-            do { try folders.open(pid, with: body["app"] as? String ?? ""); answer(["id": id, "ok": true]) }
+            do { try folders.open(pid, with: body["app"] as? String ?? "", worktree: body["worktree"] as? String); answer(["id": id, "ok": true]) }
             catch let e as ProjectFolders.Failure { answer(["id": id, "ok": false, "message": e.message]) }
             catch { answer(["id": id, "ok": false, "message": error.localizedDescription]) }
         case "forget":
             folders.forget(pid); answer(["id": id, "ok": true])
+        case "diff":
+            let scope = body["scope"] as? String ?? "working"
+            let wt = body["worktree"] as? String
+            DispatchQueue.global(qos: .userInitiated).async { var r = folders.diff(pid, scope: scope, worktree: wt); r["id"] = id; self.answer(r) }
+        case "branches":
+            DispatchQueue.global(qos: .userInitiated).async { var r = folders.branches(pid); r["id"] = id; self.answer(r) }
+        case "site":
+            SiteCheck.run(body["url"] as? String ?? "") { var r = $0; r["id"] = id; self.answer(r) }
+        case "sessions":
+            guard let dir = folders.path(pid) else { answer(["id": id, "ok": true, "sessions": [], "found": false]); return }
+            ClaudeSessions.shared.list(project: dir) { var r = $0; r["id"] = id; self.answer(r) }
+        case "session":
+            guard let dir = folders.path(pid) else { answer(["id": id, "ok": false, "message": "Choisis d'abord le dossier du projet."]); return }
+            ClaudeSessions.shared.detail(project: dir, session: body["session"] as? String ?? "") { var r = $0; r["id"] = id; self.answer(r) }
         default:
             answer(["id": id, "ok": false, "message": "Action inconnue."])
         }
         #else
         answer(["id": id, "ok": false, "message": "Disponible dans l'app Mac."])
+        #endif
+    }
+
+    /// Agents Claude Code d'un projet (voir Agents.swift) et leurs copies isolées.
+    private func agent(_ action: String, id: Int, body: [String: Any]) {
+        #if os(macOS)
+        let pid = body["project"] as? String ?? "", folders = ProjectFolders.shared
+        let send: ([String: Any]) -> Void = { var r = $0; r["id"] = id; self.answer(r) }
+        let bg: (@escaping () -> [String: Any]) -> Void = { work in DispatchQueue.global(qos: .userInitiated).async { send(work()) } }
+        switch action {
+        case "start": DispatchQueue.global(qos: .userInitiated).async { Agents.shared.start(project: pid, body: body, done: send) }
+        case "list": send(Agents.shared.list(project: pid))
+        case "stop": send(Agents.shared.stop(body["run"] as? String ?? ""))
+        case "worktrees": bg { folders.worktrees(pid) }
+        case "push": bg { folders.commitPush(pid, name: body["worktree"] as? String ?? "", message: body["message"] as? String ?? "") }
+        case "discard": bg { folders.removeWorktree(pid, name: body["worktree"] as? String ?? "") }
+        case "commits": bg { folders.commits(pid, days: body["days"] as? Int ?? 30) }
+        case "run": send(Agents.shared.detail(body["run"] as? String ?? ""))
+        case "server":
+            switch body["op"] as? String ?? "" {
+            case "hosts": bg { Servers.shared.hosts() }
+            case "set": bg { Servers.shared.set(pid, host: body["host"] as? String ?? "", path: body["path"] as? String ?? "") }
+            case "forget": Servers.shared.forget(pid); send(["ok": true])
+            case "terminal": send(Servers.shared.terminal(pid))
+            default: bg { Servers.shared.status(pid) }
+            }
+        case "daily":
+            guard let dir = folders.path(pid) else { send(["ok": true, "tokens": [:], "sessions": [:]]); return }
+            ClaudeSessions.shared.daily(project: dir, days: body["days"] as? Int ?? 30, done: send)
+        default: send(["ok": false, "message": "Action inconnue."])
+        }
+        #else
+        answer(["id": id, "ok": false, "message": "Les agents tournent sur le Mac."])
+        #endif
+    }
+
+    /// Claude Code installé sur ce Mac, utilisé comme fournisseur d'IA (voir ClaudeCode.swift).
+    private func claude(_ action: String, id: Int, body: [String: Any]) {
+        #if os(macOS)
+        let cc = ClaudeCode.shared
+        let send: ([String: Any]) -> Void = { var r = $0; r["id"] = id; self.answer(r) }
+        switch action {
+        case "status": cc.status(done: send)
+        case "login": cc.login(done: send)
+        case "run": cc.run(body, done: send)
+        case "cancel": cc.cancel(body["run"] as? String ?? ""); send(["ok": true])
+        default: send(["ok": false, "message": "Action inconnue."])
+        }
+        #else
+        answer(["id": id, "ok": false, "message": "Claude Code s'utilise depuis l'app Mac."])
         #endif
     }
 

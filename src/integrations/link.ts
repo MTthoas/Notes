@@ -12,17 +12,19 @@
 import * as cr from '../core/crypto.ts';
 import * as vault from '../core/vault.ts';
 import * as store from '../core/store.ts';
+import * as native from '../core/native.ts';
 import { errMsg } from '../ui/kit.ts';
 import type { Note } from '../types.ts';
 
 /** Appareil lié (gardé chiffré dans le coffre). */
-export interface Device { secret: string; id: string | null; name: string; pairedAt: number; lastSync: number }
+export interface Device { secret: string; id: string | null; name: string; pairedAt: number; lastSync: number; /** Sur ce Mac : cet appareil peut piloter Claude Code à distance. */ remote?: boolean }
 export type LinkEvent =
   | { type: 'devices' }
   | { type: 'status'; secret: string; state: string }
   | { type: 'paired'; name: string }
   | { type: 'error'; message: string }
-  | { type: 'synced'; name: string; sent: number; got: number };
+  | { type: 'synced'; name: string; sent: number; got: number }
+  | { type: 'remote'; name: string; what: string };
 /** Message de signalisation, chiffré sur le relais. */
 interface Signal { t: 'hello' | 'offer' | 'answer'; re?: boolean; sdp?: string; oid?: string; from: string; name: string; ts: number }
 type Tombs = Record<string, number>;
@@ -31,7 +33,40 @@ type Wire =
   | { t: 'manifest'; notes: { id: string; updated: number }[]; tombs?: Tombs }
   | { t: 'notes'; recs: Note[]; tombs?: Tombs }
   | { t: 'done'; sent: number }
-  | { t: 'part'; id: string; i: number; n: number; d: string };
+  | { t: 'part'; id: string; i: number; n: number; d: string }
+  | { t: 'caps'; agents: boolean; name: string }
+  | { t: 'rpc'; id: number; type: string; action: string; params: Record<string, unknown> }
+  | { t: 'rpc-res'; id: number; res: native.Reply };
+
+// ---------- Pilotage à distance ----------
+// Un appareil lié (l'iPhone) peut demander au Mac de lancer, suivre et arrêter les agents Claude Code de ses projets.
+// Le Mac ne répond qu'aux appareils explicitement autorisés, et seulement à cette liste fermée de demandes.
+const REMOTE_ALLOWED = new Set(['agent.list', 'agent.run', 'agent.server', 'agent.start', 'agent.stop', 'agent.worktrees', 'agent.daily', 'agent.commits', 'project.info', 'project.sessions', 'project.session', 'claude.status']);
+const isMac = (): boolean => native.available() && document.documentElement.dataset.native === 'mac';
+const pending = new Map<number, (r: native.Reply) => void>();
+let rpcSeq = 0;
+/** Mac joignable qui accepte le pilotage depuis cet appareil. */
+export function remoteHost(): { name: string } | null {
+  for (const s of peers.values()) if (s.caps?.agents && s.dc?.readyState === 'open') return { name: s.caps.name || s.dev.name };
+  return null;
+}
+/** Envoie une demande au Mac lié (réponse au même format que le pont natif). */
+export function remoteCall(type: string, action: string, params: Record<string, unknown> = {}, timeout = 60000): Promise<native.Reply> {
+  const s = [...peers.values()].find(x => x.caps?.agents && x.dc?.readyState === 'open');
+  if (!s) return Promise.resolve({ ok: false, message: 'Aucun Mac joignable pour le pilotage à distance.' });
+  const id = ++rpcSeq;
+  return new Promise(resolve => {
+    pending.set(id, resolve);
+    setTimeout(() => { if (pending.delete(id)) resolve({ ok: false, message: 'Le Mac ne répond pas.' }); }, timeout);
+    s.send({ t: 'rpc', id, type, action, params });
+  });
+}
+/** Autorise (ou non) un appareil lié à piloter Claude Code sur ce Mac. */
+export async function setRemote(secret: string, on: boolean): Promise<void> {
+  await updateDevice(secret, { remote: on });
+  const s = peers.get(secret); if (s) { s.dev.remote = on; s.announce(); }
+  emit({ type: 'devices' });
+}
 
 const RELAY = 'ntfy.sh';
 const ME = 'carnet.device';
@@ -113,6 +148,8 @@ class Session {
   parts = new Map<string, string[]>();
   closed = false;
   stats = { sent: 0, got: 0 };
+  caps: { agents: boolean; name: string } | null = null;
+  calls: number[] = [];
   key!: CryptoKey;
   topic = '';
   ws: WebSocket | null = null;
@@ -198,7 +235,7 @@ class Session {
   // --- Canal direct ---
   bind(dc: RTCDataChannel): void {
     this.dc = dc;
-    dc.onopen = () => { this.set('connecté'); this.stats = { sent: 0, got: 0 }; this.send({ t: 'manifest', notes: store.manifest(), tombs: store.tombs() }); };
+    dc.onopen = () => { this.set('connecté'); this.stats = { sent: 0, got: 0 }; this.send({ t: 'manifest', notes: store.manifest(), tombs: store.tombs() }); this.announce(); };
     dc.onmessage = (e: MessageEvent<string>) => this.onData(e.data).catch(err => emit({ type: 'error', message: errMsg(err) }));
     dc.onclose = () => { if (this.dc === dc) { this.dc = null; this.set('en attente de l’autre appareil'); } };
   }
@@ -210,6 +247,32 @@ class Session {
     else { const id = cr.hex(cr.random(6)), n = Math.ceil(s.length / MAX); for (let i = 0; i < n; i++) dc.send(JSON.stringify({ t: 'part', id, i, n, d: s.slice(i * MAX, (i + 1) * MAX) })); }
     return true;
   }
+  /** Le Mac annonce s'il accepte le pilotage depuis cet appareil. */
+  announce(): void { if (isMac()) this.send({ t: 'caps', agents: this.dev.remote === true, name: me().name }); }
+  async onRpc(msg: Extract<Wire, { t: 'rpc' }>): Promise<void> {
+    const deny = (message: string): void => { this.send({ t: 'rpc-res', id: msg.id, res: { ok: false, message } }); };
+    if (!isMac()) return deny('Cet appareil n’est pas un Mac.');
+    const dev = devices().find(d => d.secret === this.secret);
+    if (!dev?.remote) return deny('Le pilotage à distance est désactivé pour cet appareil (Réglages → Appareils, sur le Mac).');
+    const key = `${msg.type}.${msg.action}`;
+    if (!REMOTE_ALLOWED.has(key)) return deny('Action non autorisée à distance.');
+    const now = Date.now(); this.calls = this.calls.filter(t => now - t < 60000);
+    if (this.calls.length >= 120) return deny('Trop de demandes : réessaie dans une minute.');
+    this.calls.push(now);
+    const params: Record<string, unknown> = { ...msg.params };
+    delete params.type; delete params.action; delete params.id;
+    if (key === 'agent.server' && (params.op ?? 'status') !== 'status') return deny('Le serveur se configure depuis le Mac.');
+    if (key === 'agent.start') {
+      // À distance : jamais de commandes (tests npm), consigne bornée.
+      params.tests = false;
+      if (typeof params.prompt !== 'string' || params.prompt.length > 20000) return deny('Consigne invalide.');
+      emit({ type: 'remote', name: dev.name, what: String(params.prompt).slice(0, 120) });
+    }
+    if (key === 'agent.stop') emit({ type: 'remote', name: dev.name, what: 'arrêt d’un agent' });
+    const res = await native.call(msg.type, msg.action, params, key === 'agent.start' ? 60000 : 30000);
+    this.send({ t: 'rpc-res', id: msg.id, res });
+  }
+
   async onData(raw: string): Promise<void> {
     let msg = JSON.parse(raw) as Wire;
     if (msg.t === 'part') {
@@ -217,6 +280,9 @@ class Session {
       if (p.filter(x => x != null).length < msg.n) return;
       this.parts.delete(msg.id); msg = JSON.parse(p.join('')) as Wire;
     }
+    if (msg.t === 'caps') { this.caps = { agents: !!msg.agents, name: String(msg.name || '') }; emit({ type: 'devices' }); return; }
+    if (msg.t === 'rpc') { await this.onRpc(msg); return; }
+    if (msg.t === 'rpc-res') { const done = pending.get(msg.id); if (done) { pending.delete(msg.id); done(msg.res); } return; }
     if (msg.t === 'manifest') {
       await store.mergeRemote([], msg.tombs || {});
       const theirs = new Map(msg.notes.map(x => [x.id, x.updated])), tombs = msg.tombs || {};

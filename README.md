@@ -25,6 +25,16 @@ npm run serve        # build en continu + http://localhost:8000
 
 Les modules JavaScript et le chiffrement demandent `http://localhost` ou HTTPS : ouvrir `index.html` directement ne suffit pas.
 
+### Commande `studio`
+
+```bash
+ln -sf "$PWD/bin/studio" ~/.local/bin/studio   # une seule fois (un dossier présent dans le PATH)
+
+studio           # ouvre l'app Mac (la construit et l'installe si elle manque)
+studio web       # version web en local, reconstruite à chaque modification
+studio update    # reconstruit l'app Mac depuis les sources et la réinstalle
+```
+
 | Commande | Rôle |
 |---|---|
 | `npm run build` | Compile `src/` dans `dist/` : un seul `app.js` minifié, CSS minifié, service worker avec la liste des fichiers et une version de cache calculée sur leur contenu |
@@ -74,12 +84,50 @@ Un **projet** réunit son dossier sur le Mac, son ou ses dépôts GitHub, son pr
 nom: Studio
 dépôts: MTthoas/Studio
 linear: Studio
+site: https://studio.exemple.com
 ```
 
 - Une note ou une tâche y appartient avec le tag `#projet/studio` — posé par le bouton **Projet** de l'éditeur, le menu d'une tâche, ou en créant depuis la page du projet.
 - Le **cockpit** du projet montre les PR ouvertes avec leur CI et leurs revues, l'activité du dépôt, les tickets Linear, les tâches et les notes ; il ouvre le dossier dans **VS Code**, le Finder ou le Terminal (app Mac).
 - Le **dossier local** est choisi dans le sélecteur de macOS et reste dans les réglages de l'app Mac : il n'est jamais écrit dans une note ni synchronisé. L'app n'en lit l'état Git qu'en lecture seule.
 - La page Tâches filtre par projet, en liste ou en Kanban.
+
+Chaque projet a ses **sous-menus**, aussi listés dans la barre latérale :
+
+| Onglet | Ce qu'on y trouve |
+| --- | --- |
+| Vue d'ensemble | Une carte par sous-menu : tâches ouvertes, PR et CI, flux, dernière session IA, état du site, notes |
+| Code | Dossier local, branches locales (avance / retard), PR et activité, **revue IA** des changements en cours ou de la branche |
+| Flux | Le parcours de chaque branche façon gitflow : en cours → PR ouverte → prête à fusionner → fusionnée → publiée (Release), avec CI et revues |
+| Sessions IA | Les sessions **Claude Code** menées dans le dossier, en direct : ce qu'elles font, fichiers modifiés, tokens consommés, état de la limite d'utilisation |
+| Tâches · Notes | Ce qui est tagué `#projet/<nom>` |
+| Site | Le site du projet, vérifié depuis le Mac (en ligne, code, temps de réponse) |
+
+- **Sessions IA** : l'app Mac lit les journaux locaux de Claude Code (`~/.claude/projects/…`), en lecture seule ; rien ne quitte la machine.
+- **Revue IA** : le diff est lu en local, montré, puis envoyé à l'IA branchée seulement après ton clic ; la revue peut être enregistrée comme note du projet.
+- **Consommation** (Réglages → IA) : tokens du mois par fournisseur et modèle, et ce qu'il reste sur le budget mensuel que tu fixes.
+
+## Claude Code (ton abonnement, sans clé API)
+
+Sur Mac, Studio peut passer par le **Claude Code** installé sur la machine, connecté à ton abonnement Claude : Réglages → Intelligence artificielle → carte **Claude Code**. Studio le détecte, guide l'installation et la connexion si besoin, puis un clic sur **Utiliser Claude Code** en fait le fournisseur par défaut.
+
+- Claude Code tourne **sans ses propres outils** (`--tools ""`), sans serveur MCP, sans tes réglages ni tes hooks, sans session enregistrée, dans un dossier vide propre à Studio. Il ne lance aucune commande et ne lit aucun fichier.
+- Les automatisations gardent leurs outils (ranger une note, créer une tâche…) : Claude Code renvoie les appels sous forme structurée, Studio les exécute, avec ton accord pour toute modification.
+- La consommation passe par les limites de ton abonnement : elle est comptée à part du budget des clés API.
+
+## Piloter ses projets : Claude Code, serveurs, à distance
+
+Chaque projet a un onglet **Claude Code** : tu écris une consigne, Claude Code travaille dans le dépôt du projet, et tu suis tout en direct.
+
+- **Modifier** : Claude Code travaille dans une **copie isolée** du dépôt (worktree Git dans `.claude/worktrees/`, exclue de `git status`). Ton dossier n'est jamais touché. Ensuite : **Revue** IA, **VS Code**, **Publier** (commit, push, pull request en un clic) ou **Supprimer**.
+- **Analyser** : lecture seule, Claude Code explore et propose.
+- **Garde-fous** : `--restricted` (fichiers confinés au dossier de travail), `--permission-mode dontAsk` et une liste explicite d'outils (lecture, écriture). Aucune commande ne s'exécute, sauf si tu coches **Tests npm** (`npm test`, `npm run …`). Pas de réglages, hooks ni serveurs MCP de l'utilisateur ; trois agents au plus, 90 minutes au plus.
+- **Sessions** : toutes les sessions Claude Code du projet (y compris celles lancées hors de Studio), avec leur fil, les fichiers touchés, les tokens, la limite d'utilisation ; chacune peut être **reprise**.
+- **Vue d'ensemble** : graphiques (commits par jour, tokens Claude Code par jour, santé de la CI, avancement des tâches), barre de consigne rapide et agents en cours.
+
+**Serveur** (VPS, VM) : relie un hôte SSH (alias de `~/.ssh/config` ou `utilisateur@hôte`) et le dossier du projet sur ce serveur. Studio affiche son état (charge, mémoire, disque, dépôt, Claude Code), ouvre un terminal SSH, et y lance des agents Claude Code avec les mêmes garde-fous. Connexion par clé uniquement (`BatchMode`), commandes distantes fixes et protégées, configuration gardée dans l'app Mac.
+
+**À distance** : depuis l'iPhone (ou un autre ordinateur) lié au Mac, tu suis les agents, lances une consigne, reprends ou arrêtes une session — via la liaison chiffrée de bout en bout. Sur le Mac, chaque appareil doit être autorisé (Réglages → Appareils → « Peut piloter Claude Code sur ce Mac ») ; seules ces actions passent, jamais les commandes ni la publication, et chacune est signalée sur le Mac. Studio doit rester ouvert sur le Mac.
 
 ## Plugins
 

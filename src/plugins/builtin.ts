@@ -13,7 +13,7 @@ export function registerBuiltins(): void {
   registry.register({
     id: 'github', name: 'GitHub',
     projectPanels: [{
-      id: 'github.pulls', title: 'GitHub', icon: 'github', order: 10,
+      id: 'github.pulls', title: 'Pull requests et activité', icon: 'github', order: 10, tab: 'code',
       when: p => p.repos.length > 0,
       async render(p) {
         if (!github.connected()) return `<p class="nf-empty">Connecte GitHub pour voir les PR, la CI et l’activité. <button class="link-btn" data-open-conn="github">Connecter</button></p>`;
@@ -34,7 +34,7 @@ export function registerBuiltins(): void {
   registry.register({
     id: 'linear', name: 'Linear',
     projectPanels: [{
-      id: 'linear.tickets', title: 'Tickets Linear', icon: 'linear', order: 20,
+      id: 'linear.tickets', title: 'Tickets Linear', icon: 'linear', order: 20, tab: 'tasks',
       when: p => !!p.linear,
       async render(p) {
         if (!linear.connected()) return `<p class="nf-empty">Connecte Linear pour voir les tickets du projet. <button class="link-btn" data-open-conn="linear">Connecter</button></p>`;
