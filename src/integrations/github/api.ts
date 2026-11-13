@@ -98,3 +98,49 @@ export function init(shell: AppShell): void {
   vault.onChange(() => { if (!active()) { events = []; loaded = false; me = ''; emit(); } else if (!loaded) poll(); });
   poll();
 }
+
+// ---------- Projets : dépôt, PR ouvertes, CI et revues ----------
+export interface RepoInfo { full_name: string; html_url: string; default_branch: string; open_issues_count: number; pushed_at: string; description: string | null }
+export type CiState = 'success' | 'failure' | 'pending' | 'none';
+export type ReviewState = 'approved' | 'changes' | 'pending' | 'none';
+export interface Pull { number: number; title: string; url: string; author: string; draft: boolean; branch: string; updated: string; ci: CiState; review: ReviewState }
+
+const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
+const repoCache = new Map<string, { at: number; info: RepoInfo; pulls: Pull[] }>();
+
+interface RawPull { number: number; title: string; html_url: string; draft?: boolean; updated_at: string; user?: { login: string }; head: { ref: string; sha: string }; requested_reviewers?: unknown[] }
+async function ciOf(repo: string, sha: string): Promise<CiState> {
+  const d = await api<{ total_count: number; check_runs: { status: string; conclusion: string | null }[] }>(`/repos/${repo}/commits/${sha}/check-runs?per_page=50`);
+  if (!d.total_count) return 'none';
+  if (d.check_runs.some(r => ['failure', 'timed_out', 'cancelled', 'action_required'].includes(r.conclusion ?? ''))) return 'failure';
+  if (d.check_runs.some(r => r.status !== 'completed')) return 'pending';
+  return 'success';
+}
+async function reviewOf(repo: string, p: RawPull): Promise<ReviewState> {
+  const reviews = await api<{ user?: { login: string }; state: string }[]>(`/repos/${repo}/pulls/${p.number}/reviews?per_page=50`);
+  const last = new Map<string, string>();
+  for (const r of reviews) if (r.user && r.state !== 'COMMENTED') last.set(r.user.login, r.state);
+  const states = [...last.values()];
+  if (states.includes('CHANGES_REQUESTED')) return 'changes';
+  if (states.includes('APPROVED')) return 'approved';
+  return p.requested_reviewers?.length ? 'pending' : 'none';
+}
+
+/** Dépôt et ses PR ouvertes (avec CI et revues), mis en cache une minute. */
+export async function project(repo: string, { fresh = false } = {}): Promise<{ info: RepoInfo; pulls: Pull[] }> {
+  if (!REPO_RE.test(repo)) throw new Error(`Dépôt invalide : ${repo}`);
+  const hit = repoCache.get(repo);
+  if (!fresh && hit && Date.now() - hit.at < 60e3) return hit;
+  const [info, raw] = await Promise.all([api<RepoInfo>(`/repos/${repo}`), api<RawPull[]>(`/repos/${repo}/pulls?state=open&per_page=15&sort=updated&direction=desc`)]);
+  const pulls = await Promise.all(raw.map(async p => {
+    const [ci, review] = await Promise.all([ciOf(repo, p.head.sha).catch((): CiState => 'none'), reviewOf(repo, p).catch((): ReviewState => 'none')]);
+    return { number: p.number, title: p.title, url: p.html_url, author: p.user?.login ?? '', draft: !!p.draft, branch: p.head.ref, updated: p.updated_at, ci, review };
+  }));
+  const out = { at: Date.now(), info, pulls };
+  repoCache.set(repo, out);
+  return out;
+}
+/** Activité récente d'un dépôt, déjà chargée par l'actualité GitHub. */
+export const activityOf = (repo: string, n = 8): { e: GhEvent; d: Described }[] => events.filter(e => e.repo?.name === repo).slice(0, n).map(e => ({ e, d: describe(e) }));
+/** Dépôts de l'utilisateur (pour choisir celui d'un projet). */
+export const myRepos = async (): Promise<string[]> => (await api<{ full_name: string }[]>('/user/repos?sort=pushed&per_page=50&affiliation=owner,collaborator,organization_member')).map(r => r.full_name);

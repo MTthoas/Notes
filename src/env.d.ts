@@ -8,6 +8,7 @@ interface Window {
     settings(): void;
     voice(payload: unknown): void;
     bio(payload: unknown): void;
+    reply(payload: unknown): void;
   };
 }
 

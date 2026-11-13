@@ -86,6 +86,7 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         }
         if type == "badge", let n = body["count"] as? Int { Notifier.shared.badge(max(0, n)) }
         if type == "bio", let action = body["action"] as? String, let id = body["id"] as? Int { biometric(action, id: id, body: body) }
+        if type == "project", let action = body["action"] as? String, let id = body["id"] as? Int { project(action, id: id, body: body) }
         if type == "voice", let action = body["action"] as? String {
             Dictation.shared.send = { [weak self] payload in
                 guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
@@ -99,6 +100,35 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
     private func reply(_ payload: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
         DispatchQueue.main.async { self.web?.evaluateJavaScript("window.carnet && window.carnet.bio && window.carnet.bio(\(json))", completionHandler: nil) }
+    }
+
+    // Réponse générique à une demande de la page : window.carnet.reply({ id, ok, ... })
+    private func answer(_ payload: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
+        DispatchQueue.main.async { self.web?.evaluateJavaScript("window.carnet && window.carnet.reply && window.carnet.reply(\(json))", completionHandler: nil) }
+    }
+
+    private func project(_ action: String, id: Int, body: [String: Any]) {
+        #if os(macOS)
+        let folders = ProjectFolders.shared
+        let pid = body["project"] as? String ?? ""
+        switch action {
+        case "pick":
+            folders.pick(pid) { path in self.answer(["id": id, "ok": path != nil, "path": path ?? NSNull()]) }
+        case "info":
+            DispatchQueue.global(qos: .userInitiated).async { var r = folders.info(pid); r["id"] = id; self.answer(r) }
+        case "open":
+            do { try folders.open(pid, with: body["app"] as? String ?? ""); answer(["id": id, "ok": true]) }
+            catch let e as ProjectFolders.Failure { answer(["id": id, "ok": false, "message": e.message]) }
+            catch { answer(["id": id, "ok": false, "message": error.localizedDescription]) }
+        case "forget":
+            folders.forget(pid); answer(["id": id, "ok": true])
+        default:
+            answer(["id": id, "ok": false, "message": "Action inconnue."])
+        }
+        #else
+        answer(["id": id, "ok": false, "message": "Disponible dans l'app Mac."])
+        #endif
     }
 
     private func biometric(_ action: String, id: Int, body: [String: Any]) {
