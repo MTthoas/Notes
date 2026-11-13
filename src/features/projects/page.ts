@@ -314,10 +314,19 @@ export function toClaude(p: Project, what: { notes?: string[]; prompt?: string }
 export function mount(main: HTMLElement): void {
   sessions.stop();
   const p = model.byId(app.viewState().project), tab = curTab();
-  main.innerHTML = `<header class="toolbar">${app.tbLeft()}${app.crumb(p ? p.name : 'Projets')}<div class="tb-side tb-right">${p ? '' : `<button class="btn btn-ghost" data-pj="new">${icon('plus')}<span>Nouveau projet</span></button>`}</div></header>
+  // Fil d'Ariane : Projets › projet › onglet, chaque niveau ramenant à sa page.
+  const up: [string, string] = ['Projets', 'data-pj-open=""'];
+  const trail = !p ? app.crumb('Projets') : tab === 'overview' ? app.crumb(p.name, [up])
+    : app.crumb(TABS.find(x => x[0] === tab)?.[1] ?? '', [up, [p.name, 'data-pj-tab="overview"']]);
+  main.innerHTML = `<header class="toolbar">${app.tbLeft()}${trail}<div class="tb-side tb-right">${p ? '' : `<button class="btn btn-ghost" data-pj="new">${icon('plus')}<span>Nouveau projet</span></button>`}</div></header>
     <div class="todo pj"><div class="todo-in pj-in">${p ? detailHTML(p, tab) : `<div class="td-head"><h1>Projets</h1><p class="td-sub">Un projet réunit son dossier, son dépôt, ses PR, ses tickets, ses tâches et ses notes.</p></div><div class="pj-list">${listHTML()}</div>`}</div></div>`;
   const root = need('.pj', main);
   $('.toolbar [data-pj=new]', main)?.addEventListener('click', () => void createDialog());
+  $('.toolbar .crumb', main)?.addEventListener('click', e => {
+    const t = target(e);
+    if (t.closest('[data-pj-open]')) void go(null);
+    else if (p && t.closest('[data-pj-tab]')) void go(p.id, 'overview');
+  });
   if (p) void hydrate(root, p, tab);
   root.addEventListener('submit', async e => {
     if (!p) return;

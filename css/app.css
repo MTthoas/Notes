@@ -160,7 +160,10 @@ input[type="radio"] { accent-color: var(--text); margin: 0; }
 .tb-right { margin-left: auto; gap: 4px; }
 .crumb { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: var(--t-2); color: var(--text-3); padding-left: 2px; }
 .crumb .ic { width: 13px; height: 13px; }
-.crumb > span { white-space: nowrap; }
+.crumb > span, .crumb > button { white-space: nowrap; }
+.crumb > button { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; }
+.crumb > button:hover { color: var(--text); }
+.crumb > .ic { flex: none; }
 .crumb-cur { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
 .seg { display: flex; padding: 2px; border-radius: 7px; border: 1px solid var(--border); }
 .seg button { width: 28px; height: 22px; display: grid; place-items: center; border-radius: 4px; color: var(--text-3); }
@@ -1260,6 +1263,28 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .cc-facts div { padding: 9px 12px; border-radius: var(--r); border: 1px solid var(--border); background: var(--bg); }
 .cc-facts dt { color: var(--text-3); font-size: var(--t-1); }
 .cc-facts dd { margin: 2px 0 0; font-weight: 500; font-variant-numeric: tabular-nums; }
+.cc-usage { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.cc-usage h5 { margin: 0; font-size: var(--t-2); font-weight: 600; }
+.cc-usage h5 span { margin-left: 6px; color: var(--text-3); font-size: var(--t-1); font-weight: 400; }
+.cc-usage h5.cc-sub { margin: 16px 0 10px; }
+.cc-uh { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.cc-usage .us-sum { margin-bottom: 8px; }
+.cx-sec .cc-wait { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-3); font-size: var(--t-1); }
+.cc-ask { display: flex; align-items: center; gap: 16px; padding: 11px 13px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.cx-sec .cc-ask p { flex: 1; margin: 0; color: var(--text-2); font-size: var(--t-1); line-height: 1.5; }
+.cc-ask p .ic { width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; }
+.cc-ask .btn { flex: none; }
+.cc-lims { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.cc-lim { display: flex; flex-direction: column; gap: 8px; padding: 11px 13px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.cc-lim > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.cc-lim span { color: var(--text-2); font-size: var(--t-1); }
+.cc-lim strong { font-size: var(--t-3); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--c-green); }
+.cc-lim strong.warn { color: var(--c-amber); } .cc-lim strong.err { color: var(--c-red); }
+.cc-lim em { font-style: normal; color: var(--text-3); font-size: var(--t-1); }
+.bar.cc-bar { display: block; width: 100%; height: 6px; }
+.cc-bar i { background: var(--c-green); } .cc-bar i.warn { background: var(--c-amber); } .cc-bar i.err { background: var(--c-red); }
+.cx-sec .cc-off { margin: 4px 0 0; font-size: var(--t-1); }
+@media (max-width: 640px) { .cc-ask { flex-direction: column; align-items: stretch; } }
 .cc-act { display: flex; align-items: center; gap: 16px; margin-top: 14px; }
 .cx-sec .cc-act p { flex: 1; display: flex; align-items: center; gap: 8px; margin: 0; }
 .cc-act p .ic { flex: none; width: 15px; height: 15px; color: var(--c-green); }
@@ -1405,7 +1430,11 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ss-box .ss-h:first-child { margin-top: 4px; }
 .ss-feed { scroll-behavior: smooth; }
 .ss-dhead .btn { height: 28px; }
-.modal.ag-pub { max-width: 520px; }
+.modal.ag-pub { max-width: 560px; }
+.pub-type { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: var(--text-2); font-size: var(--t-1); font-weight: 500; }
+.pub-type .ag-seg { flex-wrap: wrap; }
+.pub-type .ag-seg label { position: relative; }
+.pub-type .ag-seg span { font-family: var(--mono); }
 .ag-opts kbd { border: 0; color: inherit; min-width: 0; }
 .ag-compose + .ag-zone { margin-top: 16px; }
 .cx-remote { display: flex; align-items: center; gap: 7px; margin-top: 6px; color: var(--text-2); font-size: var(--t-1); }

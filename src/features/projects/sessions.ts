@@ -182,6 +182,10 @@ function detailHTML(raw: Partial<Session> & { actions?: Action[] }, root: string
 // ---------- Message de commit (Conventional Commits) ----------
 const TYPES = 'feat|fix|chore|docs|refactor|test|perf|style|build|ci';
 const COMMIT_RE = new RegExp(`^(${TYPES})(\\([\\w./-]+\\))?!?: \\S`);
+/** Types proposés en un clic dans la fenêtre de publication. */
+const KINDS: [string, string][] = [['feat', 'Nouvelle fonctionnalité'], ['fix', 'Correction de bug'], ['chore', 'Entretien, configuration, dépendances'], ['refactor', 'Refonte sans changement de comportement'], ['docs', 'Documentation'], ['test', 'Tests']];
+/** Remplace le type d'un titre en gardant sa portée et son résumé : « feat(ui): x » → « fix(ui): x ». */
+const retype = (type: string, line: string): string => { const m = line.match(new RegExp(`^(?:${TYPES})(\\([^)]*\\))?!?:\\s*(.*)$`)); return m ? `${type}${m[1] ?? ''}: ${m[2] ?? ''}` : `${type}: ${line}`; };
 /** Type probable d'après la consigne et les fichiers touchés. */
 function guessType(text: string, files: string[]): string {
   if (files.length && files.every(f => /\.(md|txt)$|^docs?\//i.test(f))) return 'docs';
@@ -243,6 +247,7 @@ async function publish(p: Project, wt: string, root: HTMLElement): Promise<void>
   const run = runs.find(r => r.worktree === wt), repo = p.repos[0];
   const canPR = !!repo && github.connected();
   const m = modal({ cls: 'ag-pub', title: 'Publier le travail de l’agent', html: `
+    <div class="pub-type"><span>Type</span><div class="ag-seg" role="radiogroup" aria-label="Type de changement">${KINDS.map(([k, l]) => `<label title="${esc(l)}"><input type="radio" name="ctype" value="${k}"><span>${k}</span></label>`).join('')}</div></div>
     <label class="pj-field"><span class="ag-msg-h">Message de commit<em class="ag-sug" hidden>${icon('sparkle')}proposé par l’IA</em></span><textarea class="field ag-msg" name="msg" rows="3" spellcheck="false" required></textarea></label>
     <div class="ag-sug-row"><span class="ag-sug-st"><span class="spin"></span>Lecture des changements…</span><button type="button" class="link-btn" data-resug hidden>${icon('refresh')}Reproposer</button></div>
     <label class="pj-field"><span>Branche</span><input class="field ag-branch" name="branch" spellcheck="false" autocomplete="off" required></label>
@@ -256,7 +261,17 @@ async function publish(p: Project, wt: string, root: HTMLElement): Promise<void>
   const branchIn = need<HTMLInputElement>('[name=branch]', m.node);
   let editedMsg = false, editedTitle = false, editedBranch = false;
   const subject = () => msg.value.split('\n')[0]?.trim() ?? '';
-  const sync = () => { if (title && !editedTitle) title.value = subject(); if (!editedBranch) branchIn.value = branchName(subject()); };
+  const typeOf = () => new RegExp(`^(${TYPES})`).exec(subject())?.[1] ?? '';
+  const sync = () => {
+    if (title && !editedTitle) title.value = subject();
+    if (!editedBranch) branchIn.value = branchName(subject());
+    m.node.querySelectorAll<HTMLInputElement>('[name=ctype]').forEach(r => { r.checked = r.value === typeOf(); });
+  };
+  // Changer de type réécrit seulement le préfixe du message (la portée et le résumé restent).
+  m.node.addEventListener('change', e => {
+    const t = e.target as HTMLInputElement; if (t.name !== 'ctype') return;
+    const lines = msg.value.split('\n'); lines[0] = retype(t.value, lines[0] ?? ''); msg.value = lines.join('\n'); sync();
+  });
   branchIn.addEventListener('input', () => { editedBranch = true; });
   msg.addEventListener('input', () => { editedMsg = true; sugTag.hidden = true; sync(); });
   title?.addEventListener('input', () => { editedTitle = true; });

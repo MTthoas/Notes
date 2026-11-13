@@ -42,6 +42,6 @@ export interface AppShell {
   viewState(): ViewState;
   renderSidebar(): void;
   tbLeft(): string;
-  crumb(current: string): string;
+  crumb(current: string, trail?: [string, string][]): string;
   onCount?(): void;
 }

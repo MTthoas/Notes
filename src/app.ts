@@ -257,8 +257,12 @@ function renderList() {
 // ---------- Rendu : zone principale ----------
 const tb = (act: string, ic: string, title: string, combo = '', cls = '') => `<button class="icon-btn ${cls}" data-act="${act}" title="${esc(title)}${combo ? ` (${keys(combo)})` : ''}" aria-label="${esc(title)}">${icon(ic)}</button>`;
 const tbLeft = () => `<div class="tb-side">${WIDE.has(ui.view.type) ? '' : tb('back', 'back', 'Retour à la liste', '', 'only-narrow')}${tb('sidebar', 'sidebar', 'Afficher ou masquer la barre latérale', SC.sidebar)}</div>`;
-// Fil d'Ariane : vue courante › titre de la note.
-const crumb = (cur: string) => { const v = ui.view, parent = v.type === 'tag' ? '#' + v.tag : VIEWS[v.type]?.label; return `<div class="crumb">${parent && !WIDE.has(v.type) ? `<span>${esc(parent)}</span>${icon('chevronRight')}` : ''}<span class="crumb-cur">${esc(cur)}</span></div>`; };
+// Fil d'Ariane : vue courante › titre de la note. `trail` : niveaux intermédiaires d'une page ([libellé, attributs du bouton] ;
+// sans attributs, le niveau n'est pas cliquable), par exemple Projets › Mon projet › Claude Code.
+const crumb = (cur: string, trail: [string, string][] = []) => {
+  const v = ui.view, parent = v.type === 'tag' ? '#' + v.tag : VIEWS[v.type]?.label, sep = icon('chevronRight');
+  return `<div class="crumb">${parent && !WIDE.has(v.type) ? `<span>${esc(parent)}</span>${sep}` : ''}${trail.map(([l, a]) => (a ? `<button ${a}>${esc(l)}</button>` : `<span>${esc(l)}</span>`) + sep).join('')}<span class="crumb-cur">${esc(cur)}</span></div>`;
+};
 
 function renderMain() {
   const main = need('#main');

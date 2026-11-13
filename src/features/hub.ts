@@ -31,7 +31,7 @@ export interface HubApi {
   flushAll(): Promise<void>;
   refreshNote(n: Note): void;
   capture(text: string): Promise<unknown>;
-  crumb(current: string): string;
+  crumb(current: string, trail?: [string, string][]): string;
   theme(): string;
   setTheme(t: string): void;
   exportJSON(): unknown;
@@ -454,7 +454,7 @@ export function openConnections(tab = 'coffre'): void { void app.setView({ type:
 
 export function mountSettings(main: HTMLElement, tab: string): void {
   curTab = TABS.some(t => t[0] === tab) ? tab : 'coffre';
-  main.innerHTML = `<header class="toolbar">${app.tbLeft()}${app.crumb('Réglages')}<div class="tb-side tb-right"></div></header>
+  main.innerHTML = `<header class="toolbar">${app.tbLeft()}${app.crumb(TABS.find(t => t[0] === curTab)?.[2] ?? 'Réglages', [['Réglages', '']])}<div class="tb-side tb-right"></div></header>
     <div class="settings"><nav class="set-nav" aria-label="Sections">${TABS.map(([k, ic, l]) => `<button data-tab="${k}"${k === curTab ? ' aria-current="page"' : ''}>${icon(ic)}<span>${l}</span></button>`).join('')}</nav>
     <div class="set-scroll"><div class="set-body"></div></div></div>`;
   const r = root(); if (!r) return;
@@ -535,7 +535,7 @@ function ccHTML(): string {
       <li><span>Reviens ici une fois l’installation terminée.</span><button class="btn" data-v="cc-check">${icon('refresh')}Vérifier à nouveau</button></li></ol>`;
   const facts = `<dl class="cc-facts"><div><dt>Version</dt><dd>${esc(s.version || '—')}</dd></div><div><dt>Installé via</dt><dd>${s.source === 'extension' ? 'Extension VS Code' : 'Terminal'}</dd></div>${s.loggedIn ? `<div><dt>Offre</dt><dd>${esc(ai.cc.plan(s) || 'Claude')}</dd></div>` : ''}</dl>`;
   if (!s.loggedIn) return head(pill('amber', 'Non connecté')) + facts + `<div class="cc-act"><p>Connecte Claude Code à ton abonnement : la page de connexion de Claude s’ouvre dans ton navigateur.</p><button class="btn btn-primary" data-v="cc-login">Se connecter</button></div>`;
-  return head(pill('green', 'Connecté')) + facts + `<div class="cc-act">${active
+  return head(pill('green', 'Connecté')) + facts + `<div class="cc-usage" data-cc-usage>${ccUsageHTML()}</div><div class="cc-act">${active
       ? `<p>${icon('check')}Claude Code répond à toutes les demandes d’IA de Studio sur ce Mac.</p>`
       : '<p>Fais de Claude Code le fournisseur par défaut : revue de code, automatisations et questions passeront par ton abonnement.</p><button class="btn btn-primary" data-v="cc-use">Utiliser Claude Code</button>'}</div>
     <label class="cc-model"><span>Modèle</span><select class="field" data-cfg="ccModel">${ai.CC_MODELS.map(([v, l]) => `<option value="${v}"${c.ccModel === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -545,15 +545,41 @@ function ccRefresh(force = false): void {
   if (!ai.cc.onMac() || (!force && Date.now() - ccChecked < 15000)) return;
   ccChecked = Date.now();
   void ai.cc.status().then(() => { const x = $('#main .settings [data-cc]'); if (x) x.innerHTML = ccHTML(); });
+  ccUsageRefresh();
+}
+
+// Utilisation de l'abonnement Claude : limites (session de 5 heures, semaine) et tokens consommés par Claude Code sur ce Mac.
+const CC_WINDOWS: Record<string, string> = { five_hour: 'Session en cours · 5 heures', seven_day: 'Semaine · tous les modèles', seven_day_opus: 'Semaine · Opus', seven_day_sonnet: 'Semaine · Sonnet', extra: 'Crédit supplémentaire' };
+function ccUsageHTML(): string {
+  const l = ai.cc.limits, u = ai.cc.local;
+  if (!l && !u && ai.cc.usageError) return `<h5>Utilisation de ton abonnement</h5><p class="modal-hint">${esc(ai.cc.usageError)}</p>`;
+  const when = (s: number) => { const at = new Date(s * 1000); return at.toLocaleString('fr-FR', { weekday: at.getTime() - Date.now() > 20 * 36e5 ? 'long' : undefined, hour: '2-digit', minute: '2-digit' }); };
+  const limits = !l ? '<p class="cc-wait"><span class="spin"></span>Lecture des limites…</p>'
+    : !l.enabled ? `<div class="cc-ask"><p>Affiche la part utilisée de ta <strong>session de 5 heures</strong> et de ta <strong>semaine</strong>, comme <code>/usage</code> dans Claude Code. Anthropic ne la donne qu’au compte connecté : Studio lira la connexion de Claude Code dans le trousseau de ce Mac (macOS te demandera ton accord) et interrogera <code>api.anthropic.com</code>, rien d’autre.</p><button class="btn btn-primary" data-v="cc-limits-on">Afficher mes limites</button></div>`
+    : !l.ready ? `<div class="cc-ask"><p>${icon('shield')}${esc(l.message ?? 'Limites illisibles pour l’instant.')}</p><button class="btn" data-v="cc-limits-off">Ne plus lire les limites</button></div>`
+    : `<div class="cc-lims">${(l.windows ?? []).map(w => { const pct = Math.round(w.pct), tone = pct >= 90 ? 'err' : pct >= 70 ? 'warn' : ''; return `<div class="cc-lim"><div><span>${esc(CC_WINDOWS[w.key] ?? w.key)}</span><strong class="${tone}">${pct} % utilisés</strong></div><span class="bar cc-bar"><i style="width:${Math.min(100, pct)}%" class="${tone}"></i></span>${w.resetsAt && w.resetsAt * 1000 > Date.now() ? `<em>se réinitialise ${esc(when(w.resetsAt))}</em>` : ''}</div>`; }).join('')}</div>`;
+  const tile = (c: ai.CcCounts, label: string) => `<div><strong>${usage.fmt(usage.billable(c))}</strong><span>${label}</span><em>${usage.fmt(c.output)} écrits · ${c.calls} réponse${c.calls > 1 ? 's' : ''}</em></div>`;
+  const tokens = !u ? (ai.cc.usageError ? `<p class="modal-hint">${esc(ai.cc.usageError)}</p>` : '<p class="cc-wait"><span class="spin"></span>Lecture des journaux de Claude Code…</p>')
+    : `<div class="us-sum">${tile(u.h5, 'tokens · 5 dernières heures')}${tile(u.today, 'tokens · aujourd’hui')}${tile(u.d7, 'tokens · 7 jours')}</div>
+      ${u.models.length ? `<div class="us-rows">${u.models.map(m => `<div class="us-row"><span>${esc(m.model)}</span><em>${usage.fmt(m.input + m.cacheWrite)} entrée · ${usage.fmt(m.output)} sortie${m.cacheRead ? ` · ${usage.fmt(m.cacheRead)} cache` : ''}</em></div>`).join('')}</div>` : '<p class="modal-hint">Aucune activité de Claude Code sur ce Mac ces 7 derniers jours.</p>'}`;
+  return `<div class="cc-uh"><h5>Utilisation de ton abonnement</h5><button class="btn" data-v="cc-usage-refresh">${icon('refresh')}Actualiser</button></div>${limits}
+    <h5 class="cc-sub">Tokens consommés par Claude Code <span>toutes les sessions de ce Mac, lues en local</span></h5>${tokens}
+    ${l?.enabled && l.ready ? '<p class="cc-off"><button class="link-btn" data-v="cc-limits-off">Ne plus lire les limites de l’abonnement</button></p>' : ''}`;
+}
+function ccUsagePaint(): void { const x = $('#main .settings [data-cc-usage]'); if (x) x.innerHTML = ccUsageHTML(); }
+function ccUsageRefresh(op = ''): void {
+  if (!ai.cc.onMac()) return;
+  void ai.cc.usage().then(ccUsagePaint);
+  void ai.cc.limitsCall(op).then(ccUsagePaint);
 }
 
 function tabAI() {
   const cc = `<section class="cx-sec cc" data-cc>${ccHTML()}</section>`;
   if (!vault.enabled()) return cc + needVault('Les clés des fournisseurs d’IA');
   const c = ai.config();
-  return `${cc}<section class="cx-sec"><h4>${icon('bolt')}Consommation</h4>${usageHTML()}
+  return `${cc}<section class="cx-sec"><h4>${icon('bolt')}Consommation des clés API</h4>${usageHTML()}
     <label class="cx-row us-budget"><span>Budget mensuel</span><input class="field" type="number" min="0" step="0.5" data-cfg="budgetM" value="${c.budgetM || ''}" placeholder="0"><span>millions de tokens</span></label>
-    <p class="modal-hint">Compté par Studio à chaque réponse. Les fournisseurs n’exposent pas ton crédit restant à une simple clé : fixe ici le budget que tu t’accordes pour les clés API, Studio t’indique ce qu’il en reste. Ce qui passe par Claude Code relève des limites de ton abonnement : il est compté à part, et l’état de la limite apparaît dans l’onglet Sessions IA de chaque projet.</p></section>
+    <p class="modal-hint">Compté par Studio à chaque réponse. Les fournisseurs n’exposent pas ton crédit restant à une simple clé : fixe ici le budget que tu t’accordes pour les clés API, Studio t’indique ce qu’il en reste. Ce qui passe par Claude Code relève de ton abonnement, pas de ce budget : son utilisation et ses limites sont dans la carte Claude Code, plus haut.</p></section>
     <section class="cx-sec"><h4>${icon('sparkle')}Fournisseur par défaut</h4><div class="cx-seg">${Object.entries(ai.PROVIDERS).map(([k, l]) => `<label><input type="radio" name="provider" value="${k}"${c.provider === k ? ' checked' : ''}>${l}</label>`).join('')}</div>
     <p class="modal-hint">Avec une clé, les requêtes partent directement de Studio vers le fournisseur ; avec Claude Code, elles passent par ton Mac. Les notes chiffrées et celles taguées <code>#privé</code> ne sont jamais envoyées. Les actions qui modifient quelque chose demandent ton accord.</p></section>
     <section class="cx-sec"><h4>Claude · clé API</h4>${keyField('anthropic', 'Clé Anthropic', 'sk-ant-…')}
@@ -633,6 +659,9 @@ async function onConnClick(e: MouseEvent) {
   }
   if (v === 'cc-use') { ai.setConfig({ provider: 'claudecode' }); refreshConnections(); toast('Claude Code est maintenant ton fournisseur d’IA'); }
   if (v === 'cc-check') { ai.cc.last = null; refreshConnections(); ccRefresh(true); }
+  if (v === 'cc-usage-refresh') { const b = t.closest<HTMLButtonElement>('[data-v]'); if (b) b.disabled = true; ccUsageRefresh('refresh'); }
+  if (v === 'cc-limits-on') { ai.cc.limits = null; ccUsagePaint(); ccUsageRefresh('enable'); }
+  if (v === 'cc-limits-off') ccUsageRefresh('disable');
   if (v === 'cc-copy') { try { await navigator.clipboard.writeText(CC_INSTALL); toast('Commande copiée'); } catch { toast('Copie impossible : sélectionne la commande'); } }
   if (v === 'cc-login') {
     const b = t.closest<HTMLButtonElement>('[data-v]'); if (b) { b.disabled = true; b.innerHTML = '<span class="spin"></span>Connexion dans le navigateur…'; }
