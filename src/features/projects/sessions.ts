@@ -19,10 +19,12 @@ interface Session { id: string; title: string; branch: string; worktree: string;
 interface Quota { status?: string; resetsAt?: number; rateLimitType?: string; isUsingOverage?: boolean }
 interface Action { at: string; kind: string; text: string }
 export interface AgentRun { machine?: string; host?: string; run: string; mode: string; prompt: string; status: string; session: string; worktree: string; started: string; finished: string; result: string; lastText: string; turns: number; denials: string[]; quota?: Quota | null }
-interface Worktree { name: string; branch: string; changes: number; ahead: number; pushed: boolean }
+interface Worktree { name: string; branch: string; changes: number; ahead: number; behind?: number; pushed: boolean; conflicts?: string[] }
+/** Tâche de l'orchestrateur (Orchestrator.swift) : publication ou mise à jour d'une copie. */
+interface Job { job: string; kind: 'publish' | 'sync'; worktree: string; status: 'running' | 'done' | 'error' | 'blocked'; step: string; log: string[]; conflicts: string[]; branch: string; message: string }
 
 let selected: string | null = null, timer: ReturnType<typeof setInterval> | undefined, tick = 0;
-let runs: AgentRun[] = [], trees: Worktree[] = [];
+let runs: AgentRun[] = [], trees: Worktree[] = [], jobs: Job[] = [];
 const ms = (iso: string) => Date.parse(iso) || 0;
 const short = (path: string, root: string | null) => root && path.includes('/.claude/worktrees/') ? path.replace(/^.*\/\.claude\/worktrees\/[^/]+\//, '') : root && path.startsWith(root + '/') ? path.slice(root.length + 1) : path.replace(/^\/Users\/[^/]+/, '~');
 const modelName = (m: string) => m.replace(/^claude-/, '').replace(/-(\d)-(\d)$/, ' $1.$2').replace(/-/g, ' ');
@@ -143,8 +145,11 @@ function runCard(r: AgentRun): string {
 }
 
 function treeRow(w: Worktree): string {
-  return `<div class="ag-tree"><span class="ag-tree-main"><code>${esc(w.branch || w.name)}</code><em>${w.changes ? `${w.changes} fichier${w.changes > 1 ? 's' : ''} modifié${w.changes > 1 ? 's' : ''}` : 'aucun changement en attente'}${w.ahead ? ` · ${w.ahead} commit${w.ahead > 1 ? 's' : ''}` : ''}${w.pushed ? ' · poussée' : ''}</em></span>
-    <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${w.changes || w.ahead ? '' : ' disabled'}>${icon('upload')}Publier</button>${w.pushed ? `<button class="btn" data-ag="pr" data-wt="${esc(w.name)}" title="Ouvrir la page de la pull request sur GitHub">${icon('github')}PR</button>` : ''}<button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
+  const job = jobs.find(j => j.worktree === w.name), busy = job?.status === 'running';
+  const conflicts = w.conflicts?.length ? `<span class="err"> · conflits : ${esc(w.conflicts.join(', '))}</span>` : '';
+  const state = busy ? ` · <span class="spin"></span>${esc(job.step)}` : job?.status === 'error' || job?.status === 'blocked' ? `<span class="err"> · ${esc(job.step)}</span>` : conflicts;
+  return `<div class="ag-tree"><span class="ag-tree-main"><code>${esc(w.branch || w.name)}</code><em>${w.changes ? `${w.changes} fichier${w.changes > 1 ? 's' : ''} modifié${w.changes > 1 ? 's' : ''}` : 'aucun changement en attente'}${w.ahead ? ` · ${w.ahead} commit${w.ahead > 1 ? 's' : ''}` : ''}${w.pushed ? ' · poussée' : ''}${w.behind ? ` · ${w.behind} commit${w.behind > 1 ? 's' : ''} de retard sur la branche principale` : ''}${state}</em></span>
+    <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `${w.behind && !busy ? `<button class="btn" data-ag="sync" data-wt="${esc(w.name)}" title="Remettre la copie sur la dernière version de la branche principale ; l'agent résout les conflits éventuels">${icon('refresh')}Mettre à jour</button>` : ''}<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${(w.changes || w.ahead) && !busy ? '' : ' disabled'}>${icon('upload')}Publier</button>${w.pushed ? `<button class="btn" data-ag="pr" data-wt="${esc(w.name)}" title="Ouvrir la page de la pull request sur GitHub">${icon('github')}PR</button>` : ''}<button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
 }
 
 function listHTML(list: Session[], quota: Quota | null): string {
@@ -297,6 +302,14 @@ function draftMessage(prompt: string, files: string[]): string {
   const summary = (first.charAt(0).toLowerCase() + first.slice(1)).slice(0, 64) || 'update from Claude Code';
   return `${guessType(prompt, files)}: ${summary}`;
 }
+/** Ligne « Commit: … » que l'agent écrit à la fin de son compte rendu (il sait ce qu'il a fait, sur toute la copie). */
+function agentMessage(result: string): string {
+  const line = result.split('\n').reverse().map(l => l.trim().replace(/^[-*>\s]+/, '').replace(/[`*]/g, '')).find(l => /^commit\s*:/i.test(l));
+  const msg = line?.replace(/^commit\s*:\s*/i, '').replace(/[.\s]+$/, '') ?? '';
+  return COMMIT_RE.test(msg) ? (msg.length > 72 ? msg.slice(0, 71).trimEnd() + '…' : msg) : '';
+}
+/** Compte rendu sans la ligne de commit (pour la description de la PR). */
+const withoutCommitLine = (result: string) => result.split('\n').filter(l => !/^[-*>\s`]*commit\s*:/i.test(l.trim())).join('\n').trim();
 /** Nettoie la réponse de l'IA : 1 ligne de titre conforme, et au plus 1 ligne de détail. */
 function cleanMessage(raw: string, fallbackType: string): string {
   const lines = raw.replace(/```\w*/g, '').split('\n').map(l => l.trim().replace(/^["'`]+|["'`]+$/g, '')).filter(Boolean);
@@ -311,14 +324,17 @@ const COMMIT_SYSTEM = `Tu écris des messages de commit au format Conventional C
 Réponds uniquement par le message, sans guillemets, sans bloc de code, sans explication.
 Ligne 1 : type(portée): résumé — types : feat, fix, chore, docs, refactor, test, perf, style, build, ci ; portée facultative et courte ; 72 caractères au plus ; à l’impératif ; sans point final.
 Ligne 2 (facultative) : une seule phrase de détail, seulement si elle apporte quelque chose.
-Écris dans la même langue que les commits récents du dépôt, et dans le même style.`;
-async function suggestMessage(p: Project, wt: string, run: AgentRun | undefined): Promise<{ draft: string; ai: Promise<string> | null; files: string[] }> {
+Écris dans la même langue que les commits récents du dépôt, et dans le même style.
+Décris ce que fait le diff dans son ensemble. La consigne n'est qu'un contexte : elle peut être une simple demande de suivi (« résous le conflit », « continue ») ; ne parle jamais de conflit, de fusion ni de l'agent.`;
+async function suggestMessage(p: Project, wt: string, run: AgentRun | undefined, forceAI = false): Promise<{ draft: string; fromAgent: boolean; ai: Promise<string> | null; files: string[] }> {
   const d = await native.call('project', 'diff', { project: p.id, scope: 'working', worktree: wt }, 30000);
   const stat = String(d.stat ?? ''), files = statFiles(stat), prompt = run?.prompt ?? wt.replace(/^studio-|-\d{4}-\d{4}$/g, '').replace(/-/g, ' ');
-  const draft = draftMessage(prompt, files);
-  if (!d.ok || !ai.ready() || !String(d.patch ?? '').trim()) return { draft, ai: null, files };
+  // 1. le message écrit par l'agent ; 2. l'IA d'après le diff ; 3. en dernier recours, la consigne résumée.
+  const fromAgent = agentMessage(runs.filter(r => r.worktree === wt && r.result).map(r => r.result)[0] ?? '');
+  const draft = fromAgent || draftMessage(prompt, files);
+  if ((fromAgent && !forceAI) || !d.ok || !ai.ready() || !String(d.patch ?? '').trim()) return { draft, fromAgent: !!fromAgent, ai: null, files };
   const user = `Consigne donnée à l’agent : ${prompt}\n\n${run?.result ? `Compte rendu de l’agent :\n${run.result.slice(0, 1500)}\n\n` : ''}Commits récents du dépôt :\n${String(d.log ?? '').trim() || '(aucun)'}\n\nFichiers modifiés :\n${stat}\n\nDiff (extrait) :\n\`\`\`diff\n${String(d.patch).slice(0, 20000)}\n\`\`\``;
-  return { draft, files, ai: ai.complete(COMMIT_SYSTEM, user).then(t => cleanMessage(t, guessType(prompt, files))) };
+  return { draft, fromAgent: !!fromAgent, files, ai: ai.complete(COMMIT_SYSTEM, user).then(t => cleanMessage(t, guessType(prompt, files))) };
 }
 
 /** Nom de branche conventionnel tiré du titre du commit : « feat(tasks): add parser tests » → feat/tasks-add-parser-tests. */
@@ -333,10 +349,11 @@ export function branchName(subject: string): string {
 /** Page GitHub de création de la PR, déjà remplie (marche avec n'importe quel jeton, ou sans). */
 const compareURL = (repo: string, base: string, branch: string, title: string, body: string) =>
   `https://github.com/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?quick_pull=1&title=${encodeURIComponent(title)}&body=${encodeURIComponent(body.slice(0, 3500))}`;
-const prBody = (run: AgentRun | undefined, detail: string) => `${detail ? `${detail}\n\n` : ''}${run?.result ? `${run.result}\n\n` : ''}---\nPréparé par Claude Code depuis Studio.`;
+const prBody = (run: AgentRun | undefined, detail: string) => `${detail ? `${detail}\n\n` : ''}${run?.result ? `${withoutCommitLine(run.result)}\n\n` : ''}---\nPréparé par Claude Code depuis Studio.`;
 
 async function publish(p: Project, wt: string, root: HTMLElement): Promise<void> {
-  const run = runs.find(r => r.worktree === wt), repo = p.repos[0];
+  // La première demande faite dans cette copie (les suivantes sont souvent « continue », « résous le conflit »…).
+  const mine = runs.filter(r => r.worktree === wt), run = mine[mine.length - 1], repo = p.repos[0];
   const canPR = !!repo && github.connected();
   const m = modal({ cls: 'ag-pub', title: 'Publier le travail de l’agent', html: `
     <div class="pub-type"><span>Type</span><div class="ag-seg" role="radiogroup" aria-label="Type de changement">${KINDS.map(([k, l]) => `<label title="${esc(l)}"><input type="radio" name="ctype" value="${k}"><span>${k}</span></label>`).join('')}</div></div>
@@ -345,7 +362,7 @@ async function publish(p: Project, wt: string, root: HTMLElement): Promise<void>
     <label class="pj-field"><span>Branche</span><input class="field ag-branch" name="branch" spellcheck="false" autocomplete="off" required></label>
     ${repo ? `<label class="cx-check"><input type="checkbox" name="pr" checked> Ouvrir une pull request sur <strong>${esc(repo)}</strong></label>
     <label class="pj-field"><span>Titre de la PR</span><input class="field" name="title"></label>` : '<p class="modal-hint">Associe un dépôt GitHub au projet pour ouvrir une pull request.</p>'}
-    <p class="modal-hint">${icon('shield')}Les changements de la copie sont validés puis la branche est poussée avec tes identifiants Git habituels. Ton dossier de travail n’est pas touché.</p>
+    <p class="modal-hint">${icon('shield')}Studio remet d’abord la copie sur la dernière version de la branche principale (l’agent résout les conflits s’il y en a), puis fait un seul commit avec ce message et pousse la branche avec tes identifiants Git habituels. Ton dossier de travail n’est pas touché.</p>
     <div class="rv-status"></div>
     <div class="modal-actions"><button class="btn" data-x>Annuler</button><button class="btn btn-primary" data-go>${icon('upload')}Publier</button></div>` });
   const msg = need<HTMLTextAreaElement>('[name=msg]', m.node), title = m.node.querySelector<HTMLInputElement>('[name=title]');
@@ -367,36 +384,66 @@ async function publish(p: Project, wt: string, root: HTMLElement): Promise<void>
   branchIn.addEventListener('input', () => { editedBranch = true; });
   msg.addEventListener('input', () => { editedMsg = true; sugTag.hidden = true; sync(); });
   title?.addEventListener('input', () => { editedTitle = true; });
-  const propose = async () => {
-    resug.hidden = true; sugSt.innerHTML = '<span class="spin"></span>Lecture des changements…';
-    const s = await suggestMessage(p, wt, run);
-    if (!m.node.isConnected) return;
-    if (!editedMsg) { msg.value = s.draft; sync(); }
-    if (!s.ai) { sugSt.textContent = ai.ready() ? 'Proposition tirée de la consigne.' : 'Proposition tirée de la consigne · connecte une IA pour un message rédigé d’après le diff.'; resug.hidden = !ai.ready(); return; }
-    sugSt.innerHTML = `<span class="spin"></span>L’IA rédige le message d’après le diff (${esc(ai.PROVIDERS[ai.config().provider])})…`;
+  const go = need<HTMLButtonElement>('[data-go]', m.node), st = need('.rv-status', m.node);
+  let drafting = false;
+  const ready = () => { go.disabled = drafting && !editedMsg; };
+  msg.addEventListener('input', ready);
+  const propose = async (forceAI = false) => {
+    resug.hidden = true; drafting = true; ready(); sugSt.innerHTML = '<span class="spin"></span>Lecture des changements…';
     try {
+      const s = await suggestMessage(p, wt, run, forceAI);
+      if (!m.node.isConnected) return;
+      if (!editedMsg) { msg.value = s.draft; sync(); }
+      if (!s.ai) {
+        sugSt.textContent = s.fromAgent ? 'Message rédigé par l’agent à partir de son travail.' : ai.ready() ? 'Proposition tirée de la consigne : relis-la.' : 'Proposition tirée de la consigne : relis-la · connecte une IA pour un message rédigé d’après le diff.';
+        resug.hidden = !ai.ready(); return;
+      }
+      sugSt.innerHTML = `<span class="spin"></span>L’IA rédige le message d’après le diff (${esc(ai.PROVIDERS[ai.config().provider])})…`;
       const text = await s.ai; if (!m.node.isConnected) return;
       if (text && !editedMsg) { msg.value = text; sugTag.hidden = false; sync(); }
       sugSt.textContent = editedMsg ? 'Tu as modifié le message : la proposition de l’IA n’a pas été appliquée.' : `${s.files.length} fichier${s.files.length > 1 ? 's' : ''} modifié${s.files.length > 1 ? 's' : ''}.`;
     } catch (e) { sugSt.innerHTML = `<span class="err">Pas de proposition de l’IA : ${esc(errMsg(e))}</span>`; }
-    resug.hidden = false;
+    finally { drafting = false; ready(); }
+    resug.hidden = !ai.ready();
   };
-  resug.onclick = () => { editedMsg = false; void propose(); };
+  resug.onclick = () => { editedMsg = false; void propose(true); };
   void propose();
   need('[data-x]', m.node).onclick = m.close;
-  need('[data-go]', m.node).onclick = async () => {
-    const go = need<HTMLButtonElement>('[data-go]', m.node), st = need('.rv-status', m.node), wantPR = !!repo && !!m.node.querySelector<HTMLInputElement>('[name=pr]')?.checked;
+
+  /** Suit la tâche de l'orchestrateur jusqu'à sa fin (elle continue côté Mac si la fenêtre est fermée). */
+  const follow = async (id: string): Promise<Job | null> => {
+    for (;;) {
+      const j = await native.call('agent', 'job', { job: id }, 10000) as unknown as Job & { ok: boolean };
+      if (!m.node.isConnected) return null;
+      if (!j.ok) { st.innerHTML = '<p class="rv-status err">Tâche perdue.</p>'; return null; }
+      st.innerHTML = `<ol class="ag-steps">${j.log.map((l, i) => `<li${i === j.log.length - 1 && j.status === 'running' ? ' class="on"' : ''}>${i === j.log.length - 1 && j.status === 'running' ? '<span class="spin"></span>' : ''}${esc(l)}</li>`).join('')}</ol>`;
+      if (j.status !== 'running') return j;
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  };
+
+  go.onclick = async () => {
+    const wantPR = !!repo && !!m.node.querySelector<HTMLInputElement>('[name=pr]')?.checked;
     const message = msg.value.trim(); if (!message) { msg.focus(); return; }
     const prTitle = title?.value.trim() || subject(), detail = message.split('\n').slice(1).join('\n').trim();
-    go.disabled = true; st.innerHTML = '<p class="rv-status"><span class="spin"></span>Commit et push…</p>';
     const wanted = branchIn.value.trim();
     if (!/^[a-z0-9][a-z0-9._/-]{0,89}$/.test(wanted) || wanted.includes('..') || wanted.endsWith('/')) { st.innerHTML = '<p class="rv-status err">Nom de branche invalide : minuscules, chiffres, - _ . / (ex. feat/export-pdf).</p>'; branchIn.focus(); return; }
-    const r = await native.call('agent', 'push', { project: p.id, worktree: wt, message, branch: wanted }, 120000);
-    if (!r.ok) { st.innerHTML = `<p class="rv-status err">${esc(r.message ?? 'Échec.')}</p>`; go.disabled = false; return; }
-    const branch = String(r.branch);
+    go.disabled = true; st.innerHTML = '<p class="rv-status"><span class="spin"></span>Démarrage…</p>';
+    const started = await native.call('agent', 'publish', { project: p.id, worktree: wt, message, branch: wanted }, 30000);
+    if (!started.ok) { st.innerHTML = `<p class="rv-status err">${esc(started.message ?? 'Échec.')}</p>`; go.disabled = false; return; }
     void refreshTrees(p).then(() => paint(root, p));
+    const j = await follow(String(started.job));
+    void refreshTrees(p).then(() => paint(root, p));
+    if (!j) return;
+    if (j.status === 'blocked') {
+      st.insertAdjacentHTML('beforeend', `<div class="ag-prfail"><p class="err">L’agent n’a pas pu résoudre ces conflits : ${j.conflicts.map(f => `<code>${esc(f)}</code>`).join(', ')}.</p><p>Retire les marqueurs <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> / <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code> dans VS Code, ou réponds à l’agent dans sa session, puis publie à nouveau.</p><div class="ag-prfail-act"><button class="btn" data-ag-open>${icon('code')}Ouvrir dans VS Code</button></div></div>`);
+      st.querySelector<HTMLElement>('[data-ag-open]')!.onclick = async () => { const r = await native.call('project', 'open', { project: p.id, app: 'vscode', worktree: wt }, 15000); if (!r.ok) toast(r.message ?? 'Impossible d’ouvrir.'); };
+      go.disabled = false; go.innerHTML = `${icon('upload')}Réessayer`; return;
+    }
+    if (j.status !== 'done') { go.disabled = false; return; }
+    const branch = j.branch;
     if (!wantPR || !repo) { m.close(); toast(`Branche ${branch} poussée`); return; }
-    st.innerHTML = '<p class="rv-status"><span class="spin"></span>Ouverture de la pull request…</p>';
+    st.insertAdjacentHTML('beforeend', '<p class="rv-status"><span class="spin"></span>Ouverture de la pull request…</p>');
     let base = 'main';
     try {
       if (!canPR) throw new Error('GitHub n’est pas connecté dans Studio');
@@ -404,7 +451,8 @@ async function publish(p: Project, wt: string, root: HTMLElement): Promise<void>
       const pr = await github.createPull(repo, { head: branch, base, title: prTitle, body: prBody(run, detail) });
       m.close(); toast(`PR #${pr.number} ouverte`); window.open(pr.html_url, '_blank', 'noopener');
     } catch (e) {
-      const why = errMsg(e), perm = /not accessible|403|permission/i.test(why);
+      const why = errMsg(e), perm = /not accessible|403|permission/i.test(why), exists = /already exists/i.test(why);
+      if (exists) { m.close(); toast('Branche poussée : sa pull request est à jour.'); return; }
       st.innerHTML = `<div class="ag-prfail"><p>${icon('check')}Branche <code>${esc(branch)}</code> poussée sur GitHub.</p>
         <p class="err">${perm ? 'Ton jeton GitHub n’a pas le droit d’ouvrir une pull request (permission « Pull requests : lecture et écriture »).' : `La pull request n’a pas pu être ouverte d’ici : ${esc(why)}.`}</p>
         <div class="ag-prfail-act"><a class="btn btn-primary" href="${esc(compareURL(repo, base, branch, prTitle, prBody(run, detail)))}" target="_blank" rel="noopener">${icon('github')}Ouvrir la PR sur GitHub</a>${perm || !canPR ? '<button class="btn" data-open-conn="github">Régler le jeton</button>' : ''}</div></div>`;
@@ -424,16 +472,24 @@ async function openPR(p: Project, w: Worktree): Promise<void> {
 }
 
 async function refreshTrees(p: Project): Promise<void> {
-  const r = await bridge.call('agent', 'worktrees', { project: p.id }, 30000);
+  const [r, j] = await Promise.all([bridge.call('agent', 'worktrees', { project: p.id }, 30000), bridge.call('agent', 'jobs', { project: p.id }, 10000)]);
   trees = r.ok ? (r.worktrees as Worktree[]) : [];
+  jobs = j.ok ? (j.jobs as Job[]) : [];
 }
 
 // ---------- Montage ----------
 let folderPath: string | null = null, remote = '';
+/** Un seul rafraîchissement à la fois : si le Mac répond lentement, les requêtes ne s'empilent plus toutes les 3 secondes. */
+let painting = false;
 async function paint(box: HTMLElement, p: Project): Promise<void> {
+  if (painting) return;
+  painting = true;
+  try { await paintOnce(box, p); } finally { painting = false; }
+}
+async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
   const zone = $('.ag-zone', box); if (!zone || !box.isConnected) { clearInterval(timer); return; }
   const l = await bridge.call('agent', 'list', { project: p.id }, 10000); runs = l.ok ? (l.runs as AgentRun[]) : runs;
-  if (tick++ % 4 === 0) await refreshTrees(p);
+  if (tick++ % 4 === 0 || (tick % 2 === 0 && jobs.some(j => j.status === 'running'))) await refreshTrees(p);
   if (selected) {
     const d = await bridge.call('project', 'session', { project: p.id, session: selected }, 20000);
     if (!box.isConnected) return;
@@ -495,8 +551,14 @@ export function mount(box: HTMLElement, p: Project, folder: string | null): void
     if (b.dataset.ag === 'review') await review.review(p, 'working', wt);
     if (b.dataset.ag === 'vscode') { const r = await native.call('project', 'open', { project: p.id, app: 'vscode', worktree: wt }, 15000); if (!r.ok) toast(r.message ?? 'Impossible d’ouvrir.'); }
     if (b.dataset.ag === 'push') await publish(p, wt, box);
+    if (b.dataset.ag === 'sync') {
+      const r = await native.call('agent', 'sync', { project: p.id, worktree: wt }, 30000);
+      toast(r.ok ? 'Mise à jour de la copie lancée' : r.message ?? 'Impossible.');
+      await refreshTrees(p); void paint(box, p);
+    }
     if (b.dataset.ag === 'pr') { const w = trees.find(x => x.name === wt); if (w) await openPR(p, w); }
-    if (b.dataset.ag === 'discard' && await confirmBox({ title: 'Supprimer cette copie ?', text: 'Les changements non publiés de l’agent seront perdus. Une branche déjà poussée sur GitHub reste en place.', ok: 'Supprimer', danger: true })) {
+    if (b.dataset.ag === 'discard' && await confirmBox({ title: 'Supprimer cette copie ?', text: `${runs.some(r => live(r) && r.worktree === wt) ? 'L’agent qui y travaille sera arrêté. ' : ''}Les changements non publiés de l’agent seront perdus. Une branche déjà poussée sur GitHub reste en place.`, ok: 'Supprimer', danger: true })) {
+      for (const r of runs.filter(x => live(x) && x.worktree === wt)) await bridge.call('agent', 'stop', { run: r.run }, 10000);
       const r = await native.call('agent', 'discard', { project: p.id, worktree: wt }, 30000);
       toast(r.ok ? 'Copie supprimée' : r.message ?? 'Impossible.');
       if (r.ok && selected) { selected = null; shell(box, p); }

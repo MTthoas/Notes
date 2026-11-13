@@ -1543,3 +1543,8 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ag-prfail p { display: block; }
 .ag-prfail p .ic { display: inline-block; vertical-align: -2px; margin-right: 6px; }
 .ag-prfail code { word-break: break-all; font: 12px var(--mono); }
+
+/* Étapes de l'orchestrateur dans la fenêtre de publication */
+.ag-steps { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: var(--t-2); color: var(--text-3); }
+.ag-steps li.on { color: var(--text-2); font-weight: 500; }
+.ag-steps .spin { margin-right: 6px; vertical-align: -2px; }

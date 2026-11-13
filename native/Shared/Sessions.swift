@@ -159,6 +159,18 @@ final class ClaudeSessions {
         }
     }
 
+    /// Dernière session ouverte dans une copie isolée (pour y relancer l'agent qui l'a écrite).
+    func latest(project folder: String, worktree name: String) -> String? {
+        queue.sync {
+            let suffix = "/.claude/worktrees/" + name
+            for f in self.files(for: folder) {
+                guard let st = self.refresh(f), st.cwd.hasSuffix(suffix) else { continue }
+                return f.deletingPathExtension().lastPathComponent
+            }
+            return nil
+        }
+    }
+
     /// Dossier de travail d'une session (pour la reprendre au même endroit), s'il appartient bien au projet.
     func cwd(project folder: String, session: String) -> String? {
         queue.sync {
