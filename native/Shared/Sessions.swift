@@ -19,6 +19,11 @@ final class ClaudeSessions {
         var cwd = ""
         /// Tokens écrits par jour (AAAA-MM-JJ), pour les graphiques du projet.
         var daily: [String: Int] = [:]
+        /// Journal : toutes les demandes de la personne (pas celles des sous-agents), sans la limite du fil affiché.
+        var log: [Action] = []
+        /// Journal : par jour local (AAAA-MM-JJ), tokens écrits et fichiers modifiés.
+        var dayTokens: [String: Int] = [:]
+        var dayFiles: [String: [String]] = [:]
     }
     private var states: [String: State] = [:]
     private let queue = DispatchQueue(label: "studio.sessions")
@@ -68,6 +73,10 @@ final class ClaudeSessions {
             st.prompts += 1; st.lastPrompt = clip(text, 300)
             if st.firstPrompt.isEmpty { st.firstPrompt = st.lastPrompt }
             push(st, Action(at: ts, kind: "prompt", text: clip(text, 4000)))
+            if (e["isSidechain"] as? Bool) != true, !ts.isEmpty, !text.hasPrefix("[Request interrupted") {
+                st.log.append(Action(at: ts, kind: "prompt", text: clip(text, 6000)))
+                if st.log.count > 4000 { st.log.removeFirst(st.log.count - 4000) }
+            }
         case "assistant":
             guard let m = e["message"] as? [String: Any] else { return }
             let id = m["id"] as? String ?? UUID().uuidString
@@ -77,6 +86,7 @@ final class ClaudeSessions {
                 st.tokIn += u["input_tokens"] as? Int ?? 0; st.tokOut += u["output_tokens"] as? Int ?? 0
                 st.tokCacheRead += u["cache_read_input_tokens"] as? Int ?? 0; st.tokCacheWrite += u["cache_creation_input_tokens"] as? Int ?? 0
                 if ts.count >= 10 { st.daily[String(ts.prefix(10)), default: 0] += u["output_tokens"] as? Int ?? 0 }
+                if let d = Self.localDay(ts) { st.dayTokens[d, default: 0] += u["output_tokens"] as? Int ?? 0 }
             }
             for b in m["content"] as? [[String: Any]] ?? [] {
                 if b["type"] as? String == "text", let t = b["text"] as? String, !t.isEmpty { push(st, Action(at: ts, kind: "text", text: clip(t, 16000))) }
@@ -86,6 +96,10 @@ final class ClaudeSessions {
                     let path = input["file_path"] as? String ?? input["path"] as? String ?? ""
                     if ["Edit", "Write", "MultiEdit", "NotebookEdit"].contains(name), !path.isEmpty {
                         st.files.removeAll { $0 == path }; st.files.insert(path, at: 0); if st.files.count > 40 { st.files.removeLast() }
+                        if let d = Self.localDay(ts) {
+                            var list = st.dayFiles[d] ?? []
+                            if !list.contains(path) && list.count < 80 { list.append(path); st.dayFiles[d] = list }
+                        }
                     }
                     let detail = path.isEmpty ? (input["description"] as? String ?? input["command"] as? String ?? input["pattern"] as? String ?? "") : path
                     push(st, Action(at: ts, kind: "tool:" + name, text: clip(detail, 240)))
@@ -237,6 +251,60 @@ final class ClaudeSessions {
                 if let d = st.started.split(separator: "T").first { sessions[String(d), default: 0] += 1 }
             }
             done(["ok": true, "tokens": sum, "sessions": sessions])
+        }
+    }
+
+    // MARK: Journal
+
+    // Jour local (AAAA-MM-JJ) d'un horodatage ISO 8601 de Claude Code (écrit en UTC) : une demande faite à 0 h 30
+    // appartient bien à la journée qui commence, pas à la veille.
+    private static let isoFrac: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()
+    private static let iso = ISO8601DateFormatter()
+    private static let dayFormat: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f }()
+    static func localDay(_ ts: String) -> String? {
+        guard let d = isoFrac.date(from: ts) ?? iso.date(from: ts) else { return nil }
+        return dayFormat.string(from: d)
+    }
+
+    /// Chemin d'un fichier modifié, relatif au projet (et à sa copie isolée s'il en vient).
+    private func relative(_ path: String, _ dir: String) -> String {
+        guard path.hasPrefix(dir + "/") else { return (path as NSString).lastPathComponent }
+        var p = String(path.dropFirst(dir.count + 1))
+        if p.hasPrefix(".claude/worktrees/"), let slash = p.dropFirst(18).firstIndex(of: "/") { p = String(p[p.index(after: slash)...]) }
+        return p
+    }
+
+    /// Journal : toutes les demandes faites à Claude Code dans ces projets depuis `since` (jour local inclus),
+    /// et l'activité de chaque projet par jour (sessions, tokens écrits, fichiers modifiés).
+    func journal(projects: [(id: String, dir: String)], since: String, done: @escaping ([String: Any]) -> Void) {
+        queue.async {
+            let start = Self.dayFormat.date(from: since) ?? Date().addingTimeInterval(-30 * 86400)
+            let age = min(400 * 86400, max(86400, Date().timeIntervalSince(start) + 2 * 86400))
+            var prompts: [[String: Any]] = [], stats: [[String: Any]] = []
+            for (pid, dir) in projects {
+                var tokens: [String: Int] = [:], files: [String: [String]] = [:], sessions: [String: Set<String>] = [:]
+                for f in self.files(for: dir, maxAge: age) {
+                    guard let st = self.refresh(f) else { continue }
+                    let sid = f.deletingPathExtension().lastPathComponent
+                    let worktree = st.cwd.range(of: "/.claude/worktrees/").map { String(st.cwd[$0.upperBound...]) } ?? ""
+                    let title = st.title.isEmpty ? self.clip(st.firstPrompt, 80) : st.title
+                    for a in st.log {
+                        guard let d = Self.localDay(a.at), d >= since else { continue }
+                        prompts.append(["at": a.at, "day": d, "text": a.text, "project": pid, "session": sid, "title": title, "worktree": worktree, "branch": st.branch])
+                        sessions[d, default: []].insert(sid)
+                    }
+                    for (d, n) in st.dayTokens where d >= since { tokens[d, default: 0] += n }
+                    for (d, list) in st.dayFiles where d >= since {
+                        var cur = files[d] ?? []
+                        for p in list.map({ self.relative($0, dir) }) where !cur.contains(p) && cur.count < 120 { cur.append(p) }
+                        files[d] = cur
+                    }
+                }
+                for d in Set(tokens.keys).union(files.keys).union(sessions.keys) {
+                    stats.append(["project": pid, "day": d, "tokens": tokens[d] ?? 0, "files": files[d] ?? [], "sessions": sessions[d]?.count ?? 0])
+                }
+            }
+            done(["ok": true, "prompts": prompts, "stats": stats])
         }
     }
 

@@ -17,6 +17,7 @@ import * as ai from './integrations/ai.ts';
 import * as githubPage from './integrations/github/page.ts';
 import * as voice from './features/voice.ts';
 import * as home from './features/home.ts';
+import * as journal from './features/journal.ts';
 import * as automations from './features/automations.ts';
 import * as help from './features/help.ts';
 import * as onboarding from './features/onboarding.ts';
@@ -74,14 +75,14 @@ const SC = {
 };
 const VIEWS: Record<string, { label: string; icon: string }> = {
   home: { label: 'Accueil', icon: 'home' }, agents: { label: 'Automatisations', icon: 'bot' }, help: { label: 'Aide', icon: 'help' }, projets: { label: 'Projets', icon: 'folder' }, settings: { label: 'Réglages', icon: 'gear' },
-  today: { label: 'Aujourd’hui', icon: 'today' }, tasks: { label: 'Tâches', icon: 'check' }, linear: { label: 'Linear', icon: 'linear' }, github: { label: 'GitHub', icon: 'github' }, all: { label: 'Toutes les notes', icon: 'notes' },
+  today: { label: 'Aujourd’hui', icon: 'today' }, journal: { label: 'Journal', icon: 'journal' }, tasks: { label: 'Tâches', icon: 'check' }, linear: { label: 'Linear', icon: 'linear' }, github: { label: 'GitHub', icon: 'github' }, all: { label: 'Toutes les notes', icon: 'notes' },
   inbox: { label: 'Boîte de réception', icon: 'inbox' }, ephemeral: { label: 'Éphémères', icon: 'hourglass' },
   graph: { label: 'Graphe', icon: 'graph' }, trash: { label: 'Corbeille', icon: 'trash' },
 };
 /** Teinte de l'icône de chaque section dans la barre latérale. */
-const SIDE_HUE: Record<string, string> = { home: 'gray', inbox: 'blue', today: 'amber', all: 'gray', ephemeral: 'orange', tasks: 'green', agents: 'violet', help: 'blue', projets: 'orange', linear: 'indigo', github: 'gray', graph: 'teal', trash: 'gray' };
+const SIDE_HUE: Record<string, string> = { home: 'gray', inbox: 'blue', today: 'amber', journal: 'pink', all: 'gray', ephemeral: 'orange', tasks: 'green', agents: 'violet', help: 'blue', projets: 'orange', linear: 'indigo', github: 'gray', graph: 'teal', trash: 'gray' };
 const titleOf = (n: Note) => n.title.trim() || 'Sans titre';
-const WIDE = new Set(['graph', 'home', 'settings', 'tasks', 'linear', 'github', 'agents', 'help', 'projets']); // vues sans colonne de liste
+const WIDE = new Set(['graph', 'home', 'settings', 'tasks', 'linear', 'github', 'agents', 'help', 'projets', 'journal']); // vues sans colonne de liste
 
 function applyTheme() {
   const dark = ui.theme === 'dark' || (ui.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
@@ -188,7 +189,7 @@ function renderSidebar() {
     <div class="side-scroll">
       <div class="side-group">${item('home')}</div>
       <div class="side-label">Notes</div>
-      <div class="side-group">${item('inbox')}${item('today')}${item('all')}${count.ephemeral || v.type === 'ephemeral' ? item('ephemeral') : ''}</div>
+      <div class="side-group">${item('inbox')}${item('today')}${item('journal')}${item('all')}${count.ephemeral || v.type === 'ephemeral' ? item('ephemeral') : ''}</div>
       <div class="side-label">Organisation</div>
       <div class="side-group">${item('projets')}${projectsModel.projects().slice(0, 8).map(p => {
         const open = v.type === 'projets' && v.project === p.id, tab = v.tab ?? 'overview';
@@ -281,6 +282,7 @@ function renderMain() {
   closeAc(); graph?.destroy(); graph = null; ed = null;
   if (ui.view.type === 'graph') return mountGraph(main);
   if (ui.view.type === 'home') return home.mount(main);
+  if (ui.view.type === 'journal') return journal.mount(main);
   if (ui.view.type === 'settings') return hub.mountSettings(main, ui.view.tab || 'coffre');
   if (ui.view.type === 'tasks') return todo.mount(main);
   if (ui.view.type === 'agents') return automations.mount(main);
@@ -775,6 +777,7 @@ function commands() {
     c('Nouvelle note', 'compose', () => newNote(), SC.newNote, 'créer ajouter'),
     c('Capture rapide', 'bolt', openCapture, SC.capture, 'inbox idée todo'),
     c('Aujourd’hui', 'today', () => setView({ type: 'today' }), SC.today, 'note du jour quotidienne daily'),
+    c('Journal des demandes', 'journal', () => setView({ type: 'journal' }), '', 'journal prompts demandes résumé journée claude code historique'),
     c('Projets', 'folder', () => setView({ type: 'projets', project: null }), '', 'dossier dépôt github vscode cockpit'),
     c('Nouveau projet', 'plus', () => projectsPage.createDialog(), '', 'créer projet dossier dépôt'),
     ...(open && n ? [c('Ranger la note dans un projet…', 'folder', () => { const a = $('[data-act=project]'); if (a) menu(a, projectsPage.projectMenuItems(n)); }, '', 'projet déplacer tag')] : []),
@@ -1181,7 +1184,7 @@ async function start() {
   const shared = { setView, openNote, capture: quickCapture, view: () => ui.view.type, viewState: () => ui.view, renderSidebar, tbLeft, crumb,
     onCount: () => { renderSidebar(); linearView.refreshCount(); if (ui.view.type === 'home' && !topLayer() && !need('#main').contains(document.activeElement)) renderMain(); } };
   registerBuiltins();
-  home.init(shared); automations.init(shared); projectsPage.init(shared); help.init({ ...shared, shortcuts: shortcutRows }); voice.init(shared); linearView.init(shared); githubPage.init(shared);
+  home.init(shared); journal.init(shared); automations.init(shared); projectsPage.init(shared); help.init({ ...shared, shortcuts: shortcutRows }); voice.init(shared); linearView.init(shared); githubPage.init(shared);
 
   hub.init({
     openNote, setView, renderMain, flush, flushAll, refreshNote, capture: quickCapture, crumb,

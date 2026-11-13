@@ -24,6 +24,7 @@ Studio est un carnet de notes Markdown reliées entre elles, qui réunit aussi t
 - **Centraliser** — tâches, tickets Linear, pull requests et CI GitHub à côté de tes notes.
 - **Automatiser** — décris une routine une fois ; l'IA l'exécute à heure fixe ou à chaque événement, avec ton accord pour toute écriture.
 - **Piloter** — confie une consigne à Claude Code dans une copie isolée du dépôt, relis, publie en pull request.
+- **Se souvenir** — le **Journal** garde chaque demande faite à Claude Code (dans tous tes projets, terminal compris) et à l'IA de Studio, rangée par journée, avec le résumé de chaque journée écrit par l'IA. Il recopie les journaux de Claude Code avant qu'ils ne soient effacés (30 jours), dans la base locale chiffrée.
 
 ## Sommaire
 
