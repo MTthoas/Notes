@@ -438,7 +438,7 @@ final class Agents {
 /// y compris ceux de l'orchestrateur, des messages en attente et des appareils liés.
 enum AgentTuning {
     private static let store = "studio.agents.tuning"
-    private static let textKeys = ["intro", "edit", "read", "economy", "tests", "behavior", "extra"]
+    private static let textKeys = ["intro", "edit", "read", "context", "contextEdit", "economy", "tests", "behavior", "extra"]
 
     static let defaults: [String: Any] = [
         "intro": """
@@ -460,6 +460,20 @@ enum AgentTuning {
             Modifie avec Edit plutôt que de réécrire un fichier entier avec Write.
             """,
         "read": "Tu es en lecture seule : analyse et propose, sans modifier de fichier.",
+        // Mémoire du dépôt : chaque agent repart de zéro et passait ses premiers tours à retrouver où sont les choses.
+        // contexte.md le lui dit d'emblée ; les agents qui modifient le tiennent à jour (« contextEdit »).
+        "context": """
+            Avant toute recherche, lis contexte.md à la racine du dépôt s'il existe (et celui du dossier où tu travailles, s'il y en a un) : \
+            il dit où se trouve chaque chose, les conventions et les pièges déjà rencontrés. Pars de là au lieu de réexplorer le dépôt, \
+            et ne vérifie dans le code que ce dont ta tâche dépend ; si le code le contredit, c'est le code qui a raison.
+            """,
+        "contextEdit": """
+            À la fin de ton travail, tiens contexte.md à jour, dans la même copie : ajoute en une ou deux lignes, dans la bonne section, \
+            ce que tu as appris de durable et qui t'aurait fait gagner du temps (où se trouve une fonction, comment les pièces se parlent, \
+            une convention, un piège) ; corrige ou retire ce qui est devenu faux ; s'il n'existe pas, crée-le avec ce que tu as appris. \
+            N'y mets ni journal de ce que tu as fait, ni état d'avancement, ni rien que le code dise déjà en clair, et garde-le court : \
+            il est lu en entier par chaque agent. Si tu n'as rien appris de durable, n'y touche pas.
+            """,
         // Un agent relit tout son contexte à chaque appel d'outil : ce qu'il y fait entrer (fichiers entiers, relectures,
         // dossiers générés, copies des autres agents) se paie à chaque tour suivant.
         "economy": """
@@ -495,7 +509,8 @@ enum AgentTuning {
 
     /// Texte ajouté à la consigne système de Claude Code, selon le mode de l'agent.
     static func prompt(mode: String, tests: Bool) -> String {
-        [text("intro"), text(mode == "edit" ? "edit" : "read"), text("economy"), tests ? text("tests") : "", text("behavior"), text("extra")]
+        [text("intro"), text(mode == "edit" ? "edit" : "read"), text("context"), mode == "edit" ? text("contextEdit") : "",
+         text("economy"), tests ? text("tests") : "", text("behavior"), text("extra")]
             .filter { !$0.isEmpty }.joined(separator: " ")
     }
 

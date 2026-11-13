@@ -1,9 +1,11 @@
 #!/bin/sh
 # studio — lance Studio depuis le terminal.
-#   studio            ouvre l'app Mac (la construit et l'installe si elle manque)
-#   studio web        version web en local, reconstruite à chaque modification (http://localhost:8000)
-#   studio update     reconstruit l'app Mac depuis les sources et la réinstalle
-#   studio help       cette aide
+#   studio                 ouvre l'app Mac (la construit et l'installe si elle manque)
+#   studio web             version web en local, reconstruite à chaque modification (http://localhost:8000)
+#   studio update          récupère la dernière version de main sur GitHub, reconstruit l'app Mac et la réinstalle
+#   studio update --local  reconstruit depuis les sources telles qu'elles sont, sans rien récupérer
+#   studio version         compare l'app installée, les sources locales et GitHub
+#   studio help            cette aide
 set -eu
 
 # Dossier du dépôt, même quand la commande est un lien symbolique (ex. ~/.local/bin/studio).
@@ -15,14 +17,99 @@ done
 ROOT=$(cd "$(dirname "$SELF")/.." && pwd)
 APP=/Applications/Studio.app
 
-install_app() {
-  echo "→ Construction de l'app Mac…"
-  "$ROOT/native/build-mac.sh"
+git_() { git -C "$ROOT" "$@"; }
+short() { printf '%s' "$1" | cut -c1-7; }
+# Une valeur de l'Info.plist de l'app installée (StudioCommit, StudioBuilt : voir native/build-mac.sh). Vide si absente.
+app_key() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Contents/Info.plist" 2>/dev/null || true; }
+# Dernier commit de main sur GitHub. Vide si le dépôt n'est pas joignable.
+remote_head() {
+  git_ fetch --quiet origin main 2>/dev/null || return 0
+  git_ rev-parse --verify --quiet FETCH_HEAD 2>/dev/null || true
+}
+# Branche et commit des sources, pour dire ce qui est construit.
+sources() {
+  C=$(git_ rev-parse HEAD 2>/dev/null || true)
+  [ -n "$C" ] || { echo "sources hors Git"; return 0; }
+  B=$(git_ symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+  echo "${B:-commit détaché} $(short "$C")"
+}
+
+# Avant de construire : les pull requests sont fusionnées sur GitHub, le dossier local ne les reçoit pas tout seul.
+# Sans cette étape, « studio update » reconstruisait une app aussi ancienne que le dossier, sans rien signaler.
+# Sur main, on avance jusqu'à GitHub (avance simple : les modifications locales sont gardées, rien n'est fusionné
+# ni écrasé) ; dans les autres cas on construit ce qui est là, en le disant.
+sync_sources() {
+  LOCAL=$(git_ rev-parse HEAD 2>/dev/null || true)
+  [ -n "$LOCAL" ] || return 0
+  BRANCH=$(git_ symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+  REMOTE=$(remote_head)
+  if [ -z "$REMOTE" ]; then
+    echo "! GitHub est injoignable : impossible de vérifier que les sources sont à jour." >&2
+  elif [ "$LOCAL" = "$REMOTE" ]; then
+    echo "→ Sources à jour avec GitHub"
+  elif git_ merge-base --is-ancestor "$LOCAL" "$REMOTE" 2>/dev/null; then
+    N=$(git_ rev-list --count "$LOCAL..$REMOTE" 2>/dev/null || echo "?")
+    if [ "$BRANCH" = main ] && git_ merge --ff-only --quiet "$REMOTE" >/dev/null 2>&1; then
+      echo "→ Sources mises à jour depuis GitHub ($N commit(s) récupéré(s))"
+    elif [ "$BRANCH" = main ]; then
+      echo "! Les sources ont $N commit(s) de retard sur GitHub et des modifications locales empêchent de les avancer." >&2
+      echo "  L'app construite n'aura pas les dernières nouveautés. Mets ces modifications de côté, puis relance « studio update »." >&2
+    else
+      echo "! Le dossier est sur « ${BRANCH:-un commit détaché} », en retard de $N commit(s) sur main : l'app construite n'aura pas les dernières nouveautés." >&2
+      echo "  Pour la dernière version : git -C \"$ROOT\" switch main, puis « studio update »." >&2
+    fi
+  elif git_ merge-base --is-ancestor "$REMOTE" "$LOCAL" 2>/dev/null; then
+    echo "→ Sources en avance sur GitHub (commits locaux non publiés)"
+  else
+    echo "! Les sources ont divergé de main sur GitHub : l'app construite peut ne pas avoir les dernières nouveautés." >&2
+  fi
+}
+
+# Demande à l'app de se fermer et attend sa vraie fin (10 s au plus). Elle enregistre d'abord ce qui est en cours et,
+# si une mise à jour était déjà téléchargée, l'installe en se fermant : remplacer l'app avant écraserait le nouveau build.
+quit_app() {
   osascript -e 'quit app "Studio"' >/dev/null 2>&1 || true
-  sleep 1
+  I=0
+  while pgrep -f "$APP/Contents/MacOS/Studio" >/dev/null 2>&1 && [ "$I" -lt 50 ]; do sleep 0.2; I=$((I + 1)); done
+}
+
+install_app() {
+  echo "→ Construction de l'app Mac depuis $ROOT ($(sources))"
+  [ -z "$(git_ status --porcelain 2>/dev/null || true)" ] || echo "  avec les modifications locales non commitées"
+  "$ROOT/native/build-mac.sh"
+  quit_app
   rm -rf "$APP"
   cp -R "$ROOT/native/build/Studio.app" "$APP"
-  echo "✓ Installée dans $APP"
+  echo "✓ Installée dans $APP ($(short "$(app_key StudioCommit)"))"
+}
+
+# « studio version » : ce qui est installé, ce que contient le dossier, ce qui est publié — et quoi faire s'ils diffèrent.
+show_version() {
+  INSTALLED=$(app_key StudioCommit)
+  BUILT=$(app_key StudioBuilt)
+  LOCAL=$(git_ rev-parse HEAD 2>/dev/null || true)
+  REMOTE=$(remote_head)
+  WHEN=""
+  [ -z "$BUILT" ] || WHEN=$(date -r "$BUILT" '+%d/%m/%Y à %H:%M' 2>/dev/null || true)
+  echo "Dossier        $ROOT ($(sources))"
+  if [ ! -d "$APP" ]; then echo "App installée  aucune"
+  elif [ -z "$INSTALLED" ]; then echo "App installée  commit inconnu (construite avant les mises à jour intégrées)"
+  else echo "App installée  $(short "$INSTALLED")${WHEN:+ · construite le $WHEN}"
+  fi
+  echo "GitHub, main   $([ -n "$REMOTE" ] && short "$REMOTE" || echo "injoignable")"
+  if [ -z "$REMOTE" ]; then
+    echo "! Impossible de comparer avec GitHub pour l'instant."
+  elif [ "$INSTALLED" = "$REMOTE" ]; then
+    echo "✓ L'app installée est construite depuis la dernière version de GitHub."
+  elif [ "$LOCAL" = "$REMOTE" ]; then
+    echo "✗ Le dossier est à jour, pas l'app installée : lance « studio update »."
+  elif [ -n "$LOCAL" ] && git_ merge-base --is-ancestor "$LOCAL" "$REMOTE" 2>/dev/null; then
+    echo "✗ Le dossier a $(git_ rev-list --count "$LOCAL..$REMOTE" 2>/dev/null || echo "des") commit(s) de retard sur GitHub : « studio update » les récupère (depuis la branche main)."
+  elif [ -n "$INSTALLED" ] && [ "$INSTALLED" = "$LOCAL" ]; then
+    echo "→ L'app installée correspond au dossier, qui diffère de GitHub (commits locaux ou autre branche)."
+  else
+    echo "✗ L'app installée ne correspond ni au dossier ni à GitHub : lance « studio update »."
+  fi
 }
 
 case "${1:-open}" in
@@ -36,11 +123,15 @@ case "${1:-open}" in
     exec npm run serve
     ;;
   update)
+    [ "${2:-}" = "--local" ] || sync_sources
     install_app
     open "$APP"
     ;;
+  version)
+    show_version
+    ;;
   help|-h|--help)
-    sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
     ;;
   *)
     echo "Commande inconnue : $1 (voir « studio help »)" >&2
