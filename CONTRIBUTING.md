@@ -10,6 +10,8 @@ Merci de vouloir améliorer Studio ! Quelques règles simples.
 
 Seul le propriétaire du dépôt fusionne les pull requests.
 
+Une fonction visible mérite d'être annoncée : ajoute une entrée en tête de `NEWS` dans `src/features/news.ts` (identifiant stable, titre, deux phrases, icône, teinte). Elle sera présentée une fois à chaque personne après la mise à jour. Le titre de la pull request, au format Conventional Commits, alimente de son côté la liste « ce qui change » de la version.
+
 ## Accord de contribution
 
 Studio appartient à **Matthias ([@MTthoas](https://github.com/MTthoas))**. Il est publié sous licence [GNU AGPL-3.0](LICENSE) et peut aussi être proposé sous d'autres licences, par exemple une licence commerciale. Pour que ce soit possible avec les contributions de chacun, toute contribution est faite aux conditions suivantes.

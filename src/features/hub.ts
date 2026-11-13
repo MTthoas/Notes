@@ -14,6 +14,7 @@ import * as qr from '../lib/qr.ts';
 import * as events from '../core/events.ts';
 import * as usage from '../integrations/usage.ts';
 import * as update from '../core/update.ts';
+import * as news from './news.ts';
 import type { AppEvent } from '../core/events.ts';
 import { renderMarkdown, esc, plain } from '../lib/markdown.ts';
 import { fold } from '../lib/fuzzy.ts';
@@ -60,13 +61,15 @@ const plural = (n: number, w: string) => `${n} ${w}${n > 1 ? 's' : ''}`;
 export function init(api: HubApi) {
   app = api;
   // Mise à jour de l'app Mac : l'onglet des réglages suit la recherche, la barre latérale signale une version disponible.
-  let wasAvailable = false, announced = '';
+  let shown = '', announced = '';
   update.onChange(() => {
     if (curTab === 'maj') refreshConnections();
-    if (update.available() !== wasAvailable) { wasAvailable = update.available(); app.renderSidebar?.(); }
+    const now = update.ready() ? 'ready' : update.available() ? 'available' : '';
+    if (now !== shown) { shown = now; app.renderSidebar?.(); }
     // Une nouvelle version vient d'être trouvée : on le dit une fois, avec le chemin pour l'installer.
+    // (Avec l'installation automatique, c'est la fenêtre « Mise à jour prête » qui l'annonce : voir news.ts.)
     const tag = update.current()?.tag ?? '';
-    if (update.available() && tag && tag !== announced) { announced = tag; toast(`Studio ${tag} est disponible`, { label: 'Mettre à jour', run: () => openConnections('maj') }); }
+    if (update.available() && !update.autoInstall() && tag && tag !== announced) { announced = tag; toast(`Studio ${tag} est disponible`, { label: 'Mettre à jour', run: () => openConnections('maj') }); }
   });
   link.on(e => {
     if (e.type === 'synced' && (e.got || e.sent)) toast(`Synchronisé avec ${e.name} · ${e.got} reçue(s), ${e.sent} envoyée(s)`);
@@ -509,16 +512,25 @@ function tabUpdate(): string {
   const date = s?.published ? new Date(s.published).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
   const page = s?.page?.startsWith('https://github.com/') ? s.page : RELEASES;
   const again = `<button class="btn" data-v="update-check"${w ? ' disabled' : ''}>${icon('refresh')}Chercher maintenant</button>`;
-  const body = w === 'install' ? `<h4><span class="spin"></span>Installation de ${esc(s?.tag ?? 'la mise à jour')}…</h4><p>Téléchargement, vérification du paquet, puis Studio se relance tout seul. Tes notes sont enregistrées avant.</p>`
+  // Ce qui change : la liste lisible tirée des notes de version, sinon les notes telles quelles.
+  const raw = s?.notes?.trim() ?? '';
+  const notes = raw ? news.changeList(raw, 8) || `<details class="up-notes"><summary>Ce qui change</summary><pre class="cx-code">${esc(raw)}</pre></details>` : '';
+  const onGithub = `<a class="btn" href="${esc(page)}" target="_blank" rel="noopener">${icon('github')}Voir sur GitHub</a>`;
+  const body = w === 'install' ? `<h4><span class="spin"></span>Installation de ${esc(s?.tag ?? 'la mise à jour')}…</h4><p>Vérification du paquet, remplacement de l’app, puis Studio se relance tout seul. Tes notes sont enregistrées avant.</p>`
+    : w === 'download' ? `<h4><span class="spin"></span>Téléchargement de ${esc(s?.tag ?? 'la mise à jour')}…</h4><p>Studio télécharge et vérifie la nouvelle version en arrière-plan. Tu peux continuer à travailler.</p>${installed}`
     : !s ? '<p class="cc-wait"><span class="spin"></span>Recherche de la dernière version…</p>'
     : !s.ok ? `<h4>${icon('shield')}Recherche impossible</h4><p>${esc(s.message ?? 'La dernière version n’a pas pu être lue.')}</p>${installed}<div class="cx-grid">${again}</div>`
+    : s.available && s.staged ? `<h4>${icon('check')}Studio ${esc(s.tag ?? '')} est prête</h4><p>Téléchargée et vérifiée. Elle s’installera toute seule quand tu quitteras Studio, ou tout de suite si tu relances.</p>${installed}${notes}
+        <div class="cx-grid"><button class="btn btn-primary" data-v="update-install">${icon('refresh')}Relancer et installer</button>${onGithub}</div>`
     : s.available ? `<h4>${icon('download')}Studio ${esc(s.tag ?? '')} est disponible</h4><p>${date ? `Publiée le ${esc(date)}. ` : ''}L’app est téléchargée depuis les Releases du dépôt, vérifiée, remplacée, puis relancée.</p>${installed}
-        ${s.notes?.trim() ? `<details class="up-notes"><summary>Ce qui change</summary><pre class="cx-code">${esc(s.notes.trim())}</pre></details>` : ''}
-        <div class="cx-grid"><button class="btn btn-primary" data-v="update-install">${icon('download')}Mettre à jour et relancer</button><a class="btn" href="${esc(page)}" target="_blank" rel="noopener">${icon('github')}Voir sur GitHub</a></div>`
-    : `<h4>${icon('check')}Studio est à jour</h4>${installed}${s.tag ? `<p>Dernière version publiée : ${esc(s.tag)}${date ? `, le ${esc(date)}` : ''}.</p>` : '<p>Aucune version publiée pour l’instant.</p>'}<div class="cx-grid">${again}</div>`;
+        ${update.problem() ? `<p class="up-ver up-warn">Le téléchargement automatique a échoué : ${esc(update.problem())}</p>` : ''}${notes}
+        <div class="cx-grid"><button class="btn btn-primary" data-v="update-install">${icon('download')}Mettre à jour et relancer</button>${onGithub}</div>`
+    : `<h4>${icon('check')}Studio est à jour</h4>${installed}${s.tag ? `<p>Dernière version publiée : ${esc(s.tag)}${date ? `, le ${esc(date)}` : ''}.</p>` : '<p>Aucune version publiée pour l’instant.</p>'}<div class="cx-grid">${again}<button class="btn" data-v="news-open">${icon('bolt')}Voir les nouveautés</button></div>`;
   return `<section class="cx-sec up">${body}</section>
     <section class="cx-sec"><label class="cx-check"><input type="checkbox" data-update-auto${update.auto() ? ' checked' : ''}> Chercher les mises à jour automatiquement</label>
-    <p class="modal-hint">Au lancement puis toutes les 6 heures, Studio demande à <code>api.github.com</code> la dernière version publiée du dépôt. Rien n’est installé sans ton clic. Après une mise à jour, macOS peut redemander certains accords (trousseau, micro) : l’app n’est pas signée par un compte développeur Apple.</p></section>`;
+    <p class="modal-hint">Au lancement puis toutes les 6 heures, Studio demande à <code>api.github.com</code> la dernière version publiée du dépôt.</p>
+    <label class="cx-check"><input type="checkbox" data-update-install${update.autoInstall() ? ' checked' : ''}> Télécharger et installer automatiquement</label>
+    <p class="modal-hint">Une version trouvée est téléchargée et vérifiée en arrière-plan (même identifiant, signature intacte), puis installée quand tu relances Studio ou quand tu le quittes. Décochée, rien n’est téléchargé ni installé sans ton clic. Après une mise à jour, macOS peut redemander certains accords (trousseau, micro) : l’app n’est pas signée par un compte développeur Apple.</p></section>`;
 }
 
 function tabData() {
@@ -707,6 +719,7 @@ async function onConnClick(e: MouseEvent) {
     refreshConnections();
   }
   if (v === 'update-check') void update.check();
+  if (v === 'news-open') news.open();
   if (v === 'update-install') {
     await app.flushAll();
     const r = await update.install();
@@ -756,6 +769,7 @@ function onConnChange(e: Event): void {
   else if (t.matches('[data-autolock]')) vault.setSetting('autolock', Number(t.value));
   else if (t.matches('[data-lan]')) link.setLanOnly(t.checked);
   else if (t.matches('[data-update-auto]')) update.setAuto(t.checked);
+  else if (t.matches('[data-update-install]')) update.setAutoInstall(t.checked);
   else if (t.dataset.devRemote) void link.setRemote(t.dataset.devRemote, t.checked).then(() => toast(t.checked ? 'Cet appareil peut piloter Claude Code sur ce Mac' : 'Pilotage à distance retiré'));
   else if (t.matches('[data-nf-sys]')) { notifs.setSystem(t.checked); if (t.checked && notifs.systemState() === 'default') void notifs.askPermission().then(refreshConnections); }
 }

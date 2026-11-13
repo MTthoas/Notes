@@ -1,12 +1,15 @@
 // Mise à jour de l'app Mac depuis les Releases GitHub du dépôt (Mac uniquement).
 //
 // La version web se met à jour seule ; l'app, elle, embarque ses fichiers : il lui faut un nouveau paquet.
-// Studio lit la dernière Release publiée par la CI et, seulement à la demande de l'utilisateur, télécharge
-// Studio-macOS.zip, vérifie le paquet, remplace l'app en place et la relance.
+// Studio lit la dernière Release publiée par la CI, puis :
+//   - « download » télécharge Studio-macOS.zip en arrière-plan, le vérifie et le garde prêt ;
+//   - « install » remplace l'app par le paquet prêt (ou le prépare d'abord) et la relance ;
+//   - à la fermeture de l'app, un paquet prêt est installé sans rien demander (voir applyOnQuit).
+// La page ne demande « download » que si l'installation automatique est activée dans les réglages.
 //
-// Garde-fous : adresses fixes (ce dépôt, en HTTPS, redirections limitées à GitHub), rien n'est installé sans clic ;
-// le paquet doit porter le même identifiant que l'app en cours et une signature intacte ; l'app actuelle n'est
-// remplacée qu'une fois le nouveau paquet prêt (en cas d'échec avant cela, rien n'a changé).
+// Garde-fous : adresses fixes (ce dépôt, en HTTPS, redirections limitées à GitHub) ; le paquet doit porter
+// le même identifiant que l'app en cours et une signature intacte ; l'app actuelle n'est remplacée
+// qu'une fois le nouveau paquet prêt (en cas d'échec avant cela, rien n'a changé).
 import Foundation
 #if os(macOS)
 import AppKit
@@ -19,10 +22,17 @@ final class Updater {
     private static let assetName = "Studio-macOS.zip"
 
     private struct Release { let tag: String; let commit: String; let published: Date; let asset: URL; let notes: String; let page: String }
+    /// Paquet téléchargé et vérifié, prêt à remplacer l'app. `tmp` est son dossier temporaire, à supprimer ensuite.
+    private struct Staged { let tag: String; let app: URL; let tmp: URL }
+    private enum Prepared { case ready(Staged); case failed(String) }
+
     private let queue = DispatchQueue(label: "studio.updater")
     private var latest: Release?
     private var checkedAt = Date.distantPast
-    private var installing = false
+    private var replaced = false // l'app a été remplacée : elle se relance
+    // Le paquet prêt est lu depuis la file de l'updater et, à la fermeture, depuis le fil principal.
+    private let lock = NSLock()
+    private var staged: Staged?
 
     // Inscrits dans Info.plist à la construction (voir build-mac.sh) : le commit et l'heure du build.
     private var commit: String { Bundle.main.object(forInfoDictionaryKey: "StudioCommit") as? String ?? "" }
@@ -63,14 +73,27 @@ final class Updater {
         return p.terminationStatus
     }
 
+    // MARK: Paquet prêt
+
+    private func stagedTag() -> String? { lock.lock(); defer { lock.unlock() }; return staged?.tag }
+    private func setStaged(_ s: Staged) { lock.lock(); staged = s; lock.unlock() }
+    /// Retire le paquet prêt et le rend : un seul appelant peut ainsi l'installer.
+    private func takeStaged() -> Staged? { lock.lock(); defer { lock.unlock() }; let s = staged; staged = nil; return s }
+    private func dropStaged() { if let s = takeStaged() { try? FileManager.default.removeItem(at: s.tmp) } }
+
     // MARK: Recherche
 
+    /// Version de l'app en cours, sans rien demander au réseau.
+    func info() -> [String: Any] { ["ok": true, "current": version, "commit": String(commit.prefix(7))] }
+
     private func state(_ r: Release?) -> [String: Any] {
-        var out: [String: Any] = ["ok": true, "current": version, "commit": String(commit.prefix(7)), "available": false]
+        var out: [String: Any] = ["ok": true, "current": version, "commit": String(commit.prefix(7)), "available": false, "staged": false]
         guard let r else { return out }
         // Plus récente que cette app : construite depuis un autre commit, et publiée après ce build
         // (une app reconstruite en local depuis des sources plus récentes n'est donc pas « en retard »).
-        out["available"] = r.commit != commit && r.published > built
+        let available = r.commit != commit && r.published > built
+        out["available"] = available
+        out["staged"] = available && stagedTag() == r.tag
         out["tag"] = r.tag; out["notes"] = r.notes; out["page"] = r.page
         out["published"] = ISO8601DateFormatter().string(from: r.published)
         return out
@@ -106,54 +129,103 @@ final class Updater {
         }
     }
 
+    // MARK: Téléchargement
+
+    /// Télécharge le paquet d'une version et le vérifie. Ne touche pas à l'app en cours.
+    private func prepare(_ rel: Release) -> Prepared {
+        let fm = FileManager.default, app = Bundle.main.bundleURL.standardizedFileURL
+        guard app.pathExtension == "app", !app.path.contains("/AppTranslocation/"), fm.isWritableFile(atPath: app.deletingLastPathComponent().path) else {
+            return .failed("Studio ne peut pas se remplacer à cet endroit : place l'app dans le dossier Applications, puis réessaie.")
+        }
+        // Dossier temporaire sur le même volume que l'app, pour un remplacement direct.
+        guard let tmp = try? fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: app, create: true) else {
+            return .failed("Impossible de préparer la mise à jour.")
+        }
+        var keep = false
+        defer { if !keep { try? fm.removeItem(at: tmp) } }
+
+        let dl = get(rel.asset, accept: "application/octet-stream", timeout: 180)
+        guard dl.code == 200, let data = dl.data, data.count > 10_000, data.count < 200_000_000 else {
+            return .failed(dl.code == 0 ? "Téléchargement impossible : vérifie ta connexion." : "Téléchargement de la mise à jour impossible (réponse \(dl.code)).")
+        }
+        let zip = tmp.appendingPathComponent("Studio.zip"), out = tmp.appendingPathComponent("new", isDirectory: true)
+        guard (try? data.write(to: zip)) != nil, Self.run("/usr/bin/ditto", ["-x", "-k", zip.path, out.path]) == 0 else {
+            return .failed("Le paquet téléchargé est illisible : rien n'a été changé.")
+        }
+        try? fm.removeItem(at: zip)
+        let fresh = out.appendingPathComponent("Studio.app", isDirectory: true)
+        guard let info = NSDictionary(contentsOf: fresh.appendingPathComponent("Contents/Info.plist")),
+              let bid = info["CFBundleIdentifier"] as? String, bid == Bundle.main.bundleIdentifier,
+              Self.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", fresh.path]) == 0 else {
+            return .failed("Le paquet téléchargé n'est pas une app Studio intacte : rien n'a été changé.")
+        }
+        keep = true
+        return .ready(Staged(tag: rel.tag, app: fresh, tmp: tmp))
+    }
+
+    /// Remplace l'app en cours par le paquet prêt. Rend un message en cas d'échec.
+    private func swap(_ s: Staged) -> String? {
+        let fm = FileManager.default
+        defer { try? fm.removeItem(at: s.tmp) }
+        do { _ = try fm.replaceItemAt(Bundle.main.bundleURL.standardizedFileURL, withItemAt: s.app); return nil }
+        catch { return error.localizedDescription }
+    }
+
+    /// Télécharge et vérifie la dernière version en arrière-plan : elle sera installée à la relance ou à la fermeture.
+    func download(done: @escaping ([String: Any]) -> Void) {
+        queue.async {
+            if self.replaced { return done(["ok": true, "staged": true]) }
+            guard let rel = self.latest else { return done(["ok": false, "message": "Cherche d'abord une mise à jour."]) }
+            if self.stagedTag() == rel.tag { return done(["ok": true, "staged": true, "tag": rel.tag]) }
+            self.dropStaged() // une version plus ancienne attendait encore
+            switch self.prepare(rel) {
+            case .failed(let m): done(["ok": false, "message": m])
+            case .ready(let s): self.setStaged(s); done(["ok": true, "staged": true, "tag": rel.tag])
+            }
+        }
+    }
+
+    /// Oublie le paquet prêt (l'installation automatique vient d'être désactivée).
+    func discard(done: @escaping ([String: Any]) -> Void) {
+        queue.async { self.dropStaged(); done(["ok": true]) }
+    }
+
     // MARK: Installation
 
-    /// Télécharge la dernière version, la vérifie, remplace l'app et la relance. Toujours à la demande de l'utilisateur.
+    /// Installe la dernière version (déjà prête, ou téléchargée ici), puis relance l'app.
     func install(done: @escaping ([String: Any]) -> Void) {
         queue.async {
-            if self.installing { return done(["ok": false, "message": "Une mise à jour est déjà en cours."]) }
+            if self.replaced { return done(["ok": true, "restarting": true]) }
             guard let rel = self.latest else { return done(["ok": false, "message": "Cherche d'abord une mise à jour."]) }
-            self.installing = true
-            func fail(_ m: String) { self.installing = false; done(["ok": false, "message": m]) }
-
-            let fm = FileManager.default, app = Bundle.main.bundleURL.standardizedFileURL
-            guard app.pathExtension == "app", !app.path.contains("/AppTranslocation/"), fm.isWritableFile(atPath: app.deletingLastPathComponent().path) else {
-                return fail("Studio ne peut pas se remplacer à cet endroit : place l'app dans le dossier Applications, puis réessaie.")
+            var ready = self.takeStaged()
+            if let old = ready, old.tag != rel.tag { try? FileManager.default.removeItem(at: old.tmp); ready = nil }
+            if ready == nil {
+                switch self.prepare(rel) {
+                case .failed(let m): return done(["ok": false, "message": m])
+                case .ready(let s): ready = s
+                }
             }
-            // Dossier temporaire sur le même volume que l'app, pour un remplacement direct.
-            guard let tmp = try? fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: app, create: true) else {
-                return fail("Impossible de préparer la mise à jour.")
-            }
-            defer { try? fm.removeItem(at: tmp) }
-
-            let dl = self.get(rel.asset, accept: "application/octet-stream", timeout: 180)
-            guard dl.code == 200, let data = dl.data, data.count > 10_000, data.count < 200_000_000 else {
-                return fail(dl.code == 0 ? "Téléchargement impossible : vérifie ta connexion." : "Téléchargement de la mise à jour impossible (réponse \(dl.code)).")
-            }
-            let zip = tmp.appendingPathComponent("Studio.zip"), out = tmp.appendingPathComponent("new", isDirectory: true)
-            guard (try? data.write(to: zip)) != nil, Self.run("/usr/bin/ditto", ["-x", "-k", zip.path, out.path]) == 0 else {
-                return fail("Le paquet téléchargé est illisible : rien n'a été changé.")
-            }
-            let fresh = out.appendingPathComponent("Studio.app", isDirectory: true)
-            guard let info = NSDictionary(contentsOf: fresh.appendingPathComponent("Contents/Info.plist")),
-                  let bid = info["CFBundleIdentifier"] as? String, bid == Bundle.main.bundleIdentifier,
-                  Self.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", fresh.path]) == 0 else {
-                return fail("Le paquet téléchargé n'est pas une app Studio intacte : rien n'a été changé.")
-            }
-            do { _ = try fm.replaceItemAt(app, withItemAt: fresh) }
-            catch { return fail("Remplacement de l'app impossible : \(error.localizedDescription)") }
+            guard let pack = ready else { return done(["ok": false, "message": "Impossible de préparer la mise à jour."]) }
+            if let err = self.swap(pack) { return done(["ok": false, "message": "Remplacement de l'app impossible : \(err)"]) }
+            self.replaced = true
 
             // Relance : un petit script attend la fin de cette instance, puis rouvre l'app.
             let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/sh")
             p.arguments = ["-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open \"$2\"", "sh",
-                           String(ProcessInfo.processInfo.processIdentifier), app.path]
+                           String(ProcessInfo.processInfo.processIdentifier), Bundle.main.bundleURL.standardizedFileURL.path]
             p.standardInput = FileHandle.nullDevice; p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
             let relaunch = (try? p.run()) != nil
-            self.installing = false
             self.checkedAt = .distantPast
-            done(["ok": true, "restarting": relaunch, "tag": rel.tag])
+            done(["ok": true, "restarting": relaunch, "tag": pack.tag])
             if relaunch { DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { NSApp.terminate(nil) } }
         }
+    }
+
+    /// À la fermeture de l'app : installe le paquet prêt, sans relancer. Appelé depuis le fil principal ;
+    /// ne passe pas par la file de l'updater, qui peut être occupée par un téléchargement.
+    func applyOnQuit() {
+        guard let s = takeStaged() else { return }
+        _ = swap(s)
     }
 }
 #endif

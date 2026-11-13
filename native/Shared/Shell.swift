@@ -234,7 +234,10 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         #if os(macOS)
         let send: ([String: Any]) -> Void = { var r = $0; r["id"] = id; self.answer(r) }
         switch action {
+        case "info": send(Updater.shared.info())
         case "check": Updater.shared.check(done: send)
+        case "download": Updater.shared.download(done: send)
+        case "discard": Updater.shared.discard(done: send)
         case "install": Updater.shared.install(done: send)
         default: send(["ok": false, "message": "Action inconnue."])
         }

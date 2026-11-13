@@ -20,6 +20,7 @@ import * as home from './features/home.ts';
 import * as automations from './features/automations.ts';
 import * as help from './features/help.ts';
 import * as onboarding from './features/onboarding.ts';
+import * as news from './features/news.ts';
 import * as projectsPage from './features/projects/page.ts';
 import * as projectsModel from './features/projects/model.ts';
 import { registerBuiltins } from './plugins/builtin.ts';
@@ -205,7 +206,8 @@ function renderSidebar() {
       <div class="side-label">Explorer</div>
       <div class="side-group">${item('graph')}${item('trash')}${item('help')}</div>
     </div>
-    ${update.available() ? `<button class="side-foot side-update" data-open-conn="maj" title="Une nouvelle version de Studio est prête à être installée">${icon('download')}<span>Mise à jour disponible</span></button>` : ''}
+    ${update.ready() ? `<button class="side-foot side-update" data-open-conn="maj" title="La nouvelle version est téléchargée : elle s’installe à la relance, ou quand tu quittes Studio">${icon('refresh')}<span>Relancer pour mettre à jour</span></button>`
+      : update.available() ? `<button class="side-foot side-update" data-open-conn="maj" title="Une nouvelle version de Studio est disponible">${icon('download')}<span>Mise à jour disponible</span></button>` : ''}
     <button class="side-foot" data-open-conn="${vault.enabled() ? 'appareils' : 'coffre'}" title="Réglages (${keys(SC.settings)})">${icon(vault.isOpen() ? 'shield' : 'unlock')}<span>${vault.isOpen() ? 'Chiffré de bout en bout' : 'Non chiffré'}</span>${devs ? `<span class="side-count">${icon('devices')}${devs}</span>` : ''}</button>`;
 }
 
@@ -213,6 +215,7 @@ function workspaceMenu(anchor: HTMLElement) {
   menu(anchor, [
     { label: 'Réglages', icon: 'gear', keys: SC.settings, run: () => hub.openConnections('coffre') },
     { label: 'Aide et raccourcis', icon: 'help', run: openHelp },
+    { label: 'Nouveautés', icon: 'bolt', run: news.open },
     ...(update.supported() ? [{ label: update.available() ? 'Installer la mise à jour…' : 'Mises à jour', icon: 'download', run: () => hub.openConnections('maj') }] : []),
     '-',
     { label: 'Thème' },
@@ -825,6 +828,7 @@ function commands() {
     c('Thème : sombre', 'moon', () => setTheme('dark'), '', 'apparence dark nuit'),
     c('Afficher ou masquer la barre latérale', 'sidebar', toggleSidebar, SC.sidebar, 'sidebar'),
     c('Aide et raccourcis', 'help', openHelp, '?', 'aide help prise en main débuter comment'),
+    c('Nouveautés de Studio', 'bolt', news.open, '', 'nouveautés quoi de neuf version changements mise à jour'),
     c('Réglages', 'gear', () => hub.openConnections('coffre'), SC.settings, 'préférences paramètres options'),
   ];
 }
@@ -1186,7 +1190,8 @@ async function start() {
     selection: () => { if (!ed?.ta) return null; const { selectionStart: a, selectionEnd: b, value: v } = ed.ta, [ls] = lineBounds(v, a), [, le] = lineBounds(v, b); return { text: a === b ? v.slice(ls, le) : v.slice(a, b), end: le }; },
     insertAtLineEnd: (pos, text) => { if (ed?.ta) replaceRange(ed.ta, pos, pos, text); },
   });
-  if (!store.notes.size && !read('carnet.seeded', false)) {
+  const firstRun = !store.notes.size && !read('carnet.seeded', false);
+  if (firstRun) {
     const t = Date.now();
     for (const [i, [title, body]] of SEED.entries()) await store.createNote({ title, body, created: t - i * 1000, updated: t - i * 1000, pinned: i === 0 });
     write('carnet.seeded', true);
@@ -1212,6 +1217,8 @@ async function start() {
   }, 30000);
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
   // L'app Mac embarque ses fichiers : elle cherche ses nouvelles versions dans les Releases du dépôt (voir core/update.ts).
+  // Les nouveautés sont présentées après une mise à jour, et la relance proposée quand une version est prête (features/news.ts).
+  news.init({ setView, flushAll, firstRun });
   update.start();
 }
 start().catch(e => { console.error(e); document.body.insertAdjacentHTML('beforeend', `<div class="fatal">Studio n’a pas pu démarrer : ${esc(e.message)}.<br>Le stockage local du navigateur est peut-être désactivé (navigation privée ?).</div>`); });

@@ -91,7 +91,7 @@ studio update    # reconstruit l'app Mac depuis les sources et la réinstalle
 studio help      # aide
 ```
 
-**Mises à jour** — la version web se met à jour seule à chaque ouverture. L'app Mac, qui embarque ses fichiers, se met à jour depuis Réglages → **Mises à jour** : elle lit la dernière [Release](https://github.com/MTthoas/Studio/releases/latest) du dépôt (au lancement puis toutes les 6 heures, désactivable), le signale dans la barre latérale, et sur ton clic télécharge `Studio-macOS.zip`, vérifie le paquet (même identifiant, signature intacte), remplace l'app et la relance. Rien n'est installé sans clic. L'app n'étant pas signée par un compte développeur Apple, macOS peut redemander certains accords (trousseau, micro) après une mise à jour. `studio update` reste la voie pour installer ce que tu as modifié en local.
+**Mises à jour** — la version web se met à jour seule à chaque ouverture. L'app Mac, qui embarque ses fichiers, se met à jour toute seule : elle lit la dernière [Release](https://github.com/MTthoas/Studio/releases/latest) du dépôt (au lancement puis toutes les 6 heures), télécharge `Studio-macOS.zip` en arrière-plan et vérifie le paquet (même identifiant, signature intacte). Une fenêtre propose alors de relancer ; sinon la nouvelle version s'installe quand tu quittes l'app. Les deux automatismes (chercher, installer) se désactivent dans Réglages → **Mises à jour** : rien n'est alors téléchargé ni installé sans ton clic. Après une mise à jour, Studio présente ce qui change, une nouveauté après l'autre (à revoir depuis le menu Studio → **Nouveautés**). L'app n'étant pas signée par un compte développeur Apple, macOS peut redemander certains accords (trousseau, micro) après une mise à jour. `studio update` reste la voie pour installer ce que tu as modifié en local.
 
 ## Fonctionnalités
 
@@ -271,7 +271,7 @@ src/                               TypeScript strict
     biometric.ts      pont vers Touch ID / Face ID de l'app native
     events.ts         bus d'événements : les sources annoncent, les automatisations s'abonnent
     native.ts         pont générique vers l'app native (inactif dans un navigateur)
-    update.ts         mise à jour de l'app Mac depuis les Releases du dépôt
+    update.ts         mise à jour automatique de l'app Mac depuis les Releases du dépôt
   features/         pages et fonctions de l'app
     home.ts           accueil
     tasks.ts          tâches, sous-tâches, échéances, tickets Linear
@@ -280,6 +280,7 @@ src/                               TypeScript strict
     hub.ts            réglages, coffre, agents, blocs spéciaux, liaison d'appareils
     projects/         model.ts (bloc ```projet, tags), page.ts (cockpit), flux.ts,
                       review.ts (revue IA), sessions.ts (agents Claude Code, publication)
+    news.ts           nouveautés présentées après une mise à jour, fenêtre « mise à jour prête »
     automations.ts, help.ts, onboarding.ts
   integrations/     services extérieurs, appelés directement depuis l'app
     ai.ts             Claude, OpenAI, modèle local : boucle d'agent et outils
