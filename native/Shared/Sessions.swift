@@ -124,7 +124,13 @@ final class ClaudeSessions {
             let files = self.files(for: folder).prefix(25)
             if files.isEmpty { return done(["ok": true, "sessions": [], "found": false]) }
             var out: [[String: Any]] = [], quota: [String: Any]? = nil
-            for f in files { if let st = self.refresh(f) { out.append(self.summary(f, st)); if quota == nil { quota = st.quota } } }
+            // L'état de la limite n'est écrit que lorsqu'elle est atteinte : on ignore celui dont l'heure de réinitialisation est passée.
+            let now = Date().timeIntervalSince1970
+            for f in files {
+                guard let st = self.refresh(f) else { continue }
+                out.append(self.summary(f, st))
+                if quota == nil, let q = st.quota, ((q["resetsAt"] as? Double) ?? (q["resetsAt"] as? Int).map(Double.init) ?? 0) > now { quota = q }
+            }
             done(["ok": true, "found": true, "sessions": out, "quota": quota ?? NSNull()])
         }
     }
