@@ -55,7 +55,14 @@ final class ClaudeSessions {
         switch e["type"] as? String ?? "" {
         case "ai-title": if let t = e["aiTitle"] as? String { st.title = t }
         case "user":
-            guard (e["isMeta"] as? Bool) != true, let m = e["message"] as? [String: Any], let c = m["content"] as? String else { return }
+            guard (e["isMeta"] as? Bool) != true, let m = e["message"] as? [String: Any] else { return }
+            // La consigne d'un sous-agent peut être écrite en blocs de texte plutôt qu'en une seule chaîne.
+            var content = m["content"] as? String
+            if content == nil, (e["isSidechain"] as? Bool) == true, let blocks = m["content"] as? [[String: Any]],
+               !blocks.isEmpty, blocks.allSatisfy({ $0["type"] as? String == "text" }) {
+                content = blocks.compactMap { $0["text"] as? String }.joined(separator: "\n")
+            }
+            guard let c = content else { return }
             let text = c.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty, !text.hasPrefix("<") else { return }
             st.prompts += 1; st.lastPrompt = clip(text, 300)
@@ -145,6 +152,65 @@ final class ClaudeSessions {
             var r = self.summary(f, st)
             r["ok"] = true
             r["actions"] = st.actions.suffix(80).map { ["at": $0.at, "kind": $0.kind, "text": $0.text] }
+            r["subagents"] = self.subagents(folder, session)
+            done(r)
+        }
+    }
+
+    // MARK: Sous-agents
+
+    // Claude Code écrit la conversation de chaque sous-agent d'une session dans
+    // <session>/subagents/agent-<id>.jsonl, à côté du journal de la session, avec parfois une fiche
+    // agent-<id>.meta.json (type d'agent, description de la tâche). Lecture seule, comme le reste.
+    private var metas: [String: (type: String, title: String)] = [:]
+
+    private func subagentFiles(_ project: String, _ session: String) -> [URL] {
+        guard let f = file(project, session) else { return [] }
+        let dir = f.deletingPathExtension().appendingPathComponent("subagents", isDirectory: true)
+        return ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+            .filter {
+                let n = $0.lastPathComponent
+                // Les conversations internes de Claude Code (compactage, suggestions) ne sont pas des sous-agents.
+                return $0.pathExtension == "jsonl" && n.hasPrefix("agent-") && !n.hasPrefix("agent-acompact") && !n.hasPrefix("agent-aprompt_suggestion")
+            }
+            .sorted { self.mtime($0) > self.mtime($1) }
+    }
+    private func agentID(_ url: URL) -> String { String(url.deletingPathExtension().lastPathComponent.dropFirst(6)) }
+
+    private func subSummary(_ url: URL, _ st: State) -> [String: Any] {
+        let id = agentID(url)
+        var meta = metas[url.path]
+        if meta == nil {
+            let m = url.deletingLastPathComponent().appendingPathComponent("agent-\(id).meta.json")
+            if let d = try? Data(contentsOf: m), d.count < 100_000, let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                meta = (type: clip(j["agentType"] as? String ?? "", 40), title: clip((j["description"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines), 80))
+                metas[url.path] = meta
+            }
+        }
+        let title = meta?.title.isEmpty == false ? meta!.title : st.firstPrompt.isEmpty ? "Sous-agent" : clip(st.firstPrompt, 80)
+        return ["id": id, "title": title, "type": meta?.type ?? "", "started": st.started, "updated": st.updated,
+                "live": Date().timeIntervalSince(mtime(url)) < 45, "tokens": st.tokOut,
+                "steps": st.tools.values.reduce(0, +)]
+    }
+
+    /// Sous-agents d'une session, dans l'ordre où ils ont été lancés (les 60 plus récents).
+    private func subagents(_ project: String, _ session: String) -> [[String: Any]] {
+        subagentFiles(project, session).prefix(60)
+            .compactMap { f in self.refresh(f).map { self.subSummary(f, $0) } }
+            .sorted { ($0["started"] as? String ?? "") < ($1["started"] as? String ?? "") }
+    }
+
+    /// Fil d'un sous-agent : sa consigne, ses réponses et ses outils, et la liste de ses voisins dans la session.
+    func subagent(project folder: String, session: String, agent: String, done: @escaping ([String: Any]) -> Void) {
+        queue.async {
+            guard !agent.isEmpty, agent.count <= 80, agent.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }),
+                  let f = self.subagentFiles(folder, session).first(where: { self.agentID($0) == agent }),
+                  let st = self.refresh(f) else { return done(["ok": false, "message": "Sous-agent introuvable."]) }
+            var r = self.summary(f, st)
+            r["ok"] = true
+            r["agent"] = self.subSummary(f, st)
+            r["actions"] = st.actions.suffix(80).map { ["at": $0.at, "kind": $0.kind, "text": $0.text] }
+            r["subagents"] = self.subagents(folder, session)
             done(r)
         }
     }

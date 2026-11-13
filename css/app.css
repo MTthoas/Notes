@@ -1127,6 +1127,21 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .side-sub3 { height: 24px; gap: 8px; padding-left: 56px; font-weight: 400; font-size: var(--t-1); color: var(--text-2); }
 .side-sub3 .ss-live { width: 6px; height: 6px; }
 .side-sub3.sel { font-weight: 500; }
+/* Sous-agents épinglés (ou ouvert) d'une conversation */
+.side-sub4 { height: 22px; gap: 8px; padding-left: 72px; font-weight: 400; font-size: var(--t-1); color: var(--text-3); }
+.side-sub4 .ss-live { width: 5px; height: 5px; }
+.side-sub4.sel { color: var(--text); font-weight: 500; }
+.crumb > button[data-pj-talk] { min-width: 0; max-width: 26ch; }
+/* Sous-agents d'une conversation : une pastille par fil, celle affichée en surbrillance */
+.ss-subs { display: flex; flex-wrap: wrap; gap: 6px; max-height: 132px; margin: 0 0 14px; overflow-y: auto; }
+.ss-sub { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; height: 26px; padding: 0 9px; border: 1px solid var(--border-2); border-radius: 6px; color: var(--text-2); font-size: var(--t-1); }
+.ss-sub:hover, .ss-sub.sel { color: var(--text); background: var(--btn); }
+.ss-sub.sel { border-color: var(--c-orange); font-weight: 500; }
+.ss-sub > span { max-width: 34ch; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ss-sub > em { color: var(--text-3); font-style: normal; white-space: nowrap; }
+.ss-sub .ss-live { width: 6px; height: 6px; }
+.ss-sub .ic { flex: none; width: 11px; height: 11px; color: var(--c-orange); }
+.ss-dhead .ss-pin.on, .ss-dhead .ss-pin.on .ic { color: var(--c-orange); }
 .pj-tabs { margin: 6px 0 0; overflow-x: auto; scrollbar-width: none; }
 .pj-tabs::-webkit-scrollbar { display: none; }
 .pj-tabs button { flex: none; }
