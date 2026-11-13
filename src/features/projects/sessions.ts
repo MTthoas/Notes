@@ -5,6 +5,7 @@ import * as native from '../../core/native.ts';
 import * as bridge from '../../integrations/remote.ts';
 import * as usage from '../../integrations/usage.ts';
 import * as ai from '../../integrations/ai.ts';
+import * as tuning from '../../integrations/tuning.ts';
 import * as github from '../../integrations/github/api.ts';
 import { esc, renderMarkdown } from '../../lib/markdown.ts';
 import { icon, rel, modal, need, toast, confirmBox, errMsg, $ } from '../../ui/kit.ts';
@@ -162,16 +163,15 @@ function neat(text: string, max = 60): string {
 type Nameable = Pick<Session, 'id' | 'title' | 'aiTitle' | 'firstPrompt' | 'prompts'>;
 const nameOf = (s: Nameable): string => titles[s.id]?.t || s.aiTitle || (s.firstPrompt ? neat(s.firstPrompt) : '') || neat(s.title) || 'Conversation';
 
-const TITLE_SYSTEM = `Tu donnes un nom à une conversation entre un développeur et un agent de code, comme dans la liste des conversations d’un assistant IA.
-Réponds uniquement par le nom : 3 à 7 mots, dans la langue des demandes, sans guillemets, sans point final, sans préfixe.
-Il résume le sujet de toute la conversation, pas seulement la dernière demande. Ignore les demandes de pure forme (« continue », « ok », « résous le conflit »).`;
+// La consigne du nom, le modèle utilisé et la fréquence se règlent dans Réglages → Consignes et contexte (tuning.ts).
 let naming = false;
 const nameFailed = new Map<string, number>();
-/** Faut-il (re)nommer cette conversation ? Oui si elle n'a pas de nom, ou si elle a avancé depuis et que l'agent a fini de répondre. */
+/** Faut-il (re)nommer cette conversation ? Oui si elle n'a pas de nom, ou si elle a avancé depuis et que l'agent a fini
+ *  de répondre. Par défaut, seulement quand elle a doublé (2, 4, 8… demandes) : chaque nom est un appel à l'IA. */
 function wantsName(s: Nameable, working: boolean): boolean {
   if (!s.id || s.aiTitle || !s.prompts || !ai.ready()) return false;
-  const have = titles[s.id];
-  if (have && (s.prompts <= have.n || working)) return false;
+  const have = titles[s.id], mode = tuning.text('small.rename');
+  if (have && (mode === 'once' || working || s.prompts < (mode === 'each' ? have.n + 1 : Math.max(have.n + 1, have.n * 2)))) return false;
   return Date.now() - (nameFailed.get(s.id) ?? 0) > 3e5;
 }
 /** Demande un nom à l'IA, d'après les demandes de l'utilisateur et la dernière réponse. Une conversation à la fois. */
@@ -188,7 +188,7 @@ async function nameSession(p: Project, s: Nameable, actions?: Action[]): Promise
     const picked = asks.length > 7 ? [...asks.slice(0, 2), ...asks.slice(-5)] : asks;
     const last = [...actions].reverse().find(a => a.kind === 'text')?.text.slice(0, 600) ?? '', have = titles[s.id];
     const user = `Demandes de l’utilisateur, dans l’ordre :\n${picked.map((a, i) => `${i + 1}. ${a}`).join('\n')}${last ? `\n\nDernière réponse de l’agent (extrait) :\n${last}` : ''}${have ? `\n\nNom actuel : ${have.t}\nGarde-le tel quel s’il résume toujours la conversation ; sinon adapte-le.` : ''}`;
-    const t = neat((await ai.complete(TITLE_SYSTEM, user)).replace(/^(nom|titre)\s*:\s*/i, ''), 70).replace(/[.\s]+$/, '');
+    const t = neat((await ai.complete(tuning.text('small.title'), user, { light: tuning.on('small.names') })).replace(/^(nom|titre)\s*:\s*/i, ''), 70).replace(/[.\s]+$/, '');
     if (!t) { nameFailed.set(s.id, Date.now()); return; }
     delete titles[s.id]; titles[s.id] = { t, n: s.prompts }; saveTitles();
     if (s.id === selected) selTitle = t;
@@ -200,7 +200,6 @@ async function nameSession(p: Project, s: Nameable, actions?: Action[]): Promise
 // ---------- Notes jointes ----------
 // Une note du projet peut servir de contexte ou de cahier des charges : son contenu est ajouté à la consigne.
 // Les notes chiffrées ou marquées #privé ne sont jamais envoyées.
-const MAX_NOTE = 20000, MAX_ALL = 60000;
 let pending: { project: string; notes: string[]; prompt: string } | null = null;
 const titleOf = (id: string) => store.get(id)?.title.trim() || 'Sans titre';
 const chip = (id: string) => `<span class="ag-note" data-note-id="${esc(id)}">${icon('notes')}${esc(titleOf(id))}<button type="button" data-ag-unnote="${esc(id)}" aria-label="Retirer la note">×</button></span>`;
@@ -213,6 +212,7 @@ export function handoff(p: Project, { notes = [] as string[], prompt = '' } = {}
 /** Consigne finale : le texte de l'utilisateur, puis le contenu des notes jointes. */
 function withNotes(prompt: string, ids: string[]): { text: string; refused: string[] } {
   const parts: string[] = [], refused: string[] = []; let total = 0;
+  const MAX_NOTE = tuning.num('ctx.attach'), MAX_ALL = tuning.num('ctx.attachAll');
   for (const id of ids) {
     const n = store.get(id), body = n ? store.getBody(n) : null;
     if (!n || body == null || !ai.shareable(n)) { refused.push(titleOf(id)); continue; }
@@ -709,12 +709,7 @@ function cleanMessage(raw: string, fallbackType: string): string {
   const detail = lines.slice(1).find(l => !COMMIT_RE.test(l));
   return detail ? `${subject}\n\n${detail.slice(0, 160)}` : subject;
 }
-const COMMIT_SYSTEM = `Tu écris des messages de commit au format Conventional Commits.
-Réponds uniquement par le message, sans guillemets, sans bloc de code, sans explication.
-Ligne 1 : type(portée): résumé — types : feat, fix, chore, docs, refactor, test, perf, style, build, ci ; portée facultative et courte ; 72 caractères au plus ; à l’impératif ; sans point final.
-Ligne 2 (facultative) : une seule phrase de détail, seulement si elle apporte quelque chose.
-Écris dans la même langue que les commits récents du dépôt, et dans le même style.
-Décris ce que fait le diff dans son ensemble. La consigne n'est qu'un contexte, ne la recopie et ne la paraphrase jamais : elle peut être une simple demande de suivi (« résous le conflit », « continue ») ; ne parle jamais de conflit, de fusion ni de l'agent.`;
+// La consigne du message de commit et la taille du diff envoyé se règlent dans Réglages → Consignes et contexte.
 async function suggestMessage(p: Project, wt: string, run: AgentRun | undefined, forceAI = false): Promise<{ draft: string; fromAgent: boolean; ai: Promise<string> | null; files: string[] }> {
   const d = await native.call('project', 'diff', { project: p.id, scope: 'working', worktree: wt }, 30000);
   const stat = String(d.stat ?? ''), files = statFiles(stat), prompt = run?.prompt ?? wt.replace(/^studio-|-\d{4}-\d{4}$/g, '').replace(/-/g, ' ');
@@ -726,8 +721,8 @@ async function suggestMessage(p: Project, wt: string, run: AgentRun | undefined,
   const fromAgent = runs.filter(r => r.worktree === wt && r.result).map(r => fresh(agentMessage(r.result))).find(Boolean) || fresh(await sessionMessage(p, wt));
   const draft = fromAgent || draftMessage(prompt, files);
   if ((fromAgent && !forceAI) || !d.ok || !ai.ready() || !String(d.patch ?? '').trim()) return { draft, fromAgent: !!fromAgent, ai: null, files };
-  const user = `Consigne donnée à l’agent : ${prompt}\n\n${run?.result ? `Compte rendu de l’agent :\n${run.result.slice(0, 1500)}\n\n` : ''}Commits récents du dépôt :\n${String(d.log ?? '').trim() || '(aucun)'}\n\nFichiers modifiés :\n${stat}\n\nDiff (extrait) :\n\`\`\`diff\n${String(d.patch).slice(0, 20000)}\n\`\`\``;
-  return { draft, fromAgent: !!fromAgent, files, ai: ai.complete(COMMIT_SYSTEM, user).then(t => cleanMessage(t, guessType(prompt, files))) };
+  const user = `Consigne donnée à l’agent : ${prompt}\n\n${run?.result ? `Compte rendu de l’agent :\n${run.result.slice(0, 1500)}\n\n` : ''}Commits récents du dépôt :\n${String(d.log ?? '').trim() || '(aucun)'}\n\nFichiers modifiés :\n${stat}\n\nDiff (extrait) :\n\`\`\`diff\n${String(d.patch).slice(0, tuning.num('ctx.diff'))}\n\`\`\``;
+  return { draft, fromAgent: !!fromAgent, files, ai: ai.complete(tuning.text('small.commit'), user, { light: tuning.on('small.commits') }).then(t => cleanMessage(t, guessType(prompt, files))) };
 }
 
 /** Nom de branche conventionnel tiré du titre du commit : « feat(tasks): add parser tests » → feat/tasks-add-parser-tests. */

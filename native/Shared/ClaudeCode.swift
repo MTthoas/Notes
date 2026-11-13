@@ -64,6 +64,8 @@ final class ClaudeCode {
         var env = ProcessInfo.processInfo.environment
         env["DISABLE_AUTOUPDATER"] = "1"
         env["NO_COLOR"] = "1"
+        // Pas d'appels au modèle pour l'accessoire, sauf réglage contraire (Réglages → Consignes et contexte).
+        if AgentTuning.lean { env["DISABLE_NON_ESSENTIAL_MODEL_CALLS"] = "1" }
         p.environment = env
         let out = Pipe(), input = Pipe()
         p.standardOutput = out; p.standardError = FileHandle.nullDevice
