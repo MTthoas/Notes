@@ -25,6 +25,7 @@ import * as onboarding from './features/onboarding.ts';
 import * as news from './features/news.ts';
 import * as projectsPage from './features/projects/page.ts';
 import * as projectsModel from './features/projects/model.ts';
+import * as agentItems from './features/projects/items.ts';
 import { registerBuiltins } from './plugins/builtin.ts';
 import * as plugins from './plugins/registry.ts';
 import * as caret from './ui/caret.ts';
@@ -1218,6 +1219,8 @@ async function start() {
   if (matchMedia('(max-width: 900px)').matches) ui.side = false;
   render();
   notifs.init(shared); github.init(shared);
+  // Notes et tâches envoyées par les agents Claude Code à leur projet (app Mac) : créées ici, à leur arrivée.
+  agentItems.init(shared);
   if (voice.available()) document.body.insertAdjacentHTML('beforeend', `<button class="fab-mic" data-act="voice" aria-label="Note vocale">${icon('mic')}</button>`);
   for (const g of gone.filter(g => g.expired)) toast(`« ${g.title.trim() || 'Sans titre'} » s’est autodétruite`);
   const params = new URLSearchParams(location.search);

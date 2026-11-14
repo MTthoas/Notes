@@ -64,6 +64,12 @@ enum Shell {
             web.isInspectable = ProcessInfo.processInfo.environment["CARNET_DEBUG"] != nil
         }
         coordinator.web = web
+        #if os(macOS)
+        // Un agent a envoyé des notes ou des tâches à son projet : la page vient les chercher (agent.items).
+        _ = NotificationCenter.default.addObserver(forName: AgentItems.changed, object: nil, queue: .main) { [weak web] _ in
+            web?.evaluateJavaScript("window.carnet && window.carnet.agentItems && window.carnet.agentItems()", completionHandler: nil)
+        }
+        #endif
         web.navigationDelegate = coordinator
         web.uiDelegate = coordinator
         return web
@@ -194,6 +200,9 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         case "tuning": AgentTuning.apply(body); send(AgentTuning.state())
         // Ce que les agents ont le droit de faire (Réglages → Autorisations) : lecture, modification, retour à l'origine.
         case "permissions": send(AgentPermissions.apply(body))
+        // Notes et tâches envoyées par les agents à leur projet : la page les lit, les crée, puis confirme (AgentItems).
+        case "items": send(AgentItems.list())
+        case "itemsDone": send(AgentItems.done(body["run"] as? String ?? ""))
         case "unqueue": send(Agents.shared.unqueue(project: pid, id: body["queued"] as? String ?? ""))
         case "stop": send(Agents.shared.stop(body["run"] as? String ?? ""))
         case "worktrees": bg { folders.worktrees(pid) }

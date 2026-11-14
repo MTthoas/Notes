@@ -38,6 +38,11 @@ interface Item {
 
 // Les plus récentes d'abord.
 const NEWS: Item[] = [
+  { id: 'agent-project-items', date: '2026-11-14', mac: true, icon: 'check', hue: 'green',
+    title: 'Tes agents ajoutent des tâches et des notes à leur projet',
+    text: 'Demande à un agent Claude Code de noter une suite à donner ou une décision : il l’ajoute au projet d’où il est lancé, en tâche (avec une échéance, au besoin) ou en note. Studio les crée quand il a fini, sans jamais toucher à l’existant. Un interrupteur dans Réglages → Autorisations des agents permet de le couper.',
+    points: ['Tâches', 'Notes', 'Dans le projet'],
+    go: { label: 'Voir les autorisations', view: { type: 'settings', tab: 'autorisations' } } },
   { id: 'agent-stages', date: '2026-11-14', icon: 'pr', hue: 'blue',
     title: 'Vois d’un coup d’œil où en sont tes agents',
     text: 'Le panneau Claude Code range le travail des agents par étape : au travail, à publier, PR ouverte, fusionné. Chaque étape a sa couleur, jusque dans la liste des sessions et la barre latérale ; ce qui est livré s’efface.',

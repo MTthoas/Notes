@@ -188,6 +188,7 @@ Si l'agent ne parvient pas à résoudre, la publication s'arrête et te donne la
 - **Commandes** : celles que permet la case **Commandes**, une par ligne, au format des règles de Claude Code (`npm run *`, `cargo test *`, `npm ci`…). Par défaut `npm test` et `npm run …`. L'agent reçoit la liste dans sa consigne ; une commande hors liste est refusée, et le nombre d'actions refusées s'affiche sous son fil, avec un lien vers ce réglage. Claude Code laisse toujours passer de lui-même quelques commandes en lecture seule (`ls`, `whoami`…). Une réponse dans la discussion garde les commandes du tour précédent.
 - **Toutes les commandes** (terminal sans restriction) et **Aussi en mode Analyser** (qui travaille dans le dossier du projet, pas dans une copie) : désactivés par défaut, avec un avertissement.
 - **Web** : recherche et lecture de pages (`WebSearch`, `WebFetch`), désactivé par défaut.
+- **Notes et tâches du projet** : activé par défaut. L'agent peut ajouter des tâches et des notes au projet d'où il est lancé : il les écrit à la fin de son compte rendu, dans un bloc `studio-tâches` (une tâche par ligne, échéance facultative comme « demain » ou `@2026-12-01`) ou `studio-note Titre`, et Studio les crée quand il a fini, avec le tag du projet. Les blocs sont retirés du compte rendu, la carte de l'agent dit ce qui a été ajouté, et rien d'existant n'est modifié ni supprimé. Au plus 20 tâches et 5 notes par tour. Cela ne donne aucun outil de plus à Claude Code. Si la note « Tâches » est verrouillée, elles attendent son déverrouillage.
 - **Dossiers des outils** : ajoutés en tête du `PATH` des agents. Ouvert depuis le Dock, Studio n'a qu'un PATH minimal : un agent ne trouverait pas `cargo` ni les outils de Homebrew.
 
 Ces réglages restent sur le Mac. Un appareil lié ne peut ni les lire ni les modifier, ni demander les commandes ; un agent lancé sur un serveur n'a jamais de commandes.
@@ -309,9 +310,9 @@ src/                               TypeScript strict
     hub.ts            réglages, coffre, agents, blocs spéciaux, liaison d'appareils
     projects/         model.ts (bloc ```projet, tags), page.ts (cockpit), flux.ts,
                       review.ts (revue IA), sessions.ts (agents Claude Code, publication),
-                      site.ts (site du projet lancé en local)
+                      items.ts (notes et tâches créées par les agents), site.ts (site du projet lancé en local)
     news.ts           nouveautés présentées après une mise à jour, fenêtre « mise à jour prête »
-    permissions.ts    réglages des autorisations des agents Claude Code (commandes, web, PATH), gardés sur le Mac
+    permissions.ts    réglages des autorisations des agents Claude Code (commandes, web, notes et tâches, PATH), gardés sur le Mac
     automations.ts, help.ts, onboarding.ts
   integrations/     services extérieurs, appelés directement depuis l'app
     ai.ts             Claude, OpenAI, modèle local : boucle d'agent et outils

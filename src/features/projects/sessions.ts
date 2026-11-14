@@ -21,7 +21,7 @@ interface Tokens { input: number; output: number; cacheRead: number; cacheWrite:
 interface Session { id: string; title: string; /** Titre écrit par Claude Code lui-même, s'il y en a un. */ aiTitle?: string; firstPrompt?: string; branch: string; worktree: string; started: string; updated: string; /** Dernier vrai échange (absent avec une app Mac ancienne). */ active?: string; live: boolean; models: string[]; prompts: number; lastPrompt: string; tokens: Tokens; tools: Record<string, number>; files: string[] }
 interface Quota { status?: string; resetsAt?: number; rateLimitType?: string; isUsingOverage?: boolean }
 interface Action { at: string; kind: string; text: string }
-export interface AgentRun { machine?: string; host?: string; run: string; mode: string; prompt: string; status: string; session: string; worktree: string; started: string; finished: string; result: string; lastText: string; turns: number; denials: string[]; quota?: Quota | null }
+export interface AgentRun { machine?: string; host?: string; run: string; mode: string; prompt: string; status: string; session: string; worktree: string; started: string; finished: string; result: string; lastText: string; turns: number; denials: string[]; quota?: Quota | null; /** Notes et tâches envoyées au projet par ce tour (features/projects/items.ts). */ items?: { tasks?: number; notes?: number } }
 interface Worktree {
   name: string; branch: string; changes: number; ahead: number; behind?: number; pushed: boolean; conflicts?: string[];
   /** Titre du dernier commit de la copie, si elle en a un. */ subject?: string;
@@ -514,6 +514,14 @@ function sessionStage(s: Pick<Session, 'id' | 'worktree'>): Stage | '' {
 const stageVar = (st: Stage) => `--c:var(--c-${STAGES[st].c})`;
 const stageBadge = (st: Stage) => `<span class="ag-stage st-${st}" style="${stageVar(st)}">${icon(STAGES[st].ic)}${STAGES[st].l}</span>`;
 
+/** Ce que le tour a ajouté au projet (notes et tâches, Réglages → Autorisations). */
+function sentHTML(r: AgentRun): string {
+  const t = r.items?.tasks ?? 0, n = r.items?.notes ?? 0;
+  if (live(r) || (!t && !n)) return '';
+  const what = [t ? `${t} tâche${t > 1 ? 's' : ''}` : '', n ? `${n} note${n > 1 ? 's' : ''}` : ''].filter(Boolean).join(' et ');
+  return `<p class="ag-sent">${icon('check')}${esc(what)} ajoutée${t + n > 1 ? 's' : ''} au projet</p>`;
+}
+
 function runCard(r: AgentRun): string {
   // Agent terminé dans une copie : on montre où en est son travail (à publier, PR, fusionné) plutôt qu'un simple « Terminé ».
   const w = !live(r) && r.status === 'done' && r.worktree ? trees.find(t => t.name === r.worktree) : undefined;
@@ -523,6 +531,7 @@ function runCard(r: AgentRun): string {
     <p class="ag-prompt">${esc(r.prompt)}</p>
     ${live(r) && r.lastText ? `<p class="ag-last">${esc(r.lastText)}</p>` : ''}
     ${!live(r) && r.result ? `<p class="ag-last">${esc(r.result.replace(/[#*`>]/g, '').slice(0, 220))}</p>` : ''}
+    ${sentHTML(r)}
     ${r.denials.length ? `<p class="ag-denied" title="${esc(r.denials.join('\n'))}">${icon('shield')}${r.denials.length} action${r.denials.length > 1 ? 's' : ''} refusée${r.denials.length > 1 ? 's' : ''} par les garde-fous${bridge.local() ? ' · <button type="button" class="link-btn" data-open-conn="autorisations">Régler les autorisations</button>' : ''}</p>` : ''}
     <footer>${r.worktree ? `<code>${esc(r.worktree)}</code>` : ''}${r.session ? `<button class="btn" data-ss="${esc(r.session)}">${icon('eye')}Suivre</button>` : ''}${live(r) ? `<button class="btn" data-ag="stop" data-run="${esc(r.run)}">${icon('stop')}Arrêter</button>` : ''}</footer></article>`;
 }

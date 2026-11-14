@@ -9,6 +9,8 @@ interface Window {
     voice(payload: unknown): void;
     bio(payload: unknown): void;
     reply(payload: unknown): void;
+    /** L'app Mac : un agent a envoyé des notes ou des tâches à son projet (features/projects/items.ts). */
+    agentItems?(): void;
   };
 }
 

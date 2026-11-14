@@ -473,7 +473,7 @@ const TABS: [string, string, string, string][] = [
   ['coffre', 'shield', 'Sécurité', 'Chiffrement de tout le carnet, déverrouillage et verrouillage automatique.'],
   ['ia', 'sparkle', 'Intelligence artificielle', 'Ton abonnement Claude via Claude Code, ou une clé Claude, OpenAI, ou un modèle local.'],
   ['consignes', 'gear', 'Consignes et contexte', 'Tout ce que Studio envoie à l’IA en plus de ta demande : consignes, limites de contexte, modèles. Modifiable, et rétablissable d’un clic.'],
-  ['autorisations', 'terminal', 'Autorisations des agents', 'Ce que les agents Claude Code des projets ont le droit de faire sur ce Mac : commandes, accès au web, dossiers des outils.'],
+  ['autorisations', 'terminal', 'Autorisations des agents', 'Ce que les agents Claude Code des projets ont le droit de faire sur ce Mac : commandes, accès au web, notes et tâches du projet, dossiers des outils.'],
   ['linear', 'linear', 'Linear', 'Tickets, projets et notifications Linear, sans intermédiaire.'],
   ['github', 'github', 'GitHub', 'L’actualité de tes dépôts, en lecture seule.'],
   ['extensions', 'plug', 'Extensions', 'Des fonctions en plus, à activer une par une : Spotify, n8n… Tout tourne sur cet appareil, sans serveur.'],
