@@ -38,6 +38,10 @@ interface Item {
 
 // Les plus récentes d'abord.
 const NEWS: Item[] = [
+  { id: 'docker', date: '2026-11-14', mac: true, icon: 'box', hue: 'blue',
+    title: 'Tes conteneurs Docker, dans tes projets',
+    text: 'Chaque projet a un onglet Docker : ses conteneurs en cours ou arrêtés, leurs ports à ouvrir d’un clic, ceux qu’un agent a lancés depuis sa copie, et les images construites pour lui. L’accueil liste les conteneurs qui tournent sur ton Mac, avec leur projet. En lecture seule : Studio ne lance ni n’arrête rien.',
+    points: ['Conteneurs', 'Images', 'Par projet'], go: { label: 'Voir mes projets', view: { type: 'projets' } } },
   { id: 'agent-stages', date: '2026-11-14', icon: 'pr', hue: 'blue',
     title: 'Vois d’un coup d’œil où en sont tes agents',
     text: 'Le panneau Claude Code range le travail des agents par étape : au travail, à publier, PR ouverte, fusionné. Chaque étape a sa couleur, jusque dans la liste des sessions et la barre latérale ; ce qui est livré s’efface.',

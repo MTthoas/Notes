@@ -10,6 +10,7 @@ import * as github from '../integrations/github/api.ts';
 import * as voice from './voice.ts';
 import * as hub from './hub.ts';
 import * as onboarding from './onboarding.ts';
+import * as docker from './projects/docker.ts';
 import { esc, plain } from '../lib/markdown.ts';
 import { $, icon, rel, need, target } from '../ui/kit.ts';
 import type { AppShell, Note } from '../types.ts';
@@ -92,6 +93,7 @@ export function mount(main: HTMLElement): void {
       <div class="hm-col">
         ${linked ? section('Quoi de neuf', feed()) : ''}
         ${section('Automatisations', hasAgents ? agents() : `<p class="hm-empty">Fais travailler Studio pour toi : une revue chaque matin, le tri des captures, tes notifications Linear changées en tâches…</p><button class="btn" data-view="agents">${icon('bot')}Choisir un modèle</button>`, { view: 'agents' })}
+        ${docker.supported() ? '<div data-hm-docker></div>' : ''}
         ${section('Connexions', connections(), { meta: devs.length ? `<button class="hm-link" data-home="sync">Synchroniser</button>` : '' })}
       </div>
     </div>
@@ -99,5 +101,10 @@ export function mount(main: HTMLElement): void {
   need('.hm-capture', main).onsubmit = async e => { e.preventDefault(); const i = need<HTMLInputElement>('input', target(e)); if (!i.value.trim()) return; await app.capture(i.value); i.value = ''; };
   need('[data-ask-home]', main).onclick = () => hub.askAI();
   $('[data-ob-dismiss]', main)?.addEventListener('click', () => { onboarding.dismiss(); mount(main); });
-  need('.home', main).addEventListener('click', e => { const f = target(e).closest('[data-feed-issue]'); if (f) void import('../integrations/linear/page.ts').then(m => m.openTicket(f.dataset.feedIssue ?? '')); });
+  need('.home', main).addEventListener('click', e => {
+    const f = target(e).closest('[data-feed-issue]'); if (f) void import('../integrations/linear/page.ts').then(m => m.openTicket(f.dataset.feedIssue ?? ''));
+    const d = target(e).closest('[data-dk-project]'); if (d) void app.setView({ type: 'projets', project: d.dataset.dkProject ?? null, tab: 'docker' });
+  });
+  // Docker (app Mac) : les conteneurs en cours, avec leur projet ; rien si Docker n'est pas là.
+  void docker.status().then(st => { const box = $('[data-hm-docker]', main), h = docker.homeHTML(st); if (box?.isConnected) box.outerHTML = h ? section('Docker', h.body, { meta: h.meta }) : ''; });
 }

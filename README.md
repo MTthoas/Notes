@@ -147,6 +147,7 @@ Une note ou une tâche y appartient avec le tag `#projet/studio` — posé par l
 | **Code** | Dossier local, branches locales (avance / retard), PR et activité, **revue IA** des changements en cours ou de la branche ; ouverture dans VS Code, le Finder ou le Terminal |
 | **Flux** | Le parcours de chaque branche façon gitflow : en cours → PR ouverte → prête à fusionner → fusionnée → publiée (Release), avec CI et revues |
 | **Serveur** | L'état du VPS ou de la VM du projet, joint en SSH, et ses agents |
+| **Docker** | Les conteneurs du projet sur ce Mac (en cours ou arrêtés, ports cliquables, ceux lancés par un agent) et ses images (app Mac) |
 | **Tâches · Notes** | Ce qui est tagué `#projet/<nom>` |
 | **Site** | Le site du projet : lancé **en local** depuis le Mac (adresse, pages vues, requêtes), et vérifié **en ligne** (code, temps de réponse) |
 
@@ -154,6 +155,7 @@ Une note ou une tâche y appartient avec le tag `#projet/studio` — posé par l
 - **Revue IA** : le diff est lu en local, montré, puis envoyé à l'IA branchée seulement après ton clic ; la revue peut être enregistrée comme note du projet.
 - **Sessions** : l'app Mac lit les journaux locaux de Claude Code (`~/.claude/projects/…`), en lecture seule ; rien ne quitte la machine.
 - **Site en local** (app Mac) : l'onglet Site cherche un site dans le dossier du projet (racine, `site/`, `web/`, `docs/`, `dist/`…). Un dossier avec un `index.html` est servi par Studio lui-même, sur `127.0.0.1` uniquement, avec le compte des pages vues, des requêtes et des données servies. Un projet Next.js, Astro, Vite, Nuxt ou SvelteKit est lancé avec son script (`npm run dev`, ou pnpm, yarn, bun selon le fichier de verrou) : Studio affiche l'adresse annoncée et la sortie du serveur. Tout s'arrête d'un clic, et à la fermeture de l'app. Le suivi du site en production (monitoring, consommation, visiteurs) viendra avec le serveur du projet.
+- **Docker** (app Mac, lecture seule) : Studio lit le moteur Docker par sa socket (Docker Desktop, OrbStack, Colima, Rancher Desktop), sans lancer `docker` ni aucun shell, et ne peut ni lancer, ni arrêter, ni supprimer quoi que ce soit. Un conteneur appartient au projet quand il a été lancé par Docker Compose ou un devcontainer depuis son dossier, ou depuis la copie isolée d'un agent (marqué « agent »), ou qu'il en monte un dossier ; une image, quand un de ses conteneurs l'utilise ou que Compose l'a construite pour lui. L'onglet se relit toutes les 5 secondes, la vue d'ensemble a sa carte, et l'**accueil** liste les conteneurs en cours du Mac avec leur projet.
 
 ### Agents Claude Code
 
@@ -309,7 +311,7 @@ src/                               TypeScript strict
     hub.ts            réglages, coffre, agents, blocs spéciaux, liaison d'appareils
     projects/         model.ts (bloc ```projet, tags), page.ts (cockpit), flux.ts,
                       review.ts (revue IA), sessions.ts (agents Claude Code, publication),
-                      site.ts (site du projet lancé en local)
+                      site.ts (site du projet lancé en local), docker.ts (conteneurs et images)
     news.ts           nouveautés présentées après une mise à jour, fenêtre « mise à jour prête »
     permissions.ts    réglages des autorisations des agents Claude Code (commandes, web, PATH), gardés sur le Mac
     automations.ts, help.ts, onboarding.ts
@@ -341,6 +343,7 @@ native/             apps Mac et iPhone (Swift) et leurs scripts de build
     Sessions.swift      lecture des sessions Claude Code locales
     Servers.swift       serveurs joints en SSH
     Sites.swift         site d'un projet en local : détection, serveur de fichiers, script dev
+    Docker.swift        conteneurs et images Docker du Mac (lecture seule, par la socket du moteur)
   macOS/, iOS/        points d'entrée de chaque plateforme
 site/               site vitrine de Studio : HTML, CSS et JS statiques, sans build ni dépendance
 scripts/            build.ts (esbuild), check.ts et site.ts, exécutés directement par Node

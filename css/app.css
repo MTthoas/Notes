@@ -1933,3 +1933,33 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .cl-sug { padding: 7px 12px; border: 1px solid var(--border); border-radius: 16px; color: var(--text-2); font-size: var(--t-1); transition: border-color .1s, background .1s; }
 .cl-sug:hover { border-color: var(--border-2); background: var(--hover); color: var(--text); }
 @media (max-width: 640px) { .cl-in { padding: 20px 16px 16px; } .cl-foot { padding: 0 12px 12px; } .cl-hint { display: none; } }
+
+/* Docker (features/projects/docker.ts) : conteneurs et images d'un projet, de l'accueil. */
+.dk-box { display: flex; flex-direction: column; gap: 26px; min-width: 0; }
+.dk-box > .dk-engine { margin: 0 0 -14px; }
+.dk-engine { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text-3); font-size: var(--t-1); }
+.dk-engine .ic { width: 14px; height: 14px; }
+.dk-engine .link-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
+.dk-count { margin-left: 6px; color: var(--text-3); font-size: var(--t-1); font-weight: 400; }
+.dk-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--t-2); min-width: 0; }
+.dk-row:last-child { border-bottom: 0; }
+.dk-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+.dk-dot.up { background: var(--c-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-green) 18%, transparent); }
+.dk-dot.warn { background: var(--c-amber); }
+.dk-dot.down { background: var(--c-red); }
+.dk-ic { flex: none; display: inline-flex; color: var(--text-3); }
+.dk-ic .ic { width: 15px; height: 15px; }
+.dk-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dk-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dk-name strong { flex: 0 1 auto; min-width: 4ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dk-name .pj-badge, .dk-name .dk-proj { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dk-agent { display: inline-flex; align-items: center; gap: 3px; }
+.dk-agent .ic { width: 11px; height: 11px; }
+.dk-sub { color: var(--text-3); font-size: var(--t-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dk-ports { flex: none; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; max-width: 45%; }
+.dk-port { padding: 1px 6px; border-radius: 4px; font-size: var(--t-1); font-variant-numeric: tabular-nums; color: var(--text-2); background: var(--btn); text-decoration: none; }
+a.dk-port { color: var(--c-blue); }
+a.dk-port:hover { background: color-mix(in srgb, var(--c-blue) 14%, transparent); }
+.dk-size { flex: none; color: var(--text-2); font-size: var(--t-1); font-variant-numeric: tabular-nums; }
+.dk-proj { padding: 1px 7px; border-radius: 999px; font-size: var(--t-1); color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+.dk-more { margin: 6px 0 0; color: var(--text-3); font-size: var(--t-1); }
