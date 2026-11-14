@@ -1710,14 +1710,12 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ag-group h4 b { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; font-size: var(--t-1); line-height: 18px; text-align: center; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
 .ag-group h4 span { font-weight: 400; color: var(--text-3); font-size: var(--t-1); }
 .ag-group.st-idle h4, .ag-group.st-idle h4 b { color: var(--text-3); }
-.ag-tree { box-shadow: inset 3px 0 0 var(--c); }
 .ag-tree.st-review { background: color-mix(in srgb, var(--c) 5%, var(--bg)); }
 .ag-tree.st-merged .ag-tree-main, .ag-tree.st-idle .ag-tree-main { opacity: .7; }
-.ag-tree.st-idle { box-shadow: none; }
 .ag-tree-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ag-tree-title code { min-width: 0; }
 .ag-tree-main strong { font-weight: 500; font-size: var(--t-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ag-run[class*="st-"]:not(.st-idle) { border-color: color-mix(in srgb, var(--c) 35%, var(--border)); box-shadow: inset 3px 0 0 var(--c); }
+.ag-run[class*="st-"]:not(.st-idle) { border-color: color-mix(in srgb, var(--c) 35%, var(--border)); }
 .ag-run.st-merged { opacity: .75; }
 .ag-tree-act { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ag-tree-act .btn { height: 28px; }
