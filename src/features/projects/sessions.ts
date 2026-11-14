@@ -37,6 +37,8 @@ let selected: string | null = null, timer: ReturnType<typeof setInterval> | unde
 /** Message secondaire : écrit pendant que l'agent travaillait, remis à la fin de son tour (voir Agents.swift). */
 interface Queued { id: string; session: string; text: string; at: string }
 let runs: AgentRun[] = [], trees: Worktree[] = [], jobs: Job[] = [], queued: Queued[] = [];
+/** La liste des copies a été lue au moins une fois (sinon une copie absente n'est pas forcément supprimée). */
+let treesRead = false;
 const ms = (iso: string) => Date.parse(iso) || 0;
 const short = (path: string, root: string | null) => root && path.includes('/.claude/worktrees/') ? path.replace(/^.*\/\.claude\/worktrees\/[^/]+\//, '') : root && path.startsWith(root + '/') ? path.slice(root.length + 1) : path.replace(/^\/Users\/[^/]+/, '~');
 const modelName = (m: string) => m.replace(/^claude-/, '').replace(/-(\d)-(\d)$/, ' $1.$2').replace(/-/g, ' ');
@@ -599,7 +601,7 @@ function topHTML(s: Detail, root: string | null, open: boolean): string {
   const acts = Object.values(s.tools).reduce((a, b) => a + b, 0);
   return `<div class="ss-dhead"><i class="ss-live${s.live || run ? ' on' : ''}"></i><h2>${esc(nameOf(s))}</h2>${run ? `${pill(run.status)}<button class="btn" data-ag="stop" data-run="${esc(run.run)}">${icon('stop')}Arrêter</button>` : ''}${remote || !s.id ? '' : `<button class="icon-btn" data-ag="delete" title="Supprimer la conversation" aria-label="Supprimer la conversation">${icon('trash')}</button>`}</div>
     <p class="ss-meta">${s.worktree ? `${icon('pencil')}copie isolée <code>${esc(s.worktree)}</code> · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${s.models.length ? `${esc(s.models.map(modelName).join(', '))} · ` : ''}${h ? `${h} h ` : ''}${mn} min · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}</p>
-    ${tree ? `<div class="ag-trees ss-tree">${treeRow(tree)}</div>` : remote ? '' : `<div class="ss-actions"><button class="btn" data-pj="review-working">${icon('sparkle')}Revue des changements en cours</button><button class="btn" data-pj="vscode">${icon('code')}Ouvrir dans VS Code</button></div>`}
+    ${tree ? `<div class="ag-trees ss-tree">${treeRow(tree)}</div>` : remote ? '' : s.worktree ? (treesRead ? `<p class="ss-meta">${icon('history')}Copie isolée supprimée : réponds pour reprendre, Studio la recrée (sur sa branche si elle existe encore, sinon depuis la branche principale).</p>` : '') : `<div class="ss-actions"><button class="btn" data-pj="review-working">${icon('sparkle')}Revue des changements en cours</button><button class="btn" data-pj="vscode">${icon('code')}Ouvrir dans VS Code</button></div>`}
     ${subsHTML(s.id)}
     <details class="ss-more"${open ? ' open' : ''}><summary>${icon('chevron')}Détails<span>${usage.fmt(s.tokens.output)} tokens écrits · ${acts} action${acts > 1 ? 's' : ''}${s.files.length ? ` · ${s.files.length} fichier${s.files.length > 1 ? 's' : ''} modifié${s.files.length > 1 ? 's' : ''}` : ''}</span></summary>
       <div class="ss-totals"><div><strong>${usage.fmt(s.tokens.output)}</strong><span>tokens écrits</span></div><div><strong>${usage.fmt(s.tokens.input + s.tokens.cacheWrite)}</strong><span>tokens lus</span></div><div><strong>${usage.fmt(s.tokens.cacheRead)}</strong><span>relus du cache</span></div><div><strong>${acts}</strong><span>actions</span></div></div>
@@ -873,7 +875,7 @@ async function openPR(p: Project, w: Worktree): Promise<void> {
 
 async function refreshTrees(p: Project): Promise<void> {
   const [r, j] = await Promise.all([bridge.call('agent', 'worktrees', { project: p.id }, 30000), bridge.call('agent', 'jobs', { project: p.id }, 10000)]);
-  trees = r.ok ? (r.worktrees as Worktree[]) : [];
+  trees = r.ok ? (r.worktrees as Worktree[]) : []; treesRead = r.ok;
   jobs = j.ok ? (j.jobs as Job[]) : [];
   // Copies dont la branche vient d'être fusionnée : elles repartent de la branche principale, on le dit une fois.
   for (const x of (r.recycled as { worktree: string; branch: string }[] | undefined) ?? []) toast(`${x.branch} est fusionnée : la copie repart de la branche principale, sur une nouvelle branche`);

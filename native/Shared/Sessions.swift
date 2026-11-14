@@ -356,5 +356,13 @@ final class ClaudeSessions {
             return real == folder || real.hasPrefix(folder + "/.claude/worktrees/") ? real : nil
         }
     }
+
+    /// Dernière branche Git vue dans une session (pour recréer sa copie isolée si elle a été supprimée).
+    func branch(project folder: String, session: String) -> String? {
+        queue.sync {
+            guard let f = self.file(folder, session), let st = self.refresh(f), !st.branch.isEmpty else { return nil }
+            return st.branch
+        }
+    }
 }
 #endif

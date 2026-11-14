@@ -353,6 +353,30 @@ final class ProjectFolders {
         return r.ok ? (wt, "") : (nil, "Copie isolée impossible : \(Self.gitError(r.err))")
     }
 
+    /// Recrée, à son ancien emplacement, la copie isolée d'une discussion qui a été supprimée (souvent après publication),
+    /// pour pouvoir la reprendre : Claude Code retrouve la session par son dossier. La copie reprend la branche de la
+    /// discussion si elle existe encore (en local, sinon poussée sur GitHub et pas encore supprimée après fusion) ;
+    /// à défaut, elle part de la dernière version de la branche principale, sur une nouvelle branche.
+    func restoreWorktree(_ dir: String, name: String, branch: String) -> (branch: String?, reused: Bool, error: String) {
+        guard Self.validWorktree(name) else { return (nil, false, "Nom de copie invalide.") }
+        excludeWorktrees(dir)
+        // Une copie effacée à la main reste inscrite dans le dépôt et bloquerait son emplacement.
+        _ = gitRun(["worktree", "prune"], in: dir)
+        let base = baseRef(dir, fetch: true), wt = dir + "/.claude/worktrees/" + name
+        let baseName = base.hasPrefix("origin/") ? String(base.dropFirst(7)) : base
+        if Self.validBranch(branch) && branch != baseName && branch != "main" && branch != "master" {
+            if gitRun(["rev-parse", "-q", "--verify", "refs/heads/" + branch], in: dir).ok {
+                if gitRun(["worktree", "add", "-q", wt, branch], in: dir, timeout: 60).ok { return (branch, true, "") }
+            } else if gitRun(["rev-parse", "-q", "--verify", "refs/remotes/origin/" + branch], in: dir).ok {
+                if gitRun(["worktree", "add", "-q", "--track", "-b", branch, wt, "origin/" + branch], in: dir, timeout: 60).ok { return (branch, true, "") }
+            }
+        }
+        var next = "worktree-" + name, n = 1
+        while gitRun(["rev-parse", "-q", "--verify", "refs/heads/" + next], in: dir).ok { n += 1; next = "worktree-\(name)-\(n)" }
+        let r = gitRun(["worktree", "add", "-q", "--no-track", "-b", next, wt, base], in: dir, timeout: 60)
+        return r.ok ? (next, false, "") : (nil, false, "Copie isolée impossible : \(Self.gitError(r.err))")
+    }
+
     /// Fichiers modifiés de la copie qui contiennent encore des marqueurs de conflit.
     func conflictFiles(_ wt: String) -> [String] {
         let status = git(["status", "--porcelain", "--untracked-files=all"], in: wt) ?? ""
