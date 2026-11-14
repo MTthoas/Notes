@@ -24,6 +24,7 @@ Mémoire du dépôt pour les agents : à lire **en premier**, avant toute recher
 - **Agents Claude Code** : lancement et arguments de `claude` dans `native/Shared/Agents.swift` ; copies isolées dans `.claude/worktrees/studio-…` (`Projects.swift`) ; publication en pull request dans `Orchestrator.swift` ; l'interface dans `src/features/projects/sessions.ts`.
 - **Page Claude** (conversation libre, sans projet) : `src/features/chat.ts`, vue `claude` ; conversations dans le magasin IndexedDB `chats` (`db.ts`) ; consigne `auto.chat` et limite `ctx.chat` dans `src/integrations/tuning.ts` ; `ai.run({ chat: true })`.
 - **Couleur d'un projet** : `src/features/projects/page.ts` pose `--c:var(--c-<hue>)` sur `.pj-head` et `.pj-card` ; tout ce qui est dedans peut s'en teinter en CSS.
+- **Journal** : `src/features/journal.ts` (rendu `dayPage`, `promptRow`, `sessionBlock`) ; ses styles sont les classes `jr-*` en fin de `css/app.css`. Les classes `hm-*` sont partagées avec l'Accueil : ne les retouche pas pour le seul journal.
 - **Icônes** : table en tête de `src/ui/kit.ts` (`icon('nom')`).
 - **Commande `studio`** : `bin/studio` (sh POSIX), qui appelle `native/build-mac.sh`, lequel appelle `native/copy-web.sh` (build web puis copie dans l'app).
 
