@@ -38,6 +38,10 @@ interface Item {
 
 // Les plus récentes d'abord.
 const NEWS: Item[] = [
+  { id: 'agent-stages', date: '2026-11-14', icon: 'pr', hue: 'blue',
+    title: 'Vois d’un coup d’œil où en sont tes agents',
+    text: 'Le panneau Claude Code range le travail des agents par étape : au travail, à publier, PR ouverte, fusionné. Chaque étape a sa couleur, jusque dans la liste des sessions et la barre latérale ; ce qui est livré s’efface.',
+    points: ['Au travail', 'À publier', 'PR ouverte', 'Fusionné'] },
   { id: 'figma-plugin', date: '2026-11-14', icon: 'figma', hue: 'violet',
     title: 'Tes maquettes Figma dans Studio',
     text: 'Active l’extension Figma (Réglages → Extensions), puis colle un lien Figma dans un bloc ```figma : la maquette, le prototype ou le tableau FigJam s’ouvre en grand sans quitter la note. La page du projet liste les fichiers Figma cités dans ses notes ; avec un jeton personnel, elle montre aussi leur dernière modification et les commentaires ouverts.',

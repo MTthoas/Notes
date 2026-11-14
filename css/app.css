@@ -1218,6 +1218,10 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .side-sub3 { height: 24px; gap: 8px; padding-left: 56px; font-weight: 400; font-size: var(--t-1); color: var(--text-2); }
 .side-sub3 .ss-live { width: 6px; height: 6px; }
 .side-sub3.sel { font-weight: 500; }
+/* État de la copie : à publier ressort, livré s'efface */
+.side-sub3 > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-stage { flex: none; padding: 0 5px; border-radius: 4px; font-size: 10px; line-height: 16px; font-weight: 500; font-style: normal; color: var(--c-orange); background: color-mix(in srgb, var(--c-orange) 14%, transparent); }
+.side-sub3.st-merged:not(.sel) > span { color: var(--text-3); }
 /* Sous-agents épinglés (ou ouvert) d'une conversation */
 .side-sub4 { height: 22px; gap: 8px; padding-left: 72px; font-weight: 400; font-size: var(--t-1); color: var(--text-3); }
 .side-sub4 .ss-live { width: 5px; height: 5px; }
@@ -1332,6 +1336,14 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ss-row:hover, .ss-row.sel { background: var(--hover); }
 .ss-live { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c-gray); opacity: .5; }
 .ss-live.on { background: var(--c-green); opacity: 1; animation: vc-pulse 1.4s ease-in-out infinite; }
+/* Point d'une conversation au repos : couleur de l'étape de sa copie (voir STAGES dans sessions.ts) */
+.ss-live.st-review { background: var(--c-orange); opacity: 1; }
+.ss-live.st-pr { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c-blue); opacity: 1; }
+.ss-live.st-merged { background: var(--c-violet); opacity: .8; }
+.ss-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ss-name strong { min-width: 0; }
+.ss-name .ag-stage { flex: none; }
+.ss-row.st-merged .ss-name strong { color: var(--text-2); }
 .ss-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ss-main strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ss-main em { display: flex; align-items: center; gap: 4px; font-style: normal; color: var(--text-3); font-size: var(--t-1); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -1677,6 +1689,32 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ag-hist-b svg { width: 12px; height: 12px; }
 .ag-hist-b code { font-size: inherit; color: var(--text-2); }
 .ag-hist-b.ok { color: var(--ok); }
+/* Étapes du travail des agents (STAGES dans sessions.ts) : chaque élément pose --c */
+.ag-stage { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 10px; font-size: var(--t-1); font-weight: 500; white-space: nowrap; color: var(--c); background: color-mix(in srgb, var(--c) 13%, transparent); }
+.ag-stage .ic { width: 12px; height: 12px; }
+.ag-flow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
+.ag-flow-s { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 15px; font-size: var(--t-2); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); border: 1px solid color-mix(in srgb, var(--c) 30%, transparent); }
+.ag-flow-s .ic { width: 14px; height: 14px; }
+.ag-flow-s b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ag-flow-s.none { color: var(--text-3); background: none; border-color: var(--border); opacity: .7; }
+.ag-flow-s.st-work:not(.none) .ic { animation: vc-pulse 1.4s ease-in-out infinite; }
+.ag-flow-arrow { color: var(--text-3); font-style: normal; }
+.ss-h-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--c); animation: vc-pulse 1.4s ease-in-out infinite; }
+.ag-groups { display: flex; flex-direction: column; gap: 14px; }
+.ag-group h4 { display: flex; align-items: center; gap: 7px; margin: 0 0 6px; font-size: var(--t-2); font-weight: 600; color: var(--c); }
+.ag-group h4 .ic { width: 14px; height: 14px; }
+.ag-group h4 b { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; font-size: var(--t-1); line-height: 18px; text-align: center; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+.ag-group h4 span { font-weight: 400; color: var(--text-3); font-size: var(--t-1); }
+.ag-group.st-idle h4, .ag-group.st-idle h4 b { color: var(--text-3); }
+.ag-tree { box-shadow: inset 3px 0 0 var(--c); }
+.ag-tree.st-review { background: color-mix(in srgb, var(--c) 5%, var(--bg)); }
+.ag-tree.st-merged .ag-tree-main, .ag-tree.st-idle .ag-tree-main { opacity: .7; }
+.ag-tree.st-idle { box-shadow: none; }
+.ag-tree-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ag-tree-title code { min-width: 0; }
+.ag-tree-main strong { font-weight: 500; font-size: var(--t-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-run[class*="st-"]:not(.st-idle) { border-color: color-mix(in srgb, var(--c) 35%, var(--border)); box-shadow: inset 3px 0 0 var(--c); }
+.ag-run.st-merged { opacity: .75; }
 .ag-tree-act { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ag-tree-act .btn { height: 28px; }
 .ss-box .ss-h:first-child { margin-top: 4px; }

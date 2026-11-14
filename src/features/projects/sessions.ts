@@ -39,6 +39,8 @@ interface Queued { id: string; session: string; text: string; at: string }
 let runs: AgentRun[] = [], trees: Worktree[] = [], jobs: Job[] = [], queued: Queued[] = [];
 /** La liste des copies a été lue au moins une fois (sinon une copie absente n'est pas forcément supprimée). */
 let treesRead = false;
+/** Projet auquel appartiennent `trees` : les autres projets n'ont pas d'état de copie connu. */
+let treesFor = '';
 const ms = (iso: string) => Date.parse(iso) || 0;
 const short = (path: string, root: string | null) => root && path.includes('/.claude/worktrees/') ? path.replace(/^.*\/\.claude\/worktrees\/[^/]+\//, '') : root && path.startsWith(root + '/') ? path.slice(root.length + 1) : path.replace(/^\/Users\/[^/]+/, '~');
 const modelName = (m: string) => m.replace(/^claude-/, '').replace(/-(\d)-(\d)$/, ' $1.$2').replace(/-/g, ' ');
@@ -122,7 +124,7 @@ let listener: (() => void) | null = null, lastSig = '';
 export const onChange = (f: () => void): void => { listener = f; };
 function notify(): void {
   const sig = JSON.stringify([selFor, selected, selTitle, sub, subTitle, pins, (selected ? subsOf.get(selected) ?? [] : []).filter(a => a.live).map(a => a.id),
-    [...known].map(([k, v]) => [k, v.list.slice(0, 8).map(s => [s.id, nameOf(s), s.live])]), runs.filter(live).map(r => r.session)]);
+    [...known].map(([k, v]) => [k, v.list.slice(0, 8).map(s => [s.id, nameOf(s), s.live, k === treesFor ? sessionStage(s) : ''])]), runs.filter(live).map(r => r.session)]);
   if (sig === lastSig) return;
   lastSig = sig; listener?.();
 }
@@ -134,7 +136,7 @@ export function current(pid: string): { id: string; title: string; sub?: { id: s
 }
 export interface SideSub { id: string; title: string; live: boolean; sel: boolean }
 /** Conversations récentes d'un projet, pour la barre latérale, chacune avec ses sous-agents épinglés (et celui qui est ouvert). */
-export function sideSessions(pid: string): { id: string; title: string; live: boolean; sel: boolean; subs: SideSub[] }[] {
+export function sideSessions(pid: string): { id: string; title: string; live: boolean; sel: boolean; subs: SideSub[]; stage: { cls: string; label: string } | null }[] {
   const list = known.get(pid)?.list ?? [], sel = selFor === pid ? selected : null, mine = pins.filter(x => x.p === pid);
   const top = list.slice(0, 6), extra = list.slice(6).filter(s => s.id === sel || mine.some(x => x.s === s.id));
   const subs = (sid: string): SideSub[] => {
@@ -142,7 +144,12 @@ export function sideSessions(pid: string): { id: string; title: string; live: bo
     if (sid === sel && sub && !ids.includes(sub)) ids.push(sub);
     return ids.map(a => ({ id: a, title: sid === sel && a === sub && subTitle ? subTitle : subName(sid, a), live: !!subsOf.get(sid)?.find(x => x.id === a)?.live, sel: sid === sel && a === sub }));
   };
-  return [...top, ...extra].map(s => ({ id: s.id, title: s.id === sel && selTitle ? selTitle : nameOf(s), live: s.live || runs.some(r => r.session === s.id && live(r)), sel: s.id === sel, subs: subs(s.id) }));
+  return [...top, ...extra].map(s => ({ id: s.id, title: s.id === sel && selTitle ? selTitle : nameOf(s), live: s.live || runs.some(r => r.session === s.id && live(r)), sel: s.id === sel, subs: subs(s.id), stage: sideStage(pid, s) }));
+}
+/** État de la copie d'une conversation, pour teinter son point dans la barre latérale (seulement pour le projet dont les copies sont connues). */
+function sideStage(pid: string, s: Session): { cls: string; label: string } | null {
+  const st = pid === treesFor ? sessionStage(s) : '';
+  return st && st !== 'idle' ? { cls: `st-${st}`, label: STAGES[st].l } : null;
 }
 async function loadList(p: Project): Promise<Session[] | null> {
   const r = await bridge.call('project', 'sessions', { project: p.id }, 20000);
@@ -479,9 +486,40 @@ function hideRuns(ids: string[]): void {
   try { localStorage.setItem(HIDDEN, JSON.stringify(hiddenRuns)); } catch { /* stockage plein */ }
 }
 
+// ---------- Où en est le travail d'un agent ----------
+/** Étapes du travail d'un agent, dans l'ordre : il écrit, il faut publier, la PR attend, c'est fusionné. */
+type Stage = 'work' | 'review' | 'pr' | 'merged' | 'idle';
+const STAGE_ORDER: Stage[] = ['work', 'review', 'pr', 'merged', 'idle'];
+const STAGES: Record<Stage, { c: string; ic: string; l: string; g: string; d: string }> = {
+  work: { c: 'amber', ic: 'bolt', l: 'Au travail', g: 'Au travail', d: 'l’agent modifie encore sa copie' },
+  review: { c: 'orange', ic: 'upload', l: 'À publier', g: 'À relire et publier', d: 'terminé, pas encore poussé sur GitHub' },
+  pr: { c: 'blue', ic: 'pr', l: 'PR ouverte', g: 'Poussées, PR en attente', d: 'sur GitHub, en attente de fusion' },
+  merged: { c: 'violet', ic: 'check', l: 'Fusionné', g: 'Fusionnées', d: 'livré dans la branche principale' },
+  idle: { c: 'gray', ic: 'pencil', l: 'Sans changement', g: 'Sans changement', d: 'rien de nouveau dans la copie' },
+};
+function stageOf(w: Worktree): Stage {
+  if (runs.some(r => r.worktree === w.name && live(r))) return 'work';
+  if (w.changes > 0 || (w.ahead > 0 && !w.merged && !w.upToDate)) return 'review';
+  if (w.merged) return 'merged';
+  if (w.pushed) return 'pr';
+  // Copie repartie sur une nouvelle branche après une livraison : elle garde l'état de sa dernière branche.
+  const last = w.history?.[0];
+  return last ? (last.merged ? 'merged' : 'pr') : 'idle';
+}
+function sessionStage(s: Pick<Session, 'id' | 'worktree'>): Stage | '' {
+  if (runs.some(r => r.session === s.id && live(r))) return 'work';
+  const w = s.worktree ? trees.find(t => t.name === s.worktree) : undefined;
+  return w ? stageOf(w) : '';
+}
+const stageVar = (st: Stage) => `--c:var(--c-${STAGES[st].c})`;
+const stageBadge = (st: Stage) => `<span class="ag-stage st-${st}" style="${stageVar(st)}">${icon(STAGES[st].ic)}${STAGES[st].l}</span>`;
+
 function runCard(r: AgentRun): string {
-  return `<article class="ag-run${live(r) ? ' live' : ''}">
-    <header>${pill(r.status)}${r.machine === 'server' ? `<span class="ag-mode">${icon('server')}${esc(r.host ?? 'serveur')}</span>` : ''}<span class="ag-mode">${r.mode === 'edit' ? `${icon('pencil')}Modifier` : `${icon('search')}Analyser`}</span><time>${esc(elapsed(r))}${r.turns ? ` · ${r.turns} étape${r.turns > 1 ? 's' : ''}` : ''}</time>${live(r) ? '' : `<button class="icon-btn ag-hide" data-ag="hide-run" data-run="${esc(r.run)}" title="Retirer de la liste (la conversation reste dans Sessions)" aria-label="Retirer cet agent de la liste">${icon('x')}</button>`}</header>
+  // Agent terminé dans une copie : on montre où en est son travail (à publier, PR, fusionné) plutôt qu'un simple « Terminé ».
+  const w = !live(r) && r.status === 'done' && r.worktree ? trees.find(t => t.name === r.worktree) : undefined;
+  const st: Stage | '' = live(r) ? 'work' : w ? stageOf(w) : '';
+  return `<article class="ag-run${live(r) ? ' live' : ''}${st ? ` st-${st}` : ''}"${st ? ` style="${stageVar(st)}"` : ''}>
+    <header>${w && st && st !== 'idle' ? stageBadge(st) : pill(r.status)}${r.machine === 'server' ? `<span class="ag-mode">${icon('server')}${esc(r.host ?? 'serveur')}</span>` : ''}<span class="ag-mode">${r.mode === 'edit' ? `${icon('pencil')}Modifier` : `${icon('search')}Analyser`}</span><time>${esc(elapsed(r))}${r.turns ? ` · ${r.turns} étape${r.turns > 1 ? 's' : ''}` : ''}</time>${live(r) ? '' : `<button class="icon-btn ag-hide" data-ag="hide-run" data-run="${esc(r.run)}" title="Retirer de la liste (la conversation reste dans Sessions)" aria-label="Retirer cet agent de la liste">${icon('x')}</button>`}</header>
     <p class="ag-prompt">${esc(r.prompt)}</p>
     ${live(r) && r.lastText ? `<p class="ag-last">${esc(r.lastText)}</p>` : ''}
     ${!live(r) && r.result ? `<p class="ag-last">${esc(r.result.replace(/[#*`>]/g, '').slice(0, 220))}</p>` : ''}
@@ -496,17 +534,18 @@ function treeTitle(w: Worktree, list: Session[]): string {
   return (s ? nameOf(s) : '') || (run ? neat(run.prompt) : '') || neat(w.name.replace(/^studio-|-\d{4}-\d{4}$/g, '').replace(/-/g, ' ')) || w.name;
 }
 
-function treeRow(w: Worktree, list: Session[]): string {
-  const job = jobs.find(j => j.worktree === w.name), busy = job?.status === 'running';
+/** `badge` : la ligne est seule (fil d'une conversation), elle porte donc son étape ; dans la liste, c'est le groupe qui la dit. */
+function treeRow(w: Worktree, list: Session[], badge = false): string {
+  const st = stageOf(w), job = jobs.find(j => j.worktree === w.name), busy = job?.status === 'running';
   const conflicts = w.conflicts?.length ? `<span class="err"> · conflits : ${esc(w.conflicts.join(', '))}</span>` : '';
   const state = busy ? ` · <span class="spin"></span>${esc(job.step)}` : job?.status === 'error' || job?.status === 'blocked' ? `<span class="err"> · ${esc(job.step)}</span>` : conflicts;
   // Ce qui est déjà poussé ou fusionné n'est plus proposé : « Publier » ne sert qu'à du travail nouveau.
   const pending = w.pushed && !w.merged, fresh = w.changes > 0 || (w.ahead > 0 && !w.merged && !w.upToDate);
-  const where = w.merged ? ' · <b class="ag-ok">déjà fusionnée dans la branche principale</b>' : pending ? (w.upToDate ? ' · poussée, PR en attente de fusion' : ' · poussée, changements à republier') : '';
+  const where = pending && !w.upToDate && fresh ? ' · déjà poussée une fois, changements à republier' : '';
   // Avec retard sur la branche principale, une copie fusionnée ou sans travail n'a rien à « mettre à jour » de visible.
   const canSync = !!w.behind && !busy && (w.changes > 0 || pending);
   const hist = w.history?.length ? `<span class="ag-hist">${w.history.map(h => `<span class="ag-hist-b${h.merged ? ' ok' : ''}" title="${esc(h.subject || h.branch)}">${icon(h.merged ? 'check' : 'pr')}<code>${esc(h.branch)}</code>${h.merged ? 'fusionnée' : 'PR en attente'}</span>`).join('')}</span>` : '';
-  return `<div class="ag-tree"><span class="ag-tree-main"><b class="ag-tree-title" title="${esc(w.branch || w.name)}">${esc(treeTitle(w, list))}</b>${w.branch && !w.branch.startsWith('worktree-') ? `<code>${esc(w.branch)}</code>` : ''}<em>${w.changes ? `${w.changes} fichier${w.changes > 1 ? 's' : ''} modifié${w.changes > 1 ? 's' : ''}` : 'aucun changement en attente'}${w.ahead && !w.merged ? ` · ${w.ahead} commit${w.ahead > 1 ? 's' : ''}` : ''}${where}${w.behind && !w.merged && (w.changes || pending) ? ` · ${w.behind} commit${w.behind > 1 ? 's' : ''} de retard sur la branche principale` : ''}${state}</em>${hist}</span>
+  return `<div class="ag-tree st-${st}" style="${stageVar(st)}"><span class="ag-tree-main"><span class="ag-tree-title">${badge ? stageBadge(st) : ''}<b title="${esc(w.branch || w.name)}">${esc(treeTitle(w, list))}</b></span>${w.branch && !w.branch.startsWith('worktree-') ? `<code>${esc(w.branch)}</code>` : ''}${w.subject && !badge && (w.ahead > 0 || w.pushed) ? `<strong>${esc(w.subject)}</strong>` : ''}<em>${w.changes ? `${w.changes} fichier${w.changes > 1 ? 's' : ''} modifié${w.changes > 1 ? 's' : ''}` : 'aucun changement en attente'}${w.ahead && !w.merged ? ` · ${w.ahead} commit${w.ahead > 1 ? 's' : ''}` : ''}${where}${w.behind && !w.merged && (w.changes || pending) ? ` · ${w.behind} commit${w.behind > 1 ? 's' : ''} de retard sur la branche principale` : ''}${state}</em>${hist}</span>
     <span class="ag-tree-act">${remote ? '<em class="ag-onmac">sur le Mac</em>' : `${canSync ? `<button class="btn" data-ag="sync" data-wt="${esc(w.name)}" title="Remettre la copie sur la dernière version de la branche principale ; l'agent résout les conflits éventuels">${icon('refresh')}Mettre à jour</button>` : ''}<button class="btn" data-ag="review" data-wt="${esc(w.name)}">${icon('sparkle')}Revue</button><button class="btn" data-ag="vscode" data-wt="${esc(w.name)}">${icon('code')}VS Code</button><button class="btn" data-ag="push" data-wt="${esc(w.name)}"${fresh && !busy ? '' : ' disabled'} title="${fresh ? 'Publier le nouveau travail de l’agent' : w.merged ? 'Déjà fusionné : rien de nouveau à publier' : pending ? 'Déjà poussé : rien de nouveau à publier' : 'Rien à publier'}">${icon('upload')}Publier</button>${pending ? `<button class="btn" data-ag="pr" data-wt="${esc(w.name)}" title="Ouvrir la page de la pull request sur GitHub">${icon('github')}PR</button>` : ''}${pending && !w.changes && !busy ? `<button class="btn" data-ag="newbranch" data-wt="${esc(w.name)}" title="Garder cette branche pour sa PR et repartir de la dernière version de la branche principale, sur une nouvelle branche, dans la même discussion">${icon('plus')}Nouvelle branche</button>` : ''}<button class="icon-btn" data-ag="discard" data-wt="${esc(w.name)}" title="Supprimer la copie" aria-label="Supprimer la copie">${icon('trash')}</button>`}</span></div>`;
 }
 
@@ -514,14 +553,23 @@ function listHTML(list: Session[]): string {
   const running = runs.filter(live), recent = runs.filter(r => !live(r) && !hiddenRuns.includes(r.run)).slice(0, 4);
   const canClean = !remote && list.some(s => idle(s));
   const tot =list.reduce((t, s) => ({ input: t.input + s.tokens.input + s.tokens.cacheWrite, output: t.output + s.tokens.output, cacheRead: t.cacheRead + s.tokens.cacheRead }), { input: 0, output: 0, cacheRead: 0 });
-  return `${running.length || recent.length ? `<h3 class="ss-h">Agents <span>${running.length ? `${running.length} en cours` : 'lancés depuis Studio'}</span>${recent.length > 1 ? `<button class="link-btn ss-h-act" data-ag="hide-runs">Retirer les terminés</button>` : ''}</h3><div class="ag-runs">${[...running, ...recent].map(runCard).join('')}</div>` : ''}
-    ${trees.length ? `<h3 class="ss-h">Copies à relire <span>travail des agents, isolé de ton dossier</span></h3><div class="ag-trees">${trees.map(w => treeRow(w, list)).join('')}</div>` : ''}
+  // Copies rangées par étape : ce qui demande une action d'abord, ce qui est livré ensuite.
+  const staged = trees.map(w => ({ w, st: stageOf(w) }));
+  const count = (st: Stage) => st === 'work' ? Math.max(running.length, staged.filter(x => x.st === st).length) : staged.filter(x => x.st === st).length;
+  const flow = `<div class="ag-flow" role="list" aria-label="Où en est le travail des agents">${STAGE_ORDER.filter(st => st !== 'idle').map(st => { const n = count(st); return `<span role="listitem" class="ag-flow-s st-${st}${n ? '' : ' none'}" style="${stageVar(st)}">${icon(STAGES[st].ic)}<b>${n}</b>${esc(STAGES[st].l)}</span>`; }).join(`<i class="ag-flow-arrow" aria-hidden="true">→</i>`)}</div>`;
+  const groups = STAGE_ORDER.map(st => ({ st, list: staged.filter(x => x.st === st) })).filter(g => g.list.length)
+    .map(({ st, list: l }) => `<section class="ag-group st-${st}" style="${stageVar(st)}"><h4>${icon(STAGES[st].ic)}${esc(STAGES[st].g)}<b>${l.length}</b><span>${esc(STAGES[st].d)}</span></h4><div class="ag-trees">${l.map(x => treeRow(x.w, list)).join('')}</div></section>`).join('');
+  return `${running.length || trees.length ? flow : ''}
+    ${running.length ? `<h3 class="ss-h"><span class="ss-h-dot" style="${stageVar('work')}"></span>Au travail <span>${running.length} agent${running.length > 1 ? 's' : ''} en cours</span></h3><div class="ag-runs">${running.map(runCard).join('')}</div>` : ''}
+    ${recent.length ? `<h3 class="ss-h">Terminés récemment <span>lancés depuis Studio</span>${recent.length > 1 ? `<button class="link-btn ss-h-act" data-ag="hide-runs">Retirer les terminés</button>` : ''}</h3><div class="ag-runs">${recent.map(runCard).join('')}</div>` : ''}
+    ${trees.length ? `<h3 class="ss-h">Copies des agents <span>travail isolé de ton dossier, rangé par étape</span></h3><div class="ag-groups">${groups}</div>` : ''}
     <h3 class="ss-h">Sessions <span>tout ce que Claude Code a fait dans ce projet</span>${canClean ? `<button class="link-btn ss-h-act" data-ag="clean" title="Supprimer plusieurs conversations terminées d’un coup">Faire le ménage</button>` : ''}</h3>
     <div class="ss-totals"><div><strong>${list.length}</strong><span>session${list.length > 1 ? 's' : ''}</span></div><div><strong>${usage.fmt(tot.output)}</strong><span>tokens écrits</span></div><div><strong>${usage.fmt(tot.input)}</strong><span>tokens lus</span></div><div><strong>${usage.fmt(tot.cacheRead)}</strong><span>relus du cache</span></div></div>
     <div class="ss-list">${list.map(s => {
       const top = Object.entries(s.tools).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${esc(k)} ${v}`).join(' · ');
-      return `<div class="ss-row${s.id === selected ? ' sel' : ''}"><button class="ss-open" data-ss="${esc(s.id)}"><i class="ss-live${s.live ? ' on' : ''}" title="${s.live ? 'En cours' : 'Inactive'}"></i>
-        <span class="ss-main"><strong>${esc(nameOf(s))}</strong><em>${s.worktree ? `${icon('pencil')}copie · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${esc(s.models.map(modelName).join(', '))} · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}${top ? ` · ${top}` : ''}</em></span>
+      const st = sessionStage(s), tag = st && st !== 'idle' && st !== 'work' ? stageBadge(st) : '';
+      return `<div class="ss-row${s.id === selected ? ' sel' : ''}${st ? ` st-${st}` : ''}"><button class="ss-open" data-ss="${esc(s.id)}"><i class="ss-live${s.live ? ' on' : ''}${st && st !== 'idle' ? ` st-${st}` : ''}" title="${s.live ? 'En cours' : st && st !== 'idle' ? STAGES[st].l : 'Inactive'}"></i>
+        <span class="ss-main"><span class="ss-name"><strong>${esc(nameOf(s))}</strong>${tag}</span><em>${s.worktree ? `${icon('pencil')}copie · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${esc(s.models.map(modelName).join(', '))} · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}${top ? ` · ${top}` : ''}</em></span>
         <span class="ss-tok">${usage.fmt(s.tokens.output)}<small>écrits</small></span><time>${esc(rel(ms(s.updated)))}</time></button>${remote ? '' : `<button class="icon-btn ss-del" data-ag="delete" data-session="${esc(s.id)}" title="Supprimer la conversation" aria-label="Supprimer la conversation ${esc(nameOf(s))}">${icon('trash')}</button>`}</div>`;
     }).join('') || '<p class="hm-empty">Aucune session Claude Code dans ce dossier pour l’instant. Donne une consigne ci-dessus pour lancer la première.</p>'}</div>`;
 }
@@ -623,7 +671,7 @@ function topHTML(s: Detail, root: string | null, open: boolean): string {
   const acts = Object.values(s.tools).reduce((a, b) => a + b, 0);
   return `<div class="ss-dhead"><i class="ss-live${s.live || run ? ' on' : ''}"></i><h2>${esc(nameOf(s))}</h2>${run ? `${pill(run.status)}<button class="btn" data-ag="stop" data-run="${esc(run.run)}">${icon('stop')}Arrêter</button>` : ''}${remote || !s.id ? '' : `<button class="icon-btn" data-ag="delete" title="Supprimer la conversation" aria-label="Supprimer la conversation">${icon('trash')}</button>`}</div>
     <p class="ss-meta">${s.worktree ? `${icon('pencil')}copie isolée <code>${esc(s.worktree)}</code> · ` : s.branch ? `${icon('pr')}${esc(s.branch)} · ` : ''}${s.models.length ? `${esc(s.models.map(modelName).join(', '))} · ` : ''}${h ? `${h} h ` : ''}${mn} min · ${s.prompts} demande${s.prompts > 1 ? 's' : ''}</p>
-    ${tree ? `<div class="ag-trees ss-tree">${treeRow(tree)}</div>` : remote ? '' : s.worktree ? (treesRead ? `<p class="ss-meta">${icon('history')}Copie isolée supprimée : réponds pour reprendre, Studio la recrée (sur sa branche si elle existe encore, sinon depuis la branche principale).</p>` : '') : `<div class="ss-actions"><button class="btn" data-pj="review-working">${icon('sparkle')}Revue des changements en cours</button><button class="btn" data-pj="vscode">${icon('code')}Ouvrir dans VS Code</button></div>`}
+    ${tree ? `<div class="ag-trees ss-tree">${treeRow(tree, [s], true)}</div>` : remote ? '' : s.worktree ? (treesRead ? `<p class="ss-meta">${icon('history')}Copie isolée supprimée : réponds pour reprendre, Studio la recrée (sur sa branche si elle existe encore, sinon depuis la branche principale).</p>` : '') : `<div class="ss-actions"><button class="btn" data-pj="review-working">${icon('sparkle')}Revue des changements en cours</button><button class="btn" data-pj="vscode">${icon('code')}Ouvrir dans VS Code</button></div>`}
     ${subsHTML(s.id)}
     <details class="ss-more"${open ? ' open' : ''}><summary>${icon('chevron')}Détails<span>${usage.fmt(s.tokens.output)} tokens écrits · ${acts} action${acts > 1 ? 's' : ''}${s.files.length ? ` · ${s.files.length} fichier${s.files.length > 1 ? 's' : ''} modifié${s.files.length > 1 ? 's' : ''}` : ''}</span></summary>
       <div class="ss-totals"><div><strong>${usage.fmt(s.tokens.output)}</strong><span>tokens écrits</span></div><div><strong>${usage.fmt(s.tokens.input + s.tokens.cacheWrite)}</strong><span>tokens lus</span></div><div><strong>${usage.fmt(s.tokens.cacheRead)}</strong><span>relus du cache</span></div><div><strong>${acts}</strong><span>actions</span></div></div>
@@ -897,8 +945,9 @@ async function openPR(p: Project, w: Worktree): Promise<void> {
 
 async function refreshTrees(p: Project): Promise<void> {
   const [r, j] = await Promise.all([bridge.call('agent', 'worktrees', { project: p.id }, 30000), bridge.call('agent', 'jobs', { project: p.id }, 10000)]);
-  trees = r.ok ? (r.worktrees as Worktree[]) : []; treesRead = r.ok;
+  trees = r.ok ? (r.worktrees as Worktree[]) : []; treesRead = r.ok; treesFor = p.id;
   jobs = j.ok ? (j.jobs as Job[]) : [];
+  notify(); // la barre latérale teinte chaque conversation selon l'état de sa copie
   // Copies dont la branche vient d'être fusionnée : elles repartent de la branche principale, on le dit une fois.
   for (const x of (r.recycled as { worktree: string; branch: string }[] | undefined) ?? []) toast(`${x.branch} est fusionnée : la copie repart de la branche principale, sur une nouvelle branche`);
 }
