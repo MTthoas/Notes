@@ -283,10 +283,18 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { onLoad?() }
 
-    // Tout ce qui sort de carnet:// s'ouvre dans le navigateur du système ; les téléchargements sont gérés ici.
+    /// Sites qu'un cadre de la page peut afficher (frame-src de index.html) : leur navigation reste dans le cadre.
+    private static func framable(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return false }
+        return host == "figma.com" || host.hasSuffix(".figma.com")
+    }
+
+    // Tout ce qui sort de carnet:// s'ouvre dans le navigateur du système (sauf dans un cadre autorisé) ;
+    // les téléchargements sont gérés ici.
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if action.shouldPerformDownload { decisionHandler(.download); return }
         guard let url = action.request.url else { decisionHandler(.cancel); return }
+        if let frame = action.targetFrame, !frame.isMainFrame, Self.framable(url) { decisionHandler(.allow); return }
         switch url.scheme?.lowercased() {
         case Shell.scheme, "about", "blob", "data":
             decisionHandler(.allow)

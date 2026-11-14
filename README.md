@@ -251,7 +251,7 @@ Réglages → Appareils → « Lier un appareil ». Un secret de 128 bits passe 
 | **Stockage** | Tout vit sur l'appareil, dans IndexedDB. Aucun compte, aucun serveur, aucune télémétrie. |
 | **Coffre** | Une clé maîtresse aléatoire de 256 bits chiffre (AES-GCM) chaque enregistrement — notes, historique — ainsi que les clés API et les appareils liés. |
 | **Déverrouillage** | Mot de passe (PBKDF2, 600 000 itérations), jamais stocké ; en option, passkey Face ID / Touch ID dans un navigateur (WebAuthn, extension PRF) ou, dans les apps natives, secret aléatoire du trousseau que la biométrie libère. Verrouillage automatique après inactivité. |
-| **Réseau** | La politique de sécurité (CSP) de `index.html` n'autorise que `api.anthropic.com`, `api.openai.com`, `api.linear.app`, `api.github.com`, `ntfy.sh`, `localhost`, et les domaines des extensions (`api.spotify.com`, `accounts.spotify.com`, `*.app.n8n.cloud`), contactés seulement si tu les actives. Une clé ne peut donc pas partir ailleurs, même en cas de faille. Aucune image distante n'est chargée. |
+| **Réseau** | La politique de sécurité (CSP) de `index.html` n'autorise que `api.anthropic.com`, `api.openai.com`, `api.linear.app`, `api.github.com`, `ntfy.sh`, `localhost`, et les domaines des extensions (`api.spotify.com`, `accounts.spotify.com`, `*.app.n8n.cloud`, `api.figma.com`), contactés seulement si tu les actives. Une clé ne peut donc pas partir ailleurs, même en cas de faille. Aucune image distante n'est chargée. Seul cadre permis : l'aperçu Figma (`embed.figma.com`), ouvert à la demande. |
 | **IA** | Les notes chiffrées et celles taguées `#privé` ne sont jamais envoyées. Chaque exécution travaille dans un périmètre, un projet ou Général, et ses outils ne voient que les données de celui-ci (`integrations/scope.ts`). Linear n'est lisible que depuis un projet relié à un projet Linear (nom exact), jamais en Général. Toute action d'écriture d'un agent (créer une note, une issue…) demande ton accord. |
 | **Synchronisation** | Chiffrée de bout en bout ; le relais ne voit que du chiffré. |
 | **Sauvegarde** | L'export JSON est chiffré par mot de passe quand le coffre est actif. |
@@ -319,7 +319,7 @@ src/                               TypeScript strict
     linear/           api.ts (GraphQL typé), page.ts, render.ts, notifications.ts
     github/           api.ts (actualité des dépôts), page.ts
   lib/              outils sans état : markdown, calc, schema, graph, qr, fuzzy, diff, zip
-  plugins/          registre d'extensions, plugins maison (GitHub, Linear) et optionnels (Spotify, n8n)
+  plugins/          registre d'extensions, plugins maison (GitHub, Linear) et optionnels (Spotify, n8n, Figma)
   ui/               kit.ts (icônes, menus, fenêtres), caret.ts (curseur), chart.ts (graphiques)
   sw/sw.ts          service worker (compilé avec les types « worker »)
 native/             apps Mac et iPhone (Swift) et leurs scripts de build
@@ -355,6 +355,7 @@ Les fonctions de Studio se branchent sur un registre d'extensions ([`src/plugins
 
 - **Spotify** ([`src/plugins/spotify.ts`](src/plugins/spotify.ts)) : titre en cours, commandes de lecture et volume (curseur, son coupé) en bas de la barre latérale, et dans la palette. Connexion OAuth PKCE avec ta propre app Spotify (Client ID seul, aucun secret) ; les commandes demandent Spotify Premium.
 - **n8n** ([`src/plugins/n8n.ts`](src/plugins/n8n.ts)) : envoie captures, tâches terminées, nouveautés Linear et GitHub, ou la note ouverte, à un webhook n8n (n8n Cloud ou n8n local).
+- **Figma** ([`src/plugins/figma.ts`](src/plugins/figma.ts)) : un bloc ` ```figma ` (une adresse par ligne) affiche les maquettes, prototypes et tableaux FigJam en grand dans Studio (consultation, pas édition) ; la page d'un projet liste les fichiers Figma cités dans ses notes. Un jeton personnel facultatif (lecture seule) ajoute leur nom, leur dernière modification et les commentaires ouverts.
 
 Un plugin est un objet `Plugin` : il déclare ses réglages (`settings`, la page se construit dessus ; `secret: true` range la valeur dans le coffre), les domaines qu'il contacte (`hosts`), et ce qu'il ajoute : bloc de barre latérale (`sidebar`), commandes de palette (`commands`), panneaux de projet, actions (`data-plug="<id>:<action>"`), abonnement aux événements de Studio et minuteries (`start`). Il ne reçoit que son `PluginAPI` : ses propres réglages et secrets, jamais le coffre. Pour en ajouter un : un fichier dans `src/plugins/`, un `registry.register(…)` dans `builtin.ts`, et ses domaines dans `connect-src` (`index.html`). Prochaine étape : des plugins chargés hors du dépôt, isolés et soumis à permissions.
 

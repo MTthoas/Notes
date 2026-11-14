@@ -2,6 +2,7 @@
 import * as registry from './registry.ts';
 import { spotify } from './spotify.ts';
 import { n8n } from './n8n.ts';
+import { figma } from './figma.ts';
 import * as github from '../integrations/github/api.ts';
 import * as linear from '../integrations/linear/api.ts';
 import { issueRow } from '../integrations/linear/render.ts';
@@ -15,6 +16,7 @@ export function registerBuiltins(): void {
   // Plugins optionnels : inactifs tant qu'on ne les a pas activés dans Réglages → Extensions.
   registry.register(spotify);
   registry.register(n8n);
+  registry.register(figma);
 
   registry.register({
     id: 'github', name: 'GitHub',

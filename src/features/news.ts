@@ -38,6 +38,10 @@ interface Item {
 
 // Les plus récentes d'abord.
 const NEWS: Item[] = [
+  { id: 'figma-plugin', date: '2026-11-14', icon: 'figma', hue: 'violet',
+    title: 'Tes maquettes Figma dans Studio',
+    text: 'Active l’extension Figma (Réglages → Extensions), puis colle un lien Figma dans un bloc ```figma : la maquette, le prototype ou le tableau FigJam s’ouvre en grand sans quitter la note. La page du projet liste les fichiers Figma cités dans ses notes ; avec un jeton personnel, elle montre aussi leur dernière modification et les commentaires ouverts.',
+    points: ['Aperçu', 'Projets', 'Commentaires'] },
   { id: 'ai-project-scopes', date: '2026-11-14', icon: 'lock', hue: 'indigo',
     title: 'L’IA ne voit que le projet où tu travailles',
     text: 'Claude ne s’ouvre plus que depuis un projet (bouton « Claude » de sa fiche) et n’y voit que ses notes, tâches, dépôts et tickets Linear. Il n’y a plus de Claude global dans la barre latérale. Les automatisations et « Demander à l’IA » suivent la même règle, et Linear ne s’ouvre jamais à l’IA hors du projet qui y est relié.',

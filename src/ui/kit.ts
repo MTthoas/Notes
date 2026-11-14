@@ -80,6 +80,7 @@ const I: Record<string, string> = {
   server: '<rect x="4" y="4.5" width="16" height="6" rx="1.5"/><rect x="4" y="13.5" width="16" height="6" rx="1.5"/><path d="M7.5 7.5h.01M7.5 16.5h.01"/>',
   refresh: '<path d="M19.5 12a7.5 7.5 0 11-2.2-5.3L19.5 9"/><path d="M19.5 4.5V9H15"/>',
   linear: '<path d="M4.2 13.6l6.2 6.2M3.6 10.2l10.2 10.2M4.8 6.9l12.3 12.3M7.5 4.5l12 12M11 3.6l9.4 9.4"/>',
+  figma: '<path d="M9 3h3v6H9a3 3 0 010-6zM12 3h3a3 3 0 010 6h-3zM9 9h3v6H9a3 3 0 010-6zM9 15h3v3a3 3 0 11-3-3z"/><circle cx="15" cy="12" r="3"/>',
   plug: '<path d="M9 3.5v4M15 3.5v4M6.5 7.5h11v3.5a5.5 5.5 0 01-11 0zM12 16.5v4"/>',
   share: '<path d="M12 15V3.5M7.5 8L12 3.5 16.5 8M5.5 12v7.5h13V12"/>',
   chevron: '<path d="M8 10l4 4 4-4"/>',

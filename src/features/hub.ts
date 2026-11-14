@@ -22,6 +22,7 @@ import { projectOfNote } from './projects/model.ts';
 import * as tuningUI from './tuning.ts';
 import * as permissionsUI from './permissions.ts';
 import * as pluginsUI from './plugins.ts';
+import * as registry from '../plugins/registry.ts';
 import type { AppEvent } from '../core/events.ts';
 import { renderMarkdown, esc, plain } from '../lib/markdown.ts';
 import { fold } from '../lib/fuzzy.ts';
@@ -180,7 +181,7 @@ export function fenceFor(note: Note): (lang: string, code: string, idx: number) 
     if (lang === 'sql' || lang === 'schema' || lang === 'erd') return erBlock(note, lang, code, idx);
     if (lang === 'agent') return agentBlock(note, code, idx);
     if (lang === 'linear') return linBlock(code);
-    return null;
+    return registry.fence(lang, code);
   };
 }
 
