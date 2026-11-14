@@ -13,6 +13,7 @@ import * as review from './review.ts';
 import * as store from '../../core/store.ts';
 import * as model from './model.ts';
 import * as saved from './drafts.ts';
+import * as permissions from '../permissions.ts';
 import { menu } from '../../ui/kit.ts';
 import type { Project } from './model.ts';
 
@@ -368,13 +369,13 @@ export function composerHTML(p: Project, { session = '', compact = false, machin
   const notes = compact ? [] : [...new Set([...(hand?.notes ?? []), ...(d?.notes ?? [])])].filter(id => store.get(id));
   const mine = d?.text ?? '', given = hand?.prompt ?? '';
   const text = given && mine.trim() && !mine.includes(given) ? `${mine.trimEnd()}\n\n${given}` : given || mine;
-  const read = d?.mode === 'read', tests = !read && !!d?.tests;
+  const read = d?.mode === 'read', inRead = permissions.commandsInRead(), tests = (!read || inRead) && !!d?.tests;
   if (hand) saved.saveDraft(key, { text, notes, mode: read ? 'read' : 'edit', tests });
   return `<form class="ag-compose${compact ? ' compact' : ''}" data-draft="${esc(key)}" data-notes="${esc(notes.join(','))}"><textarea name="prompt" rows="${compact ? 1 : 3}" placeholder="Que doit faire Claude Code dans ${esc(p.name)} ? Ex. « Ajoute des tests au parseur de dates »" aria-label="Consigne pour Claude Code">${esc(text)}</textarea>
     <div class="ag-ctx">${notes.map(chip).join('')}<button type="button" class="ag-addnote" data-ag-note>${icon('plus')}Joindre une note</button></div>
     <div class="ag-opts">
       <div class="ag-seg" role="radiogroup" aria-label="Mode"><label><input type="radio" name="mode" value="edit"${read ? '' : ' checked'}><span>${icon('pencil')}Modifier</span></label><label><input type="radio" name="mode" value="read"${read ? ' checked' : ''}><span>${icon('search')}Analyser</span></label></div>
-      ${bridge.local() && machine !== 'server' ? `<label class="ag-check" title="Autorise npm test et npm run … : le code du projet peut alors s’exécuter"><input type="checkbox" name="tests"${tests ? ' checked' : ''}${read ? ' disabled' : ''}>Tests npm</label>` : ''}
+      ${bridge.local() && machine !== 'server' ? `<label class="ag-check" title="Autorise les commandes réglées dans Réglages → Autorisations (par défaut npm test et npm run …) : le code du projet peut alors s’exécuter"><input type="checkbox" name="tests"${tests ? ' checked' : ''}${read && !inRead ? ' disabled' : ''}>Commandes</label>` : ''}
       <select class="field" name="machine" aria-label="Où travailler"${machine === 'server' ? '' : ' hidden'}><option value="mac">Sur le Mac</option>${machine === 'server' ? '<option value="server" selected>Sur le serveur</option>' : ''}</select>
       ${tuneHTML(saved.defaults())}
       <span class="ag-hint" data-hint>${read ? HINT_READ : HINT_EDIT}</span>
@@ -384,6 +385,7 @@ export function composerHTML(p: Project, { session = '', compact = false, machin
 /** Branche les formulaires de consigne présents dans `root` (lancement, reprise, raccourci ⌘↩). */
 export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: AgentRun) => void): void {
   void loadLimits();
+  permissions.preload();
   if (root.dataset.agBound) return;
   root.dataset.agBound = '1';
   root.addEventListener('input', e => {
@@ -397,7 +399,7 @@ export function bindComposer(root: HTMLElement, p: Project, onStarted: (r: Agent
     if (t.name !== 'mode') return;
     const hint = $('[data-hint]', f), tests = $<HTMLInputElement>('[name=tests]', f);
     if (hint) hint.innerHTML = t.value === 'edit' ? HINT_EDIT : HINT_READ;
-    if (tests) { tests.disabled = t.value !== 'edit'; if (tests.disabled) tests.checked = false; }
+    if (tests) { tests.disabled = t.value !== 'edit' && !permissions.commandsInRead(); if (tests.disabled) tests.checked = false; }
     keepDraft(f);
   });
   root.addEventListener('click', e => {
@@ -466,7 +468,7 @@ function runCard(r: AgentRun): string {
     <p class="ag-prompt">${esc(r.prompt)}</p>
     ${live(r) && r.lastText ? `<p class="ag-last">${esc(r.lastText)}</p>` : ''}
     ${!live(r) && r.result ? `<p class="ag-last">${esc(r.result.replace(/[#*`>]/g, '').slice(0, 220))}</p>` : ''}
-    ${r.denials.length ? `<p class="ag-denied">${icon('shield')}${r.denials.length} action${r.denials.length > 1 ? 's' : ''} refusée${r.denials.length > 1 ? 's' : ''} par les garde-fous</p>` : ''}
+    ${r.denials.length ? `<p class="ag-denied" title="${esc(r.denials.join('\n'))}">${icon('shield')}${r.denials.length} action${r.denials.length > 1 ? 's' : ''} refusée${r.denials.length > 1 ? 's' : ''} par les garde-fous${bridge.local() ? ' · <button type="button" class="link-btn" data-open-conn="autorisations">Régler les autorisations</button>' : ''}</p>` : ''}
     <footer>${r.worktree ? `<code>${esc(r.worktree)}</code>` : ''}${r.session ? `<button class="btn" data-ss="${esc(r.session)}">${icon('eye')}Suivre</button>` : ''}${live(r) ? `<button class="btn" data-ag="stop" data-run="${esc(r.run)}">${icon('stop')}Arrêter</button>` : ''}</footer></article>`;
 }
 

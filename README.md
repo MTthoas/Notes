@@ -179,7 +179,16 @@ Si l'agent ne parvient pas à résoudre, la publication s'arrête et te donne la
 
 **Mémoire du dépôt** : chaque agent lit d'abord `contexte.md`, à la racine du dépôt, au lieu de réexplorer le code : où se trouve chaque chose, les conventions, les pièges déjà rencontrés. En mode Modifier, il y ajoute à la fin de son travail ce qu'il a appris de durable, et le crée s'il manque ; le fichier part avec ses changements, dans la même pull request. Les deux consignes se modifient ou se vident dans Réglages → Consignes et contexte.
 
-**Garde-fous** : `--restricted` (fichiers confinés au dossier de travail), `--permission-mode dontAsk` et une liste explicite d'outils (lecture, écriture). Aucune commande ne s'exécute, sauf si tu coches **Tests npm** (`npm test`, `npm run …`). Pas de réglages, hooks ni serveurs MCP de l'utilisateur ; trois agents au plus, 90 minutes au plus.
+**Garde-fous** : `--restricted` (fichiers confinés au dossier de travail), `--permission-mode dontAsk` (tout ce qui n'est pas listé est refusé, sans question) et une liste explicite d'outils (lecture, écriture). Aucune commande ne s'exécute, sauf si tu coches **Commandes** au lancement. Pas de réglages, hooks ni serveurs MCP de l'utilisateur ; trois agents au plus, 90 minutes au plus.
+
+**Autorisations** — Réglages → **Autorisations des agents** (app Mac) règle ce que les agents ont le droit de faire, et montre les outils que reçoit Claude Code dans chaque mode :
+
+- **Commandes** : celles que permet la case **Commandes**, une par ligne, au format des règles de Claude Code (`npm run *`, `cargo test *`, `npm ci`…). Par défaut `npm test` et `npm run …`. L'agent reçoit la liste dans sa consigne ; une commande hors liste est refusée, et le nombre d'actions refusées s'affiche sous son fil, avec un lien vers ce réglage. Claude Code laisse toujours passer de lui-même quelques commandes en lecture seule (`ls`, `whoami`…). Une réponse dans la discussion garde les commandes du tour précédent.
+- **Toutes les commandes** (terminal sans restriction) et **Aussi en mode Analyser** (qui travaille dans le dossier du projet, pas dans une copie) : désactivés par défaut, avec un avertissement.
+- **Web** : recherche et lecture de pages (`WebSearch`, `WebFetch`), désactivé par défaut.
+- **Dossiers des outils** : ajoutés en tête du `PATH` des agents. Ouvert depuis le Dock, Studio n'a qu'un PATH minimal : un agent ne trouverait pas `cargo` ni les outils de Homebrew.
+
+Ces réglages restent sur le Mac. Un appareil lié ne peut ni les lire ni les modifier, ni demander les commandes ; un agent lancé sur un serveur n'a jamais de commandes.
 
 ### Serveurs et pilotage à distance
 
@@ -298,6 +307,7 @@ src/                               TypeScript strict
     projects/         model.ts (bloc ```projet, tags), page.ts (cockpit), flux.ts,
                       review.ts (revue IA), sessions.ts (agents Claude Code, publication)
     news.ts           nouveautés présentées après une mise à jour, fenêtre « mise à jour prête »
+    permissions.ts    réglages des autorisations des agents Claude Code (commandes, web, PATH), gardés sur le Mac
     automations.ts, help.ts, onboarding.ts
   integrations/     services extérieurs, appelés directement depuis l'app
     ai.ts             Claude, OpenAI, modèle local : boucle d'agent et outils

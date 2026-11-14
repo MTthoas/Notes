@@ -38,6 +38,11 @@ interface Item {
 
 // Les plus récentes d'abord.
 const NEWS: Item[] = [
+  { id: 'agent-permissions', date: '2026-11-14', mac: true, icon: 'terminal', hue: 'amber',
+    title: 'Choisis ce que tes agents peuvent lancer',
+    text: 'Réglages → Autorisations des agents : la liste des commandes permises quand tu coches « Commandes » (cargo test, npm ci…), l’accès au web, et les dossiers ajoutés au PATH. Une réponse dans la discussion garde maintenant les commandes du tour précédent.',
+    points: ['Commandes', 'Web', 'PATH'],
+    go: { label: 'Régler les autorisations', view: { type: 'settings', tab: 'autorisations' } } },
   { id: 'claude-chat', date: '2026-11-14', icon: 'sparkle', hue: 'orange',
     title: 'Parle à Claude, sans dossier',
     text: 'Une page Claude dans la barre latérale : une conversation libre, sans projet. Claude lit tes notes, tâches, Linear et GitHub quand c’est utile, et te demande ton accord avant de modifier quoi que ce soit.',

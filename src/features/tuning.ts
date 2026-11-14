@@ -22,7 +22,7 @@ const AGENT_ITEMS: Omit<Field, 'value' | 'changed'>[] = [
   { key: 'context', kind: 'text', label: 'Mémoire du dépôt · lire contexte.md', hint: 'Chaque agent lit contexte.md en premier, à la racine du dépôt, au lieu de réexplorer le code. Vide : il ne le lit plus.' },
   { key: 'contextEdit', kind: 'text', label: 'Mémoire du dépôt · tenir contexte.md à jour', hint: 'Mode « Modifier » seulement : l’agent y ajoute ce qu’il a appris de durable, et le crée s’il manque. Le fichier part avec ses changements, dans la même pull request. Vide : il n’y touche pas.' },
   { key: 'economy', kind: 'text', label: 'Économie de contexte', hint: 'Un agent relit tout son contexte à chaque appel d’outil : ce qu’il y fait entrer se paie à chaque tour suivant. Vide : aucune consigne d’économie.' },
-  { key: 'tests', kind: 'text', label: 'Avec les tests npm', hint: 'Ajouté seulement quand « Tests npm » est coché.' },
+  { key: 'tests', kind: 'text', label: 'Avec les commandes', hint: 'Ajouté seulement quand « Commandes » est coché, suivi de la liste des commandes permises (Réglages → Autorisations).' },
   { key: 'behavior', kind: 'text', label: 'Façon de travailler', hint: 'Quand agir seul, quand discuter, et la forme du compte rendu.' },
   { key: 'extra', kind: 'text', label: 'Tes consignes', hint: 'Ajoutées à la fin, pour tous les agents de tous les projets : conventions, langue, style de code, ce qu’il ne faut jamais toucher.' },
   { key: 'compactWindow', kind: 'num', label: 'Résumer le contexte à partir de', hint: 'Au-delà, Claude Code résume la conversation au lieu de tout relire à chaque appel d’outil, même avec un modèle qui accepte un million de tokens. 0 : laisser Claude Code décider.', min: 0, max: 2000000, step: 50000, unit: 'tokens' },
