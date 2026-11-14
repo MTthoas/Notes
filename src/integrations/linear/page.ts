@@ -132,7 +132,7 @@ export async function openTicket(identifier: string): Promise<void> {
     e.preventDefault();
     if (!i) return;
     const form = target(e);
-    if (form.closest('.tk-add')) { const inp = need<HTMLInputElement>('input', form), v = inp.value; if (!v.trim()) return; inp.value = ''; await todo.addForTicket(i.identifier, i.title, v); redrawMine(); $('.tk-add input', m.body)?.focus(); return; }
+    if (form.closest('.tk-add')) { const inp = need<HTMLInputElement>('input', form), v = inp.value; if (!v.trim()) return; inp.value = ''; await todo.addForTicket(i.identifier, i.title, v, todo.projectOfIssue(i)); redrawMine(); $('.tk-add input', m.body)?.focus(); return; }
     if (target(e).closest('.tk-comform')) {
       const ta = need<HTMLTextAreaElement>('textarea', form), v = ta.value.trim(); if (!v) return;
       try { await linear.addComment(i.id, v); await fetchIt(); draw(); toast('Commentaire publié'); } catch (err) { toast('Linear : ' + errMsg(err)); }

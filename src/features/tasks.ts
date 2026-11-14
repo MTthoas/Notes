@@ -229,8 +229,13 @@ const clearDone = (n: Note) => mutate(n, lines => { for (let i = lines.length - 
 
 // ---------- Lien avec la fiche d'un ticket Linear ----------
 export function forTicket(id: string): Task | null { const l = list(); return l && !store.isLocked(l) ? ownTasks(l).find(t => t.ticket === id) || null : null; }
-export async function addForTicket(id: string, title: string, subText: string): Promise<Task | null> {
-  if (!forTicket(id)) await add(`${title} ${id}`);
+/** Projet Studio relié (champ `linear:`, même nom) au projet Linear du ticket : la tâche, qui porte le titre du ticket, y est rangée et n’apparaît pas en Général. */
+export function projectOfIssue(i: { project?: { name: string } | null }): string | undefined {
+  const name = i.project?.name.trim().toLowerCase();
+  return name ? projectsModel.projects().find(p => p.linear?.trim().toLowerCase() === name)?.id : undefined;
+}
+export async function addForTicket(id: string, title: string, subText: string, projectId?: string): Promise<Task | null> {
+  if (!forTicket(id)) await add(`${title} ${id}`, projectId);
   const t = forTicket(id);
   if (t && subText?.trim()) await addSub(t.note, t.line, subText);
   return forTicket(id);
@@ -403,7 +408,7 @@ export function mount(main: HTMLElement): void {
       const mine = await linear.issues({ assignee: 'me', states: ['started', 'unstarted'], limit: 25 });
       if (!mine.length) { toast('Aucun ticket Linear ne t’est assigné.'); return; }
       for (const i of mine) tickets.set(i.identifier, i);
-      menu(btn, mine.map(i => ({ label: `${i.identifier} · ${i.title}`, icon: 'linear', run: () => add(`${i.title} ${i.identifier}`) })));
+      menu(btn, mine.map(i => ({ label: `${i.identifier} · ${i.title}`, icon: 'linear', run: () => add(`${i.title} ${i.identifier}`, projectOfIssue(i)) })));
     } catch (x) { toast('Linear : ' + errMsg(x)); }
   });
   form.addEventListener('submit', async e => {

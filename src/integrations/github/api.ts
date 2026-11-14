@@ -103,7 +103,10 @@ export async function poll({ quiet = true } = {}): Promise<void> {
     events = lists.flat().filter(e => e?.id && !seen.has(e.id) && seen.add(e.id)).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 120);
     // Nouveautés depuis le passage précédent (pas au premier chargement) : déclencheur des automatisations.
     const fresh = known ? events.filter(e => e.created_at > before && e.actor?.login !== me) : [];
-    if (fresh.length) bus.emit('github', fresh.slice(0, 20).map(e => { const d = describe(e); return `- ${e.actor?.login ?? ''} ${d.verb} ${d.what} (${e.repo?.name ?? ''}) ${d.url}`; }).join('\n'));
+    // Un événement par dépôt : une automatisation ne reçoit que les dépôts de son périmètre.
+    const byRepo = new Map<string, GhEvent[]>();
+    for (const e of fresh.slice(0, 20)) { const r = e.repo?.name ?? '', l = byRepo.get(r); if (l) l.push(e); else byRepo.set(r, [e]); }
+    for (const [repo, list] of byRepo) bus.emit('github', list.map(e => { const d = describe(e); return `- ${e.actor?.login ?? ''} ${d.verb} ${d.what} (${e.repo?.name ?? ''}) ${d.url}`; }).join('\n'), { repo });
     if (!localStorage.getItem(SEEN) && events[0]) localStorage.setItem(SEEN, events[0].created_at); // premier passage : rien n'est « nouveau »
     error = ''; loaded = true;
   } catch (e) { error = errMsg(e); if (!quiet) toast('GitHub : ' + error); }

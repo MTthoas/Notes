@@ -19,7 +19,9 @@ export const systemState = (): NotificationPermission | 'native' | 'absent' => n
 export const askPermission = async (): Promise<NotificationPermission> => ('Notification' in window ? Notification.requestPermission() : 'denied');
 
 export const unreadCount = (): number => items.filter(n => !n.readAt).length;
-export const latest = (n = 4) => items.slice(0, n).map(x => ({ at: x.createdAt, text: headline(x), issue: x.issue?.identifier || '', unread: !x.readAt }));
+/** Projet Linear d'une notification ('' : aucun, elle n'entre dans aucun périmètre de l'IA). */
+const projectOf = (n: linear.Notification): string => n.issue?.project?.id ?? n.project?.id ?? '';
+export const latest = (n = 4) => items.slice(0, n).map(x => ({ at: x.createdAt, text: headline(x), issue: x.issue?.identifier || '', unread: !x.readAt, project: projectOf(x) }));
 export const active = (): boolean => vault.isOpen() && linear.connected();
 
 const TYPES: [RegExp, string][] = [
@@ -70,7 +72,10 @@ export async function poll({ quiet = true } = {}): Promise<void> {
     // Premier passage : on prend l'état actuel comme point de départ, sans rien annoncer.
     const fresh = last ? items.filter(n => !n.readAt && n.createdAt > last) : [];
     announce(fresh);
-    if (fresh.length) events.emit('linear', fresh.map(n => `- ${headline(n)}${excerpt(n) ? ` : « ${excerpt(n)} »` : ''}${n.issue ? ` (${n.issue.url})` : ''}`).join('\n'));
+    // Un événement par projet Linear : une automatisation ne reçoit que les notifications de son projet.
+    const byProject = new Map<string, linear.Notification[]>();
+    for (const n of fresh) { const id = projectOf(n), l = byProject.get(id); if (l) l.push(n); else byProject.set(id, [n]); }
+    for (const [id, list] of byProject) events.emit('linear', list.map(n => `- ${headline(n)}${excerpt(n) ? ` : « ${excerpt(n)} »` : ''}${n.issue ? ` (${n.issue.url})` : ''}`).join('\n'), { linearProject: id });
     if (newest && (!last || newest > last)) localStorage.setItem(SEEN, newest);
     loaded = true; badge();
     if (before !== unreadCount()) app.renderSidebar();

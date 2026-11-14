@@ -35,12 +35,14 @@ export interface Project {
 export interface Notification {
   id: string; type: string; createdAt: string; readAt: string | null; archivedAt: string | null; snoozedUntilAt: string | null;
   actor: { name: string; displayName: string } | null;
-  issue?: { identifier: string; title: string; url: string };
+  issue?: { identifier: string; title: string; url: string; project?: { id: string } | null };
   comment?: { body: string } | null;
-  project?: { name: string; url: string };
+  project?: { id: string; name: string; url: string };
 }
-/** Options d'un bloc ```linear. */
-export interface Query { assignee?: string; states?: string[]; team?: string; search?: string; project?: string; label?: string; limit: number }
+/** Options d'un bloc ```linear. `projectId` : projet exact (périmètre de l'IA), prioritaire sur `project` (nom approché). */
+export interface Query { assignee?: string; states?: string[]; team?: string; search?: string; project?: string; projectId?: string; label?: string; limit: number }
+/** Projet Linear rattaché à un projet Studio, avec ses équipes (périmètre de l'IA). */
+export interface ScopedProject { id: string; name: string; teams: Team[] }
 
 type Nodes<T> = { nodes: T[] };
 const cache = new Map<string, { at: number; data: Issue[] }>(); // requête -> résultat
@@ -86,7 +88,8 @@ export async function issues(o: Query, { fresh = false } = {}): Promise<Issue[]>
   if (o.states?.length) filter.state = { type: { in: o.states } };
   if (o.team) filter.team = { key: { eq: o.team } };
   if (o.search) filter.title = { containsIgnoreCase: o.search };
-  if (o.project) filter.project = { name: { containsIgnoreCase: o.project } };
+  if (o.projectId) filter.project = { id: { eq: o.projectId } };
+  else if (o.project) filter.project = { name: { containsIgnoreCase: o.project } };
   if (o.label) filter.labels = { name: { eqIgnoreCase: o.label } };
   const k = JSON.stringify([filter, o.limit]), hit = cache.get(k);
   if (!fresh && hit && Date.now() - hit.at < 60e3) return hit.data;
@@ -103,8 +106,8 @@ export async function issuesByIds(ids: string[]): Promise<Issue[]> {
   return d.issues.nodes;
 }
 
-export async function createIssue({ teamId, title, description }: { teamId: string; title: string; description?: string }): Promise<{ identifier: string; url: string; title: string }> {
-  const d = await gql<{ issueCreate: { issue: { identifier: string; url: string; title: string } } }>('mutation($i: IssueCreateInput!) { issueCreate(input: $i) { success issue { identifier url title } } }', { i: { teamId, title, description } });
+export async function createIssue({ teamId, title, description, projectId }: { teamId: string; title: string; description?: string; projectId?: string }): Promise<{ identifier: string; url: string; title: string }> {
+  const d = await gql<{ issueCreate: { issue: { identifier: string; url: string; title: string } } }>('mutation($i: IssueCreateInput!) { issueCreate(input: $i) { success issue { identifier url title } } }', { i: { teamId, title, description, ...(projectId ? { projectId } : {}) } });
   cache.clear();
   return d.issueCreate.issue;
 }
@@ -143,8 +146,8 @@ export async function moveToType(issue: Issue, type: string): Promise<State> {
 // ---------- Notifications (boîte de réception Linear) ----------
 // Sans serveur, pas de webhook possible : l'app interroge Linear à intervalle régulier.
 const NOTIF = `id type createdAt readAt archivedAt snoozedUntilAt actor { name displayName }
-  ... on IssueNotification { issue { identifier title url } comment { body } }
-  ... on ProjectNotification { project { name url } }`;
+  ... on IssueNotification { issue { identifier title url project { id } } comment { body } }
+  ... on ProjectNotification { project { id name url } }`;
 
 export async function notifications(): Promise<Notification[]> {
   const d = await gql<{ notifications: Nodes<Notification> }>(`query { notifications(first: 80) { nodes { ${NOTIF} } } }`);
@@ -168,6 +171,14 @@ export async function projects(): Promise<Project[]> {
   const q = (extra: string) => gql<{ projects: Nodes<RawProject> }>(`query { projects(first: 60, orderBy: updatedAt) { nodes { ${PROJECT} ${extra} } } }`);
   let d; try { d = await q('status { name type color }'); } catch { d = await q('state'); } // anciens espaces : « state » seulement
   return d.projects.nodes.map(({ state, ...p }) => ({ ...p, status: p.status || { name: state || '', type: state || '', color: '' } }));
+}
+/** Projet au nom exact (casse ignorée). Deux homonymes : erreur, plutôt que de deviner lequel l'IA peut lire. */
+export async function projectByName(name: string): Promise<ScopedProject | null> {
+  const d = await gql<{ projects: Nodes<{ id: string; name: string; teams: Nodes<Team> }> }>('query($n: String!) { projects(filter: { name: { eqIgnoreCase: $n } }, first: 2) { nodes { id name teams { nodes { id key name } } } } }', { n: name.trim() });
+  const list = d.projects.nodes;
+  if (list.length > 1) throw new Error(`Plusieurs projets Linear s’appellent « ${name} » : renomme-en un pour que Studio sache lequel ouvrir à l’IA.`);
+  const p = list[0];
+  return p ? { id: p.id, name: p.name, teams: p.teams.nodes } : null;
 }
 export async function projectIssues(id: string): Promise<Issue[]> {
   const d = await gql<{ project: { issues: Nodes<Issue> } }>(`query($id: String!) { project(id: $id) { issues(first: 150) { nodes { ${FIELDS} } } } }`, { id });

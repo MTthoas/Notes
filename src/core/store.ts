@@ -181,7 +181,7 @@ export function openTasks(exceptId?: string): TaskGroup[] {
 function announceDone(n: Note, raw: string): void {
   if (n.enc || meta(n).tags.some(t => /^priv[ée]/.test(t))) return;
   const text = raw.replace(/^\s*(?:[-*+]|\d+[.)])\s+\[[ xX/]\]\s+/, '').trim();
-  events.emit('tache', `« ${text} » (note « ${n.title.trim() || 'Sans titre'} »)`);
+  events.emit('tache', `« ${text} » (note « ${n.title.trim() || 'Sans titre'} »)`, { noteId: n.id, line: text });
 }
 
 /** Change l'état d'une tâche (Kanban) : à faire, en cours ou terminée. */

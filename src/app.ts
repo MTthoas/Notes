@@ -189,7 +189,7 @@ function renderSidebar() {
       <button class="icon-btn" data-act="new" title="Nouvelle note (${keys(SC.newNote)})" aria-label="Nouvelle note">${icon('compose')}</button>
     </div>
     <div class="side-scroll">
-      <div class="side-group">${item('home')}${item('claude')}${v.type === 'claude' ? chat.sideList().map(c => `<button class="side-item side-chat${c.sel ? ' sel' : ''}" data-chat="${esc(c.id)}" title="${esc(c.title)}"><i class="ss-live${c.live ? ' on' : ''}"></i><span>${esc(c.title)}</span></button>`).join('') : ''}</div>
+      <div class="side-group">${item('home')}</div>
       <div class="side-label">Notes</div>
       <div class="side-group">${item('inbox')}${item('today')}${item('journal')}${item('all')}${count.ephemeral || v.type === 'ephemeral' ? item('ephemeral') : ''}</div>
       <div class="side-label">Organisation</div>
@@ -595,7 +595,7 @@ async function captureTodo(text: string) {
 // Une capture déclenche les automatisations « déclencheur: capture » (sauf note privée).
 function announceCapture(n: Note): void {
   onboarding.mark('note');
-  if (!n.enc && !store.meta(n).tags.some(t => /^priv[ée]/.test(t))) events.emit('capture', `${n.title}\n\n${store.getBody(n) ?? ''}`);
+  if (!n.enc && !store.meta(n).tags.some(t => /^priv[ée]/.test(t))) events.emit('capture', `${n.title}\n\n${store.getBody(n) ?? ''}`, { noteId: n.id });
 }
 async function quickCapture(text: string) {
   onboarding.mark('note');
@@ -796,7 +796,6 @@ function commands() {
     c('Notes', 'notes', () => setView({ type: 'all' }), '', 'liste toutes'),
     c('Boîte de réception', 'inbox', () => setView({ type: 'inbox' }), '', 'inbox'),
     c('Accueil', 'home', () => setView({ type: 'home' }), '', 'widgets tableau de bord dashboard'),
-    c('Parler à Claude', 'sparkle', () => setView({ type: 'claude' }), '', 'claude chat conversation discuter assistant global'),
     c('Demander à l’IA', 'sparkle', () => hub.askAI(), SC.ask, 'claude chatgpt openai assistant question'),
     c('Automatisations', 'bot', () => setView({ type: 'agents' }), '', 'agents ia automatiser routine planifier déclencheur'),
     c('Nouvelle automatisation', 'bot', () => setView({ type: 'agents' }), '', 'créer agent modèle planifier'),

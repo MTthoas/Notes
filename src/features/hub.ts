@@ -17,6 +17,8 @@ import * as update from '../core/update.ts';
 import * as news from './news.ts';
 import * as journal from './journal.ts';
 import * as tuning from '../integrations/tuning.ts';
+import * as scope from '../integrations/scope.ts';
+import { projectOfNote } from './projects/model.ts';
 import * as tuningUI from './tuning.ts';
 import * as permissionsUI from './permissions.ts';
 import * as pluginsUI from './plugins.ts';
@@ -339,16 +341,20 @@ export async function runAgent(spec: ai.AgentSpec, note: Note, how: RunHow = 'ma
   } finally { running.delete(key); changed(); }
 }
 
-// Déclencheurs : une automatisation « déclencheur: … » se lance à l'événement, au plus une fois par minute.
+// Déclencheurs : une automatisation « déclencheur: … » se lance à l'événement, au plus une fois par minute,
+// et seulement si l'événement tombe dans son périmètre (une notification Linear du projet, une note du projet…).
 const lastTrigger = new Map<string, number>();
 function onEvent(e: AppEvent): void {
   if (vault.enabled() && !vault.isOpen()) return;
   for (const { note, spec } of ai.findAgents()) {
     if (spec.declencheur !== e.kind || isPaused(spec, note) || !ai.ready(spec.modele || ai.config().provider)) continue;
-    const k = keyOf(spec, note);
-    if (running.has(k) || Date.now() - (lastTrigger.get(k) ?? 0) < 60e3) continue;
-    lastTrigger.set(k, Date.now());
-    void runAgent(spec, note, 'déclenché', e);
+    let s: scope.Scope; try { s = scope.byName(spec.projet); } catch { continue; }
+    void scope.eventIn(s, e).then(ok => {
+      const k = keyOf(spec, note);
+      if (!ok || running.has(k) || Date.now() - (lastTrigger.get(k) ?? 0) < 60e3) return;
+      lastTrigger.set(k, Date.now());
+      void runAgent(spec, note, 'déclenché', e);
+    });
   }
 }
 
@@ -372,10 +378,13 @@ function tick(): void {
 const noteContext = (body: string): string => { const max = tuning.num('ctx.note'); return body.length > max ? body.slice(0, max) + '\n…(note tronquée)' : body; };
 export function askAI(prefill = ''): void {
   const n = app.current(), cfg = ai.config();
-  const canCtx = !!n && !n.deletedAt && !store.isLocked(n) && ai.shareable(n);
+  // Périmètre : le projet de la note ouverte, sinon Général. La liste des tâches mêle tous les projets : jamais jointe.
+  const sc = scope.of(n ? projectOfNote(n) : null), withLinear = scope.hasLinear(sc);
+  const canCtx = !!n && !n.deletedAt && !n.todo && !store.isLocked(n) && ai.shareable(n);
   const m = modal({ cls: 'ask', html: `<div class="cap-head">${icon('sparkle')}<span>Demander à l’IA</span><select class="ask-prov" aria-label="Fournisseur">${Object.entries(ai.PROVIDERS).map(([k, l]) => `<option value="${k}"${k === cfg.provider ? ' selected' : ''}>${l}${ai.ready(k as ai.Provider) ? '' : ' — à configurer'}</option>`).join('')}</select></div>
     <textarea rows="3" placeholder="Résume cette note, propose un plan d’action, crée les issues Linear correspondantes…" aria-label="Demande" autofocus>${esc(prefill)}</textarea>
-    <div class="ask-opts"><label><input type="checkbox" data-o="ctx"${canCtx ? ' checked' : ' disabled'}> Note ouverte${n && !canCtx ? ' (chiffrée ou #privé : jamais envoyée)' : ''}</label><label><input type="checkbox" data-o="notes" checked> Mes notes</label><label><input type="checkbox" data-o="linear"${linear.connected() ? '' : ' disabled'}> Linear</label><label><input type="checkbox" data-o="agents"> Mes agents</label></div>
+    <p class="ask-scope">${icon('lock')}Périmètre : ${esc(scope.label(sc))}${sc.project ? '' : ' (hors projets)'}</p>
+    <div class="ask-opts"><label><input type="checkbox" data-o="ctx"${canCtx ? ' checked' : ' disabled'}> Note ouverte${n && !canCtx ? (n.todo ? ' (liste des tâches : jamais jointe)' : ' (chiffrée ou #privé : jamais envoyée)') : ''}</label><label><input type="checkbox" data-o="notes" checked> ${sc.project ? 'Notes du projet' : 'Notes hors projets'}</label><label title="${withLinear ? '' : 'Linear ne s’ouvre à l’IA que depuis un projet relié à Linear'}"><input type="checkbox" data-o="linear"${withLinear ? '' : ' disabled'}> Linear${sc.project?.linear ? ` · ${esc(sc.project.linear)}` : ''}</label><label><input type="checkbox" data-o="agents"> Mes agents</label></div>
     <div class="ask-steps"></div><div class="ask-out md" hidden></div>
     <div class="cap-foot"><span class="ask-status"></span><span class="ask-actions"><button class="btn" data-ins hidden>Ajouter à la note</button><button class="btn" data-new hidden>Nouvelle note</button><button class="btn btn-primary" data-go>Envoyer ${kbd('mod+enter')}</button></span></div>` });
   const ta = need<HTMLTextAreaElement>('textarea', m.node), out = need('.ask-out', m.node), status = need('.ask-status', m.node), steps = need('.ask-steps', m.node);
@@ -390,7 +399,7 @@ export function askAI(prefill = ''): void {
       const ctx = n && opt('ctx') ? `Note ouverte : « ${titleOf(n)} »\n\n${noteContext(store.getBody(n) ?? '')}` : '';
       void journal.record(ta.value, n && opt('ctx') ? `Demander à l’IA · ${titleOf(n)}` : 'Demander à l’IA');
       const r = await ai.run({ prompt: ta.value, provider: p, context: ctx, tools: ['notes', 'linear', 'agents'].filter(opt) },
-        { approve, onWrite: app.refreshNote, onStep: e => steps.insertAdjacentHTML('beforeend', `<div>${icon('bolt')}${esc(stepLabel(e))}</div>`) });
+        { approve, scope: sc, onWrite: app.refreshNote, onStep: e => steps.insertAdjacentHTML('beforeend', `<div>${icon('bolt')}${esc(stepLabel(e))}</div>`) });
       text = r.text; out.innerHTML = renderMarkdown(text || '*(réponse vide)*'); out.hidden = false;
       status.textContent = `Réponse de ${ai.PROVIDERS[p]}`;
       need('[data-ins]', m.node).hidden = !canCtx; need('[data-new]', m.node).hidden = false;
@@ -451,7 +460,7 @@ export async function click(e: MouseEvent): Promise<boolean> {
   return false;
 }
 
-export const AGENT_TEMPLATE = '```agent\nnom: Mon automatisation\noutils: notes, linear, github\nplanning:\ndéclencheur:\nsortie: journal\n---\nDécris ici, comme à un assistant, ce que Studio doit faire. Exemple : « Chaque matin, liste mes tâches en retard et crée une note avec mes trois priorités. »\n```\n';
+export const AGENT_TEMPLATE = '```agent\nnom: Mon automatisation\noutils: notes, linear, github\nprojet:\nplanning:\ndéclencheur:\nsortie: journal\n---\nDécris ici, comme à un assistant, ce que Studio doit faire. Exemple : « Chaque matin, liste mes tâches en retard et crée une note avec mes trois priorités. »\n```\n';
 export const SCHEMA_TEMPLATE = '```schema\nusers\n  id uuid pk\n  email text unique\n  name text?\n\nposts\n  id uuid pk\n  author_id uuid > users.id\n  title text\n  published_at timestamptz?\n```\n';
 export async function newAgentNote(): Promise<void> {
   const n = await store.createNote({ title: 'Nouvel agent', body: `${AGENT_TEMPLATE}\n#agents` });
