@@ -90,6 +90,8 @@ export interface Plugin {
   projectPanels?: ProjectPanel[];
   taskActions?: TaskAction[];
   commands?: Command[];
+  /** Rendu des blocs de code ```<langage> d'une note (HTML synchrone, ou null pour le bloc brut). */
+  fences?: Record<string, (code: string, api: PluginAPI) => string | null>;
   /** Appelé à l'activation (et au démarrage si le plugin est actif). */
   start?(api: PluginAPI): void;
   /** HTML ajouté sous les champs, dans les réglages (état de connexion, bouton d'essai…). */
@@ -131,6 +133,15 @@ export const taskActions = (t: Task, p: Project | null): TaskAction[] =>
   live().flatMap(x => x.taskActions ?? []).filter(x => !x.when || x.when(t, p));
 export const commands = (): { label: string; icon: string; kw: string; run: () => unknown }[] =>
   live().flatMap(p => (p.commands ?? []).map(c => ({ label: c.label, icon: c.icon, kw: c.kw ?? '', run: () => guard(() => c.run(api(p))) })));
+
+/** Bloc ```<lang> rendu par un plugin actif ; null si aucun ne le prend. */
+export function fence(lang: string, code: string): string | null {
+  for (const p of live()) {
+    const f = p.fences?.[lang]; if (!f) continue;
+    try { return f(code, api(p)); } catch (e) { console.error('plugin', p.id, e); return null; }
+  }
+  return null;
+}
 
 /** L'API remise à un plugin : ses réglages et ses secrets sont rangés sous son identifiant. */
 export function api(p: Plugin): PluginAPI {
