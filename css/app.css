@@ -1668,7 +1668,8 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .ag-tree { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 12px; background: var(--bg); }
 .ag-tree + .ag-tree { border-top: 1px solid var(--border); }
 .ag-tree-main { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 2px; }
-.ag-tree-main code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-tree-main .ag-tree-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-tree-main code { font-size: var(--t-1); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-tree-main em { font-style: normal; color: var(--text-3); font-size: var(--t-1); }
 .ag-tree-main .ag-ok { font-weight: 500; color: var(--ok); }
 .ag-hist { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
