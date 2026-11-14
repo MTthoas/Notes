@@ -18,7 +18,7 @@ import { menu } from '../../ui/kit.ts';
 import type { Project } from './model.ts';
 
 interface Tokens { input: number; output: number; cacheRead: number; cacheWrite: number }
-interface Session { id: string; title: string; /** Titre écrit par Claude Code lui-même, s'il y en a un. */ aiTitle?: string; firstPrompt?: string; branch: string; worktree: string; started: string; updated: string; live: boolean; models: string[]; prompts: number; lastPrompt: string; tokens: Tokens; tools: Record<string, number>; files: string[] }
+interface Session { id: string; title: string; /** Titre écrit par Claude Code lui-même, s'il y en a un. */ aiTitle?: string; firstPrompt?: string; branch: string; worktree: string; started: string; updated: string; /** Dernier vrai échange (absent avec une app Mac ancienne). */ active?: string; live: boolean; models: string[]; prompts: number; lastPrompt: string; tokens: Tokens; tools: Record<string, number>; files: string[] }
 interface Quota { status?: string; resetsAt?: number; rateLimitType?: string; isUsingOverage?: boolean }
 interface Action { at: string; kind: string; text: string }
 export interface AgentRun { machine?: string; host?: string; run: string; mode: string; prompt: string; status: string; session: string; worktree: string; started: string; finished: string; result: string; lastText: string; turns: number; denials: string[]; quota?: Quota | null }
@@ -52,8 +52,22 @@ const pill = (s: string) => { const [c, l] = STATUS[s] ?? ['gray', s]; return `<
 let cur: { box: HTMLElement; p: Project } | null = null;
 /** Projet de la conversation sélectionnée, et son nom une fois connu. */
 let selFor = '', selTitle = '';
-/** Dernières sessions lues, par projet. */
+/** Dernières sessions lues, par projet. Gardées d'une ouverture à l'autre (`at: 0` : à relire), pour que la barre
+ *  latérale et la liste s'affichent tout de suite, avant la réponse du Mac qui relit tous les journaux. */
 const known = new Map<string, { list: Session[]; at: number }>();
+const SESSIONS = 'studio.cc.sessions';
+try {
+  const v = JSON.parse(localStorage.getItem(SESSIONS) || '{}') as unknown;
+  if (v && typeof v === 'object' && !Array.isArray(v))
+    for (const [k, l] of Object.entries(v as Record<string, unknown>))
+      if (Array.isArray(l)) known.set(k, { list: (l as Session[]).filter(s => s && typeof s.id === 'string' && s.tokens).map(s => ({ ...s, live: false })), at: 0 });
+} catch { /* cache illisible : on relira */ }
+function saveKnown(): void {
+  const out = Object.fromEntries([...known].slice(-12).map(([k, v]) => [k, v.list.slice(0, 12)]));
+  try { localStorage.setItem(SESSIONS, JSON.stringify(out)); } catch { /* stockage plein */ }
+}
+/** Dernier échange d'abord : la conversation la plus récente est toujours en tête. */
+const byActivity = (list: Session[]): Session[] => [...list].sort((a, b) => ms(b.active || b.updated) - ms(a.active || a.updated));
 
 // Sous-agents : les tâches que Claude délègue pendant une conversation ont chacune leur propre fil (voir Sessions.swift).
 // On en ouvre un depuis sa conversation, on passe de l'un à l'autre, et on peut l'épingler dans la barre latérale.
@@ -133,8 +147,9 @@ export function sideSessions(pid: string): { id: string; title: string; live: bo
 async function loadList(p: Project): Promise<Session[] | null> {
   const r = await bridge.call('project', 'sessions', { project: p.id }, 20000);
   if (!r.ok) return null;
-  const list = r.found ? (r.sessions as Session[] | undefined) ?? [] : [];
+  const list = byActivity(r.found ? (r.sessions as Session[] | undefined) ?? [] : []);
   known.set(p.id, { list, at: Date.now() });
+  saveKnown();
   quota = (r.quota as Quota | null | undefined) ?? runs.find(x => x.quota)?.quota ?? null;
   notify();
   return list;
@@ -912,7 +927,7 @@ async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
   if (sel) {
     syncStop(box);
     // La liste sert encore à la barre latérale : on la relit de temps en temps, sans attendre.
-    if (!known.has(p.id) || tick % 5 === 0) void loadList(p);
+    if (!known.get(p.id)?.at || tick % 5 === 0) void loadList(p);
     // Fil au repos (plus rien ne s'y écrit, aucun agent n'y travaille) : relu une fois sur quatre seulement.
     const feedId = sb ? `${sel}/${sb}` : sel;
     if (calm === feedId && tick % 4 !== 0 && !runs.some(r => r.session === sel && live(r)) && $('.ss-feed', zone)?.dataset.id === feedId) return;
@@ -944,6 +959,9 @@ async function paintOnce(box: HTMLElement, p: Project): Promise<void> {
     calm = d.live || queued.some(q => q.session === sel) || (subsOf.get(sel) ?? []).some(x => x.live) ? '' : feedId;
     return;
   }
+  // Première lecture : la liste gardée de la dernière fois s'affiche pendant que le Mac relit les journaux.
+  const cached = known.get(p.id);
+  if (cached && !cached.at && cached.list.length && $('.ag-zone > .hm-empty', box)) zone.innerHTML = listHTML(cached.list);
   const list = await loadList(p) ?? [];
   if (!box.isConnected || selected) return;
   paintLimits();
@@ -992,7 +1010,7 @@ async function dropSession(p: Project, id: string): Promise<string> {
   saved.dropDraft(`${p.id}|s:${id}`); saved.forgetSession(id);
   if (pins.some(x => x.s === id)) { pins = pins.filter(x => x.s !== id); savePins(); }
   subsOf.delete(id); nameFailed.delete(id);
-  const k = known.get(p.id); if (k) k.list = k.list.filter(s => s.id !== id);
+  const k = known.get(p.id); if (k) { k.list = k.list.filter(s => s.id !== id); saveKnown(); }
   runs = runs.filter(x => x.session !== id || live(x));
   return '';
 }

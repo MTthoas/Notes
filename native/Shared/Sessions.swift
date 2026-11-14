@@ -11,6 +11,9 @@ final class ClaudeSessions {
     final class State {
         var offset: UInt64 = 0
         var title = ""; var branch = ""; var started = ""; var updated = ""; var lastPrompt = ""; var firstPrompt = ""
+        /// Heure du dernier vrai échange (demande ou réponse) : sert à ranger les conversations. La date du fichier
+        /// et `updated` bougent aussi pour des lignes techniques (titre, résumé…) ajoutées à de vieilles conversations.
+        var active = ""
         var models = Set<String>(); var seen = Set<String>()
         var tokIn = 0, tokOut = 0, tokCacheRead = 0, tokCacheWrite = 0, prompts = 0
         var tools: [String: Int] = [:]; var files: [String] = []
@@ -71,6 +74,7 @@ final class ClaudeSessions {
             let text = c.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty, !text.hasPrefix("<") else { return }
             st.prompts += 1; st.lastPrompt = clip(text, 300)
+            if !ts.isEmpty { st.active = ts }
             if st.firstPrompt.isEmpty { st.firstPrompt = st.lastPrompt }
             push(st, Action(at: ts, kind: "prompt", text: clip(text, 4000)))
             if (e["isSidechain"] as? Bool) != true, !ts.isEmpty, !text.hasPrefix("[Request interrupted") {
@@ -79,6 +83,7 @@ final class ClaudeSessions {
             }
         case "assistant":
             guard let m = e["message"] as? [String: Any] else { return }
+            if !ts.isEmpty { st.active = ts }
             let id = m["id"] as? String ?? UUID().uuidString
             if let model = m["model"] as? String, !model.hasPrefix("<") { st.models.insert(model) }
             if !st.seen.contains(id), let u = m["usage"] as? [String: Any] {
@@ -156,7 +161,7 @@ final class ClaudeSessions {
         let mtime = self.mtime(url)
         let worktree = st.cwd.range(of: "/.claude/worktrees/").map { String(st.cwd[$0.upperBound...]) } ?? ""
         return ["id": url.deletingPathExtension().lastPathComponent, "worktree": worktree, "title": st.title.isEmpty ? (st.lastPrompt.isEmpty ? "Session" : clip(st.lastPrompt, 80)) : st.title,
-                "branch": st.branch, "started": st.started, "updated": st.updated, "live": Date().timeIntervalSince(mtime) < 45,
+                "branch": st.branch, "started": st.started, "updated": st.updated, "active": st.active.isEmpty ? st.updated : st.active, "live": Date().timeIntervalSince(mtime) < 45,
                 // Titre écrit par Claude Code lui-même (sessions du terminal), et première demande : Studio en tire le nom affiché.
                 "aiTitle": st.title, "firstPrompt": st.firstPrompt,
                 "models": Array(st.models).sorted(), "prompts": st.prompts, "lastPrompt": st.lastPrompt,
@@ -178,6 +183,8 @@ final class ClaudeSessions {
                 out.append(self.summary(f, st))
                 if quota == nil, let q = st.quota, ((q["resetsAt"] as? Double) ?? (q["resetsAt"] as? Int).map(Double.init) ?? 0) > now { quota = q }
             }
+            // Dernier échange d'abord (horodatages ISO : l'ordre des chaînes est celui des dates).
+            out.sort { ($0["active"] as? String ?? "") > ($1["active"] as? String ?? "") }
             done(["ok": true, "found": true, "sessions": out, "quota": quota ?? NSNull()])
         }
     }
