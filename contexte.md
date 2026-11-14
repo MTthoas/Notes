@@ -26,6 +26,7 @@ Mémoire du dépôt pour les agents : à lire **en premier**, avant toute recher
 - **Page Claude** (toujours dans un projet, fixé à la création, `Chat.project` ; volontairement absente de la barre latérale et de la palette, on y entre par `chat.startIn` depuis la fiche projet) : `src/features/chat.ts`, vue `claude` ; conversations dans le magasin IndexedDB `chats` (`db.ts`) ; consigne `auto.chat` et limite `ctx.chat` dans `src/integrations/tuning.ts` ; `ai.run({ chat: true })`.
 - **Couleur d'un projet** : `src/features/projects/page.ts` pose `--c:var(--c-<hue>)` sur `.pj-head` et `.pj-card` ; tout ce qui est dedans peut s'en teinter en CSS.
 - **Journal** : `src/features/journal.ts` (rendu `dayPage`, `promptRow`, `sessionBlock`) ; ses styles sont les classes `jr-*` en fin de `css/app.css`. Les classes `hm-*` sont partagées avec l'Accueil : ne les retouche pas pour le seul journal.
+- **Tags des notes** : jamais stockés, recalculés depuis le texte par `analyze` (`src/lib/markdown.ts`, via `store.meta`) ; la règle est `TAG_RE` + `notTag`, partagée par le rendu (`inline`). La capture rapide (`parseCapture`, `src/app.ts`) a sa propre expression.
 - **Icônes** : table en tête de `src/ui/kit.ts` (`icon('nom')`).
 - **Commande `studio`** : `bin/studio` (sh POSIX), qui appelle `native/build-mac.sh`, lequel appelle `native/copy-web.sh` (build web puis copie dans l'app).
 
