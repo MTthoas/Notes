@@ -89,6 +89,7 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         if type == "project", let action = body["action"] as? String, let id = body["id"] as? Int { project(action, id: id, body: body) }
         if type == "agent", let action = body["action"] as? String, let id = body["id"] as? Int { agent(action, id: id, body: body) }
         if type == "claude", let action = body["action"] as? String, let id = body["id"] as? Int { claude(action, id: id, body: body) }
+        if type == "docker", let action = body["action"] as? String, let id = body["id"] as? Int { docker(action, id: id, body: body) }
         if type == "update", let action = body["action"] as? String, let id = body["id"] as? Int { update(action, id: id) }
         if type == "voice", let action = body["action"] as? String {
             Dictation.shared.send = { [weak self] payload in
@@ -173,6 +174,18 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         default:
             answer(["id": id, "ok": false, "message": "Action inconnue."])
         }
+        #else
+        answer(["id": id, "ok": false, "message": "Disponible dans l'app Mac."])
+        #endif
+    }
+
+    /// Docker sur ce Mac, en lecture seule : conteneurs et images, rattachés aux projets dont la page donne l'identifiant
+    /// (voir Docker.swift). Le dossier de chaque projet est lu ici, jamais fourni par la page.
+    private func docker(_ action: String, id: Int, body: [String: Any]) {
+        #if os(macOS)
+        guard action == "status" else { answer(["id": id, "ok": false, "message": "Action inconnue."]); return }
+        let list = (body["projects"] as? [String] ?? []).prefix(60).compactMap { p in ProjectFolders.shared.path(p).map { (id: p, dir: $0) } }
+        DispatchQueue.global(qos: .userInitiated).async { var r = Docker.status(projects: list); r["id"] = id; self.answer(r) }
         #else
         answer(["id": id, "ok": false, "message": "Disponible dans l'app Mac."])
         #endif
