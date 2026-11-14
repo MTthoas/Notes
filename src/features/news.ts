@@ -38,6 +38,10 @@ interface Item {
 
 // Les plus récentes d'abord.
 const NEWS: Item[] = [
+  { id: 'ai-project-scopes', date: '2026-11-14', icon: 'lock', hue: 'indigo',
+    title: 'L’IA ne voit que le projet où tu travailles',
+    text: 'Claude ne s’ouvre plus que depuis un projet (bouton « Claude » de sa fiche) et n’y voit que ses notes, tâches, dépôts et tickets Linear. Il n’y a plus de Claude global dans la barre latérale. Les automatisations et « Demander à l’IA » suivent la même règle, et Linear ne s’ouvre jamais à l’IA hors du projet qui y est relié.',
+    points: ['Par projet', 'Linear', 'Cloisonné'], go: { label: 'Voir mes projets', view: { type: 'projets' } } },
   { id: 'agent-permissions', date: '2026-11-14', mac: true, icon: 'terminal', hue: 'amber',
     title: 'Choisis ce que tes agents peuvent lancer',
     text: 'Réglages → Autorisations des agents : la liste des commandes permises quand tu coches « Commandes » (cargo test, npm ci…), l’accès au web, et les dossiers ajoutés au PATH. Une réponse dans la discussion garde maintenant les commandes du tour précédent.',

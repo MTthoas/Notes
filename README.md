@@ -23,7 +23,7 @@ Studio est un carnet de notes Markdown reliées entre elles, qui réunit aussi t
 - **Écrire** — des notes en texte simple, reliées comme un wiki personnel (`[[liens]]`, `#tags`, graphe).
 - **Centraliser** — tâches, tickets Linear, pull requests et CI GitHub à côté de tes notes.
 - **Automatiser** — décris une routine une fois ; l'IA l'exécute à heure fixe ou à chaque événement, avec ton accord pour toute écriture.
-- **Discuter** — la page **Claude**, dans la barre latérale (ou « Parler à Claude » sur l'accueil) : une conversation libre, sans projet ni dossier. Claude lit tes notes, tâches, Linear et GitHub au besoin, et demande ton accord avant toute écriture. Les conversations restent sur l'appareil, chiffrées avec le reste.
+- **Discuter** — le bouton **Claude** de la fiche d'un projet : une conversation bornée à ce projet. Claude n'y lit que ses notes, tâches, dépôts et tickets Linear, et demande ton accord avant toute écriture. Il n'y a volontairement pas de Claude global (barre latérale, accueil), pour qu'aucune donnée d'un projet client ne se mélange aux autres. Les conversations restent sur l'appareil, chiffrées avec le reste.
 - **Piloter** — confie une consigne à Claude Code dans une copie isolée du dépôt, relis, publie en pull request.
 - **Se souvenir** — le **Journal** garde chaque demande faite à Claude Code (dans tous tes projets, terminal compris) et à l'IA de Studio, rangée par journée, avec le résumé de chaque journée écrit par l'IA. Il recopie les journaux de Claude Code avant qu'ils ne soient effacés (30 jours), dans la base locale chiffrée.
 
@@ -111,7 +111,7 @@ Les notes sont du Markdown : `[[Titre]]` crée un lien (chaque note montre qui l
 | `` `= 1200 * 12` `` | Calcul dans le texte |
 | `[timer 25m]` | Minuteur dans la note |
 | ` ```sql ` / ` ```schema ` | Diagramme entité-association ; export SQL, Mermaid, SVG |
-| ` ```agent ` | Automatisation IA (outils : `notes`, `linear`, `agents`), lançable ou planifiée |
+| ` ```agent ` | Automatisation IA (outils : `notes`, `linear`, `github`, `agents` ; `projet:` pour son périmètre, Général sinon), lançable ou planifiée |
 | ` ```linear ` | Liste d'issues Linear filtrée (assigné, état, équipe…) |
 | ` ```projet ` | Déclare un [projet](#projets) |
 
@@ -252,7 +252,7 @@ Réglages → Appareils → « Lier un appareil ». Un secret de 128 bits passe 
 | **Coffre** | Une clé maîtresse aléatoire de 256 bits chiffre (AES-GCM) chaque enregistrement — notes, historique — ainsi que les clés API et les appareils liés. |
 | **Déverrouillage** | Mot de passe (PBKDF2, 600 000 itérations), jamais stocké ; en option, passkey Face ID / Touch ID dans un navigateur (WebAuthn, extension PRF) ou, dans les apps natives, secret aléatoire du trousseau que la biométrie libère. Verrouillage automatique après inactivité. |
 | **Réseau** | La politique de sécurité (CSP) de `index.html` n'autorise que `api.anthropic.com`, `api.openai.com`, `api.linear.app`, `api.github.com`, `ntfy.sh`, `localhost`, et les domaines des extensions (`api.spotify.com`, `accounts.spotify.com`, `*.app.n8n.cloud`), contactés seulement si tu les actives. Une clé ne peut donc pas partir ailleurs, même en cas de faille. Aucune image distante n'est chargée. |
-| **IA** | Les notes chiffrées et celles taguées `#privé` ne sont jamais envoyées. Toute action d'écriture d'un agent (créer une note, une issue…) demande ton accord. |
+| **IA** | Les notes chiffrées et celles taguées `#privé` ne sont jamais envoyées. Chaque exécution travaille dans un périmètre, un projet ou Général, et ses outils ne voient que les données de celui-ci (`integrations/scope.ts`). Linear n'est lisible que depuis un projet relié à un projet Linear (nom exact), jamais en Général. Toute action d'écriture d'un agent (créer une note, une issue…) demande ton accord. |
 | **Synchronisation** | Chiffrée de bout en bout ; le relais ne voit que du chiffré. |
 | **Sauvegarde** | L'export JSON est chiffré par mot de passe quand le coffre est actif. |
 
@@ -299,7 +299,7 @@ src/                               TypeScript strict
     update.ts         mise à jour automatique de l'app Mac depuis les Releases du dépôt
   features/         pages et fonctions de l'app
     home.ts           accueil
-    chat.ts           page Claude : conversation libre, sans projet, avec les outils de l'IA
+    chat.ts           page Claude : conversation avec les outils de l'IA, ouverte depuis un projet et bornée à lui
     tasks.ts          tâches, sous-tâches, échéances, tickets Linear
     board.ts          Kanban générique (glisser-déposer, clavier, tactile)
     voice.ts          notes vocales (transcription sur l'appareil)
@@ -311,6 +311,7 @@ src/                               TypeScript strict
     automations.ts, help.ts, onboarding.ts
   integrations/     services extérieurs, appelés directement depuis l'app
     ai.ts             Claude, OpenAI, modèle local : boucle d'agent et outils
+    scope.ts          périmètres de l'IA : ce que ses outils voient d'un projet (ou de Général)
     usage.ts          consommation de l'IA : tokens par mois, fournisseur et modèle
     tuning.ts         consignes et limites de contexte de l'IA, modifiables dans les réglages
     link.ts           liaison et synchronisation entre appareils (WebRTC)

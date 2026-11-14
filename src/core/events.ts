@@ -3,12 +3,15 @@
 
 /** Événements qui peuvent déclencher une automatisation. Le texte est une DONNÉE décrivant l'événement. */
 export type Trigger = 'capture' | 'linear' | 'github' | 'tache';
-export interface AppEvent { kind: Trigger; text: string; at: number }
+/** D'où vient l'événement : une automatisation ne le reçoit que s'il tombe dans son périmètre (integrations/scope.ts).
+ *  Sans origine, il n'est livré à aucune automatisation. */
+export interface EventOrigin { noteId?: string; line?: string; linearProject?: string; repo?: string }
+export interface AppEvent { kind: Trigger; text: string; at: number; origin?: EventOrigin }
 
 const listeners = new Set<(e: AppEvent) => void>();
 export const on = (f: (e: AppEvent) => void): (() => void) => { listeners.add(f); return () => listeners.delete(f); };
-export function emit(kind: Trigger, text: string): void {
-  const e: AppEvent = { kind, text: text.slice(0, 4000), at: Date.now() };
+export function emit(kind: Trigger, text: string, origin?: EventOrigin): void {
+  const e: AppEvent = { kind, text: text.slice(0, 4000), at: Date.now(), ...(origin ? { origin } : {}) };
   for (const f of listeners) { try { f(e); } catch (err) { console.error('événement', kind, err); } }
 }
 

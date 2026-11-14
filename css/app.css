@@ -1840,6 +1840,13 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .cl .ss-tools li { display: block; padding: 2px 0; font: inherit; font-size: var(--t-1); line-height: 1.5; }
 .cl-prov { font-style: normal; color: var(--text-3); }
 .cl-err .md .err { margin: 0; }
+/* Périmètre de la conversation (integrations/scope.ts) */
+.cl-scope { display: inline-flex; align-items: center; gap: 6px; margin: 2px 0 10px; font-size: var(--t-1); color: var(--text-2); }
+.cl-scope svg, .cl-scope-tag svg, .ask-scope svg, .au-tools .ag-chip svg { width: 13px; height: 13px; flex: none; }
+.cl-scope select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border-2); border-radius: 8px; padding: 3px 8px; }
+.cl-scope-tag { display: inline-flex; align-items: center; gap: 5px; font-size: var(--t-1); color: var(--text-2); white-space: nowrap; }
+.ask-scope { display: flex; align-items: center; gap: 6px; margin: 0; padding: 0 18px 6px; font-size: var(--t-1); color: var(--text-3); }
+.au-tools .ag-chip { display: inline-flex; align-items: center; gap: 4px; }
 .cl-hero { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 6vh 0 24px; }
 .cl-logo { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: color-mix(in srgb, var(--c-orange) 14%, var(--bg)); color: var(--c-orange); }
 .cl-logo .ic { width: 24px; height: 24px; }

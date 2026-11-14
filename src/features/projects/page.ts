@@ -222,7 +222,7 @@ async function agentsStrip(root: HTMLElement, p: Project): Promise<void> {
 
 function detailHTML(p: Project, tab: string): string {
   return `<div class="pj-head" style="--c:var(--c-${p.hue})"><button class="lv-back" data-pj-open="">${icon('back')}Projets</button>
-      <div class="pj-title"><span class="pj-dot"></span><h1>${esc(p.name)}</h1><button class="btn pj-note" data-pj="edit">${icon('notes')}Note du projet</button></div>
+      <div class="pj-title"><span class="pj-dot"></span><h1>${esc(p.name)}</h1><button class="btn pj-note" data-pj="edit">${icon('notes')}Note du projet</button><button class="btn pj-note" data-pj="claude" title="Conversation bornée à ce projet : Claude ne voit que ses données">${icon('sparkle')}Claude</button></div>
       <div class="pj-links" data-k="${esc(`${p.repos.join(',')}|${p.site ?? ''}|${p.linear ?? ''}`)}">${p.repos.map(r => `<a class="lv-chip" href="https://github.com/${esc(r)}" target="_blank" rel="noopener">${icon('github')}${esc(r)}</a>`).join('')}${p.linear ? `<span class="lv-chip">${icon('linear')}${esc(p.linear)}</span>` : ''}${p.site ? `<a class="lv-chip" href="${esc(p.site)}" target="_blank" rel="noopener">${icon('link')}${esc(p.site.replace(/^https:\/\//, ''))}</a>` : ''}<span class="lv-chip">#${esc(p.tag)}</span></div>
       <nav class="lv-tabs pj-tabs">${TABS.map(([k, l]) => `<button data-pj-tab="${k}" class="${k === tab ? 'sel' : ''}">${esc(l)}</button>`).join('')}</nav></div>
     <div class="pj-body" data-tab="${tab}">${tabBody(p, tab)}</div>`;
@@ -402,6 +402,7 @@ export function mount(main: HTMLElement): void {
     if (act === 'new') { void createDialog(); return; }
     if (!p) return;
     if (act === 'edit') app.openNote(p.id);
+    if (act === 'claude') { const id = p.id; void import('../chat.ts').then(m => m.startIn(id)); return; }
     if (act === 'kanban') { todo.showProject(p.id); await app.setView({ type: 'tasks' }); }
     if (act === 'new-note') { const n = await store.createNote({ title: '', body: `\n\n#${p.tag}` }); app.openNote(n.id); }
     if (act === 'pick') { const r = await native.call('project', 'pick', { project: p.id }, 600000); if (r.ok) { folders.delete(p.id); void hydrate(root, p, tab); } }

@@ -33,7 +33,7 @@ async function save(text: string): Promise<void> {
   const d = new Date();
   const title = `Note vocale · ${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} ${d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
   const n = await store.createNote({ title, body: `${text}\n\n#vocal`, inbox: true });
-  events.emit('capture', `${title}\n\n${text}`);
+  events.emit('capture', `${title}\n\n${text}`, { noteId: n.id });
   toast('Note vocale enregistrée', { label: 'Ouvrir', run: () => app.openNote(n.id) });
 }
 
