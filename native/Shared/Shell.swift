@@ -218,8 +218,20 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
             switch body["op"] as? String ?? "" {
             case "hosts": bg { Servers.shared.hosts() }
             case "set": bg { Servers.shared.set(pid, host: body["host"] as? String ?? "", path: body["path"] as? String ?? "") }
-            case "forget": Servers.shared.forget(pid); send(["ok": true])
+            case "forget": Servers.shared.forget(pid); Monitors.shared.stop(pid); send(["ok": true])
             case "terminal": send(Servers.shared.terminal(pid))
+            // Monitoring en direct (Monitor.swift) et terminal intégré (Terminals.swift).
+            case "monitor": bg { Monitors.shared.poll(pid, since: body["since"] as? Double ?? 0) }
+            case "term-open":
+                Terminals.shared.emit = { [weak self] payload in
+                    guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
+                    DispatchQueue.main.async { self?.web?.evaluateJavaScript("window.carnet && window.carnet.term && window.carnet.term(\(json))", completionHandler: nil) }
+                }
+                bg { Terminals.shared.open(pid, cols: body["cols"] as? Int ?? 80, rows: body["rows"] as? Int ?? 24) }
+            case "term-write": send(Terminals.shared.input(body["term"] as? String ?? "", body["data"] as? String ?? ""))
+            case "term-resize": send(Terminals.shared.resize(body["term"] as? String ?? "", cols: body["cols"] as? Int ?? 80, rows: body["rows"] as? Int ?? 24))
+            case "term-close": send(Terminals.shared.stop(body["term"] as? String ?? ""))
+            case "term-list": send(Terminals.shared.list(pid))
             default: bg { Servers.shared.status(pid) }
             }
         case "daily":

@@ -261,7 +261,8 @@ class Session {
     this.calls.push(now);
     const params: Record<string, unknown> = { ...msg.params };
     delete params.type; delete params.action; delete params.id;
-    if (key === 'agent.server' && (params.op ?? 'status') !== 'status') return deny('Le serveur se configure depuis le Mac.');
+    // Serveur : lecture seule à distance (état, monitoring). Jamais de terminal ni de configuration.
+    if (key === 'agent.server' && !['status', 'monitor'].includes(String(params.op ?? 'status'))) return deny('Le serveur se configure et son terminal s’ouvre depuis le Mac.');
     // Limites de l'abonnement : lecture seule des pourcentages. Les activer, les couper ou forcer une relecture se fait sur le Mac.
     if (key === 'claude.limits') params.op = '';
     if (key === 'agent.start') {
