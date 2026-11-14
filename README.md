@@ -160,6 +160,7 @@ Une note ou une tâche y appartient avec le tag `#projet/studio` — posé par l
 Dans l'onglet **Claude Code** d'un projet, tu écris une consigne, Claude Code travaille dans le dépôt, et tu suis tout en direct (app Mac).
 
 - **Modifier** : l'agent travaille dans une **copie isolée** du dépôt (worktree Git dans `.claude/worktrees/`, exclue de `git status`). Ton dossier n'est jamais touché. Ensuite : **Revue** IA, **VS Code**, **Publier** ou **Supprimer**.
+- **Étapes** : le panneau range les copies par étape, chacune de sa couleur — **au travail** (ambre), **à publier** (orange), **PR ouverte** (bleu), **fusionné** (violet) — avec un bandeau de compteurs en tête ; les sessions et la barre latérale reprennent la même couleur, et ce qui est livré s’efface.
 - **Analyser** : lecture seule, Claude Code explore et propose.
 - **Notes et tâches** : joins des notes du projet à une consigne (« Joindre une note »), ou confie directement une note (bouton **Claude Code** de l'éditeur, onglet Notes) ou une tâche (onglet Tâches).
 - **Sessions** : toutes les sessions Claude Code du projet, y compris celles lancées hors de Studio, avec leur fil, les fichiers touchés et les tokens ; chacune peut être **reprise**, ou **supprimée** depuis la liste (corbeille de la ligne, ou **Faire le ménage** pour en supprimer plusieurs d'un coup ; les journaux partent dans la corbeille du Mac). Les cartes des agents terminés se retirent d'une croix.
