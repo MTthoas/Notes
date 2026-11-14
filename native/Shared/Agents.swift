@@ -249,7 +249,7 @@ final class Agents {
         lock.lock(); let full = runs.values.filter { $0.status == "running" || $0.status == "starting" }.count >= maxRunning; lock.unlock()
         if full { return done(["ok": false, "message": "Trois agents tournent déjà : attends qu'un se termine ou arrête-en un."]) }
 
-        var cwd = dir, mode = body["mode"] as? String == "edit" ? "edit" : "read", newWorktree = ""
+        var cwd = dir, mode = body["mode"] as? String == "edit" ? "edit" : "read", newWorktree = "", restored = ""
         var args = ["-p", "--output-format", "stream-json", "--verbose", "--restricted", "--permission-mode", "dontAsk",
                     "--setting-sources", "", "--strict-mcp-config", "--disable-slash-commands"]
         if !resume.isEmpty {
@@ -258,11 +258,25 @@ final class Agents {
             guard let c = known, c == dir || c.hasPrefix(dir + "/.claude/worktrees/") || onServer else { return done(["ok": false, "message": "Session introuvable pour ce projet."]) }
             cwd = c; mode = c.contains("/.claude/worktrees/") ? "edit" : "read"
             args += ["--resume", resume]
+            // La copie de la discussion a été supprimée (après publication, le plus souvent) : Studio la recrée au même
+            // endroit, sur la branche de la discussion si elle existe encore, sinon depuis la branche principale.
+            if !onServer, mode == "edit", !FileManager.default.fileExists(atPath: c) {
+                let name = (c as NSString).lastPathComponent
+                guard c == dir + "/.claude/worktrees/" + name else { return done(["ok": false, "message": "Copie de la session introuvable."]) }
+                let made = folders.restoreWorktree(dir, name: name, branch: ClaudeSessions.shared.branch(project: dir, session: resume) ?? "")
+                guard let b = made.branch else { return done(["ok": false, "message": made.error]) }
+                restored = made.reused
+                    ? "[Studio] La copie isolée de cette discussion avait été supprimée : elle a été recréée au même endroit, sur la branche « \(b) ». Les changements qui n’avaient pas été commités ont été perdus ; vérifie l’état des fichiers avant de continuer.\n\n"
+                    : "[Studio] La copie isolée de cette discussion avait été supprimée : elle a été recréée au même endroit à partir de la dernière version de la branche principale, sur une nouvelle branche. Ton travail précédent n’y est que s’il a été fusionné ; vérifie l’état des fichiers avant de continuer.\n\n"
+            }
             // Le travail précédent de la discussion a été fusionné : l'agent repart de la dernière version de la branche
             // principale, sur une nouvelle branche (une même discussion peut ainsi livrer plusieurs branches).
             if !onServer, mode == "edit", let r = c.range(of: "/.claude/worktrees/") {
                 let name = String(c[r.upperBound...])
-                if !Orchestrator.shared.busy(project: pid, worktree: name) && !self.busy(project: pid, worktree: name) { folders.recycleIfDelivered(c, fetch: true) }
+                if !Orchestrator.shared.busy(project: pid, worktree: name) && !self.busy(project: pid, worktree: name),
+                   let old = folders.recycleIfDelivered(c, fetch: true), !restored.isEmpty {
+                    restored = "[Studio] La copie isolée de cette discussion avait été supprimée : elle a été recréée au même endroit. Sa branche « \(old) » étant déjà fusionnée, elle repart de la dernière version de la branche principale, sur une nouvelle branche.\n\n"
+                }
             }
         } else if mode == "edit" {
             // Copie isolée créée par Studio à partir de la dernière version de la branche principale distante
@@ -372,7 +386,7 @@ final class Agents {
         }
         lock.unlock()
         DispatchQueue.global(qos: .utility).async {
-            try? input.fileHandleForWriting.write(contentsOf: Data(prompt.utf8)); try? input.fileHandleForWriting.close()
+            try? input.fileHandleForWriting.write(contentsOf: Data((restored + prompt).utf8)); try? input.fileHandleForWriting.close()
         }
         // Lecture du flux d'événements (une ligne JSON par événement).
         DispatchQueue.global(qos: .utility).async {
