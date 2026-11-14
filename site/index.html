@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>Studio — le cockpit chiffré de tes projets</title>
+  <meta name="description" content="Notes, tâches, projets et agents Claude Code au même endroit. Chiffré de bout en bout, stocké sur tes appareils, sans compte ni serveur.">
+  <meta name="theme-color" content="#0b0b0c">
+  <meta property="og:title" content="Studio — le cockpit chiffré de tes projets">
+  <meta property="og:description" content="Notes, tâches, projets et agents IA au même endroit. Chiffré, local, sans serveur.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://mtthoas.github.io/Studio/">
+  <link rel="canonical" href="https://mtthoas.github.io/Studio/">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <a class="skip" href="#produit">Aller au contenu</a>
+
+  <header class="nav" data-nav>
+    <div class="wrap nav-in">
+      <a class="brand" href="#top" aria-label="Studio, retour en haut">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.2" cy="10" r="2.7" fill="currentColor"/><rect x="10" y="1" width="2.4" height="18" rx="1.2" fill="#F04A23"/></svg>
+        <span>Studio</span>
+      </a>
+      <nav class="nav-links" aria-label="Sections">
+        <a href="#produit">Produit</a>
+        <a href="#agents">Agents</a>
+        <a href="#securite">Sécurité</a>
+        <a href="#plateformes">Plateformes</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="btn btn-ghost" href="https://github.com/MTthoas/Studio" rel="noopener">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/MTthoas/Studio/releases/latest" rel="noopener">Télécharger</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- Héros -->
+    <section class="hero">
+      <div class="hero-glow" aria-hidden="true"></div>
+      <div class="hero-grid" aria-hidden="true"></div>
+      <div class="wrap hero-in">
+        <a class="pill" href="#agents"><b>Nouveau</b>Des agents Claude Code, dans une copie isolée de ton dépôt<span aria-hidden="true">→</span></a>
+        <h1>Le cockpit de tes projets.<br><em>Chiffré. Local. Sans serveur.</em></h1>
+        <p class="lead">Studio réunit tes notes, tes tâches, tes dépôts GitHub, tes tickets Linear et tes agents IA dans une seule app. Tout reste sur tes appareils : pas de compte, pas de backend, aucune télémétrie.</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary btn-lg" href="https://github.com/MTthoas/Studio/releases/latest" rel="noopener">Télécharger pour Mac</a>
+          <a class="btn btn-lg" href="#produit">Voir le produit</a>
+        </div>
+        <p class="hero-note">Gratuit et libre (AGPL-3.0) · Mac, iPhone et web · ~1 Mo</p>
+      </div>
+
+      <!-- Maquette du produit, dessinée en HTML -->
+      <div class="wrap">
+        <div class="mock" data-tilt aria-hidden="true">
+          <div class="mock-bar"><i></i><i></i><i></i><span>Studio — Projets › Atlas</span></div>
+          <div class="mock-body">
+            <aside class="mock-side">
+              <div class="mock-ws"><svg viewBox="0 0 20 20"><circle cx="4.2" cy="10" r="2.7" fill="currentColor"/><rect x="10" y="1" width="2.4" height="18" rx="1.2" fill="#F04A23"/></svg>Studio</div>
+              <p>Accueil</p><p>Boîte de réception <b>3</b></p><p>Tâches</p><p>Journal</p>
+              <small>Projets</small>
+              <p class="sel"><u class="d-orange"></u>Atlas</p>
+              <p class="sub">Claude Code</p><p class="sub">Flux</p><p class="sub">Site</p>
+              <p><u class="d-indigo"></u>Ledger</p><p><u class="d-teal"></u>Vitrine</p>
+            </aside>
+            <div class="mock-main">
+              <div class="mock-head">
+                <div><u class="d-orange"></u><strong>Atlas</strong></div>
+                <span class="chip">acme/atlas</span><span class="chip">Linear · Atlas</span><span class="chip ok">CI au vert</span>
+              </div>
+              <div class="mock-tiles">
+                <div class="tile"><span>Commits · 30 j</span><strong>148</strong>
+                  <div class="bars"><i class="h3"></i><i class="h5"></i><i class="h2"></i><i class="h6"></i><i class="h4"></i><i class="h7"></i><i class="h5"></i><i class="h8"></i><i class="h6"></i><i class="h9"></i><i class="h7"></i><i class="h10"></i></div></div>
+                <div class="tile"><span>Tokens Claude Code</span><strong>2,4 M</strong>
+                  <svg class="spark" viewBox="0 0 120 36" preserveAspectRatio="none"><path d="M0 30 L12 26 L24 28 L36 18 L48 21 L60 12 L72 15 L84 8 L96 11 L108 4 L120 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                <div class="tile"><span>Tâches</span><strong>12 <em>/ 19</em></strong>
+                  <div class="meter"><i></i></div></div>
+              </div>
+              <div class="mock-agent">
+                <div class="agent-h"><span class="live"></span>Agent · <code>feat/export-csv</code><em>copie isolée</em></div>
+                <p class="you">Ajoute l’export CSV des écritures, avec un test.</p>
+                <p class="tool">Lecture <code>src/ledger/export.ts</code></p>
+                <p class="tool">Modification <code>src/ledger/csv.ts</code> <b class="add">+84</b> <b class="del">−6</b></p>
+                <p class="done">Terminé · 3 fichiers modifiés · prêt à publier en pull request</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Se branche sur -->
+    <section class="logos" aria-label="Services reliés">
+      <div class="wrap">
+        <p>Se branche sur les outils que tu utilises déjà</p>
+        <ul>
+          <li>Claude</li><li>Claude Code</li><li>OpenAI</li><li>GitHub</li><li>Linear</li><li>Spotify</li><li>n8n</li><li>Modèles locaux</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Chiffres -->
+    <section class="stats">
+      <div class="wrap stats-in">
+        <div class="stat" data-reveal><strong><span data-count="256">256</span><small>bits</small></strong><span>Clé maîtresse AES-GCM, générée sur ton appareil</span></div>
+        <div class="stat" data-reveal><strong><span data-count="600000">600 000</span></strong><span>Itérations PBKDF2 derrière ton mot de passe</span></div>
+        <div class="stat" data-reveal><strong><span data-count="0">0</span></strong><span>Serveur, compte ou traceur. Tes données ne partent nulle part</span></div>
+        <div class="stat" data-reveal><strong>~<span data-count="1">1</span><small>Mo</small></strong><span>L’app Mac, sans aucune dépendance à l’exécution</span></div>
+      </div>
+    </section>
+
+    <!-- Produit -->
+    <section class="sec" id="produit">
+      <div class="wrap">
+        <header class="sec-h" data-reveal>
+          <span class="eyebrow">Produit</span>
+          <h2>Tout ce que demande un projet,<br>au même endroit.</h2>
+          <p>Fini les six onglets ouverts. Studio pose côte à côte ce que tu écris, ce que tu dois faire et ce que ton code est en train de vivre.</p>
+        </header>
+
+        <div class="bento">
+          <article class="card c-wide" data-reveal data-spot>
+            <div class="card-t"><span class="eyebrow">Notes</span><h3>Un wiki personnel en Markdown</h3>
+              <p>Des notes en texte simple, reliées par <code>[[liens]]</code> et rangées par <code>#tags</code>. Chaque note montre qui la cite, garde son historique, et le graphe dessine l’ensemble.</p></div>
+            <svg class="graph" viewBox="0 0 360 170" aria-hidden="true">
+              <g stroke="currentColor" stroke-opacity=".22" stroke-width="1">
+                <path d="M70 90L150 50M150 50L235 82M235 82L300 40M150 50L170 128M170 128L235 82M235 82L310 130M70 90L100 145M100 145L170 128M150 50L96 28"/>
+              </g>
+              <g fill="currentColor" fill-opacity=".55">
+                <circle cx="70" cy="90" r="5"/><circle cx="300" cy="40" r="4"/><circle cx="170" cy="128" r="5"/><circle cx="310" cy="130" r="4"/><circle cx="100" cy="145" r="3.5"/><circle cx="96" cy="28" r="3.5"/>
+              </g>
+              <circle class="node-a" cx="150" cy="50" r="8"/><circle class="node-b" cx="235" cy="82" r="7"/>
+            </svg>
+          </article>
+
+          <article class="card" data-reveal data-spot>
+            <div class="card-t"><span class="eyebrow">Tâches</span><h3>Liste ou Kanban</h3>
+              <p>« Appeler Paul demain » devient une tâche datée. Tes tickets Linear vivent sur le même tableau.</p></div>
+            <div class="kanban" aria-hidden="true">
+              <div><small>À faire</small><i></i><i></i></div>
+              <div><small>En cours</small><i class="hot"></i></div>
+              <div><small>Terminées</small><i class="okk"></i><i class="okk"></i><i class="okk"></i></div>
+            </div>
+          </article>
+
+          <article class="card" data-reveal data-spot>
+            <div class="card-t"><span class="eyebrow">Projets</span><h3>Un cockpit par projet</h3>
+              <p>Dossier local, dépôts, pull requests, CI, serveur, site : chaque projet a ses onglets et ses graphiques.</p></div>
+            <ul class="rows" aria-hidden="true">
+              <li><u class="up"></u>CI <b>au vert</b></li>
+              <li><u class="up"></u>Site <b>en ligne · 182 ms</b></li>
+              <li><u class="warn"></u>3 PR <b>en revue</b></li>
+            </ul>
+          </article>
+
+          <article class="card" data-reveal data-spot>
+            <div class="card-t"><span class="eyebrow">Automatisations</span><h3>Décris la routine, une fois</h3>
+              <p>L’IA l’exécute à heure fixe ou à chaque événement, et demande ton accord avant toute écriture.</p></div>
+            <pre class="code" aria-hidden="true"><b>```agent</b>
+nom: Revue du matin
+outils: notes, linear, github
+planning: jours ouvrés 9h
+<b>---</b>
+Résume ce qui a bougé depuis hier.
+<b>```</b></pre>
+          </article>
+
+          <article class="card" data-reveal data-spot>
+            <div class="card-t"><span class="eyebrow">Journal</span><h3>La mémoire de tes demandes</h3>
+              <p>Chaque consigne donnée à Claude Code et à l’IA, rangée par journée, avec le résumé du jour.</p></div>
+            <ul class="timeline" aria-hidden="true">
+              <li><time>09:12</time>Corrige la synchro hors ligne</li>
+              <li><time>11:40</time>Ajoute l’export CSV</li>
+              <li><time>16:05</time>Revue de la branche <code>feat/flux</code></li>
+            </ul>
+          </article>
+
+          <article class="card c-wide" data-reveal data-spot>
+            <div class="card-t"><span class="eyebrow">Synchronisation</span><h3>D’un appareil à l’autre, sans passer par nous</h3>
+              <p>Un secret de 128 bits passe d’un écran à l’autre par QR code. Les notes circulent ensuite en direct entre tes appareils, chiffrées de bout en bout. Le relais ne voit que du chiffré, et ne stocke rien.</p></div>
+            <div class="sync" aria-hidden="true">
+              <div class="dev">Mac</div>
+              <div class="wire"><i></i><span>AES-GCM · WebRTC</span></div>
+              <div class="dev">iPhone</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Agents -->
+    <section class="sec sec-paper" id="agents">
+      <div class="wrap">
+        <header class="sec-h" data-reveal>
+          <span class="eyebrow">Agents Claude Code</span>
+          <h2>Confie une consigne.<br>Relis. Publie.</h2>
+          <p>L’agent travaille dans une copie isolée du dépôt : ton dossier n’est jamais touché. Tu suis tout en direct, puis un clic transforme le travail en pull request.</p>
+        </header>
+        <ol class="flow">
+          <li data-reveal><span>01</span><h3>Consigne</h3><p>Écris ce que tu veux, joins une note ou une tâche du projet. Choisis Modifier ou Analyser.</p></li>
+          <li data-reveal><span>02</span><h3>Copie isolée</h3><p>Un worktree Git dédié. Fichiers confinés, outils listés un à un, aucune commande sans ta case cochée.</p></li>
+          <li data-reveal><span>03</span><h3>Revue</h3><p>Fichiers modifiés, tokens consommés, revue IA du diff. Tu continues à écrire pendant qu’il travaille.</p></li>
+          <li data-reveal><span>04</span><h3>Pull request</h3><p>Mise à jour sur la branche principale, résolution des conflits, commit conventionnel, push, PR. Seul.</p></li>
+        </ol>
+        <div class="guard" data-reveal>
+          <strong>Garde-fous par défaut</strong>
+          <ul>
+            <li>Fichiers confinés au dossier de travail</li>
+            <li>Tout ce qui n’est pas listé est refusé</li>
+            <li>Trois agents au plus, 90 minutes au plus</li>
+            <li>Ni hooks, ni serveurs MCP de l’utilisateur</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Sécurité -->
+    <section class="sec" id="securite">
+      <div class="wrap sec-split">
+        <header class="sec-h left" data-reveal>
+          <span class="eyebrow">Sécurité et vie privée</span>
+          <h2>Pensé comme un coffre,<br>pas comme un cloud.</h2>
+          <p>Nous ne pouvons pas lire tes données : nous ne les avons pas. Il n’y a rien à pirater chez nous, parce qu’il n’y a pas de « chez nous ».</p>
+          <a class="btn" href="https://github.com/MTthoas/Studio#sécurité-et-vie-privée" rel="noopener">Lire le modèle de sécurité</a>
+        </header>
+        <dl class="vault" data-reveal>
+          <div><dt>Stockage</dt><dd>Tout vit sur l’appareil. Aucun compte, aucun serveur, aucune télémétrie.</dd></div>
+          <div><dt>Coffre</dt><dd>Une clé maîtresse de 256 bits chiffre chaque note, son historique, tes clés d’API et tes appareils liés.</dd></div>
+          <div><dt>Déverrouillage</dt><dd>Mot de passe jamais stocké, passkey, Touch ID ou Face ID. Verrouillage automatique après inactivité.</dd></div>
+          <div><dt>Réseau</dt><dd>Une liste fermée de domaines. Une clé ne peut pas partir ailleurs, même en cas de faille.</dd></div>
+          <div><dt>IA cloisonnée</dt><dd>L’IA ne voit que le projet où tu travailles. Les notes <code>#privé</code> ne lui sont jamais envoyées.</dd></div>
+          <div><dt>Code ouvert</dt><dd>AGPL-3.0. Chaque ligne se lit, se vérifie et se reconstruit depuis les sources.</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- Plateformes -->
+    <section class="sec" id="plateformes">
+      <div class="wrap">
+        <header class="sec-h" data-reveal>
+          <span class="eyebrow">Plateformes</span>
+          <h2>Une seule app, partout.</h2>
+        </header>
+        <div class="plats">
+          <article class="plat" data-reveal data-spot>
+            <h3>Mac</h3>
+            <p>Binaire universel, Apple Silicon et Intel. Touch ID, agents Claude Code, mises à jour automatiques.</p>
+            <a href="https://github.com/MTthoas/Studio/releases/latest" rel="noopener">Télécharger Studio-macOS.zip →</a>
+          </article>
+          <article class="plat" data-reveal data-spot>
+            <h3>iPhone et iPad</h3>
+            <p>Face ID, notes vocales transcrites sur l’appareil, et pilotage à distance des agents de ton Mac.</p>
+            <a href="https://github.com/MTthoas/Studio#iphone--ipad" rel="noopener">Installer depuis les sources →</a>
+          </article>
+          <article class="plat" data-reveal data-spot>
+            <h3>Web</h3>
+            <p>S’installe comme une application, fonctionne hors ligne, s’héberge sur n’importe quel hébergement statique.</p>
+            <a href="https://github.com/MTthoas/Studio#web" rel="noopener">Lancer en local →</a>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Prix -->
+    <section class="sec">
+      <div class="wrap">
+        <div class="price" data-reveal>
+          <div>
+            <span class="eyebrow">Tarif</span>
+            <h2>0 €. Pour de bon.</h2>
+            <p>Studio est un logiciel libre. Tu paies seulement l’IA que tu choisis de brancher, directement à son fournisseur, avec ta propre clé ou ton abonnement Claude.</p>
+          </div>
+          <ul>
+            <li>Toutes les fonctions, sans palier</li>
+            <li>Aucun compte à créer</li>
+            <li>Budget mensuel d’IA que tu fixes toi-même</li>
+            <li>Code source complet sous AGPL-3.0</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="sec" id="faq">
+      <div class="wrap narrow">
+        <header class="sec-h" data-reveal>
+          <span class="eyebrow">Questions fréquentes</span>
+          <h2>Avant de te lancer.</h2>
+        </header>
+        <div class="faq" data-reveal>
+          <details><summary>Où sont stockées mes données ?</summary><p>Sur tes appareils, dans la base locale de l’app. Avec le coffre activé, chaque enregistrement est chiffré en AES-GCM par une clé qui ne quitte jamais l’appareil. Un export JSON chiffré sert de sauvegarde.</p></details>
+          <details><summary>Faut-il une clé d’API pour utiliser l’IA ?</summary><p>Non. Sur Mac, Studio peut passer par le Claude Code déjà installé sur ta machine, avec ton abonnement. Tu peux aussi brancher Claude, OpenAI ou un modèle local avec ta propre clé.</p></details>
+          <details><summary>Un agent peut-il casser mon dépôt ?</summary><p>En mode Modifier, il travaille dans une copie isolée : ton dossier n’est jamais touché, et rien n’est publié sans ton clic. Aucune commande ne s’exécute tant que tu ne l’as pas autorisée.</p></details>
+          <details><summary>Comment mes appareils se synchronisent-ils sans serveur ?</summary><p>Ils se parlent en direct (WebRTC), après une courte poignée de main chiffrée. Sans réseau, un paquet chiffré s’envoie par AirDrop ou Messages.</p></details>
+          <details><summary>Puis-je en faire un produit fermé ?</summary><p>Non, c’est le sens de l’AGPL : toute version modifiée ou proposée comme service doit publier son code. Une double licence est possible sur demande.</p></details>
+        </div>
+      </div>
+    </section>
+
+    <!-- Appel final -->
+    <section class="final">
+      <div class="final-glow" aria-hidden="true"></div>
+      <div class="wrap" data-reveal>
+        <h2>Reprends la main<br>sur tes projets.</h2>
+        <p>Installe Studio en une minute. Tes données restent chez toi.</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary btn-lg" href="https://github.com/MTthoas/Studio/releases/latest" rel="noopener">Télécharger pour Mac</a>
+          <a class="btn btn-lg" href="https://github.com/MTthoas/Studio" rel="noopener">Voir le code source</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap foot-in">
+      <a class="brand" href="#top">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.2" cy="10" r="2.7" fill="currentColor"/><rect x="10" y="1" width="2.4" height="18" rx="1.2" fill="#F04A23"/></svg>
+        <span>Studio</span>
+      </a>
+      <nav aria-label="Liens">
+        <a href="https://github.com/MTthoas/Studio" rel="noopener">GitHub</a>
+        <a href="https://github.com/MTthoas/Studio/releases" rel="noopener">Versions</a>
+        <a href="https://github.com/MTthoas/Studio/blob/main/LICENSE" rel="noopener">Licence AGPL-3.0</a>
+        <a href="https://github.com/MTthoas/Studio/blob/main/CONTRIBUTING.md" rel="noopener">Contribuer</a>
+      </nav>
+      <p>© 2026 Matthias. Ce site ne dépose aucun cookie et ne charge rien d’ailleurs.</p>
+    </div>
+  </footer>
+
+  <script src="site.js" defer></script>
+</body>
+</html>

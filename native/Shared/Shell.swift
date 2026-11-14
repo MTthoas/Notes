@@ -134,6 +134,18 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
             DispatchQueue.global(qos: .userInitiated).async { var r = folders.branches(pid); r["id"] = id; self.answer(r) }
         case "site":
             SiteCheck.run(body["url"] as? String ?? "") { var r = $0; r["id"] = id; self.answer(r) }
+        case "local":
+            // Site du projet lancé en local (voir Sites.swift) : état, démarrage, arrêt.
+            let op = body["op"] as? String ?? "", rel = body["rel"] as? String ?? ""
+            DispatchQueue.global(qos: .userInitiated).async {
+                var r: [String: Any]
+                switch op {
+                case "start": r = Sites.shared.start(pid, rel: rel)
+                case "stop": r = Sites.shared.stop(pid)
+                default: r = Sites.shared.state(pid)
+                }
+                r["id"] = id; self.answer(r)
+            }
         case "sessions":
             guard let dir = folders.path(pid) else { answer(["id": id, "ok": true, "sessions": [], "found": false]); return }
             ClaudeSessions.shared.list(project: dir) { var r = $0; r["id"] = id; self.answer(r) }

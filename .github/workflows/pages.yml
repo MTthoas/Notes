@@ -1,0 +1,44 @@
+# Site vitrine : publie le dossier site/ sur GitHub Pages (https://mtthoas.github.io/Studio/).
+#   - à chaque push sur main qui touche site/ (ou ce fichier) ;
+#   - à la main : Actions → Site → Run workflow.
+# Le site est statique : aucun build, le dossier est envoyé tel quel.
+# Prérequis, une seule fois : Settings → Pages → Source « GitHub Actions ».
+name: Site
+
+on:
+  push:
+    branches: [main]
+    paths: ['site/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+# Par défaut, le jeton du workflow ne peut que lire le dépôt.
+permissions:
+  contents: read
+
+# Une seule publication à la fois ; celle en cours va jusqu'au bout, la suivante attend.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Publication du site
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pages: write      # publier sur GitHub Pages
+      id-token: write   # prouver l'origine du déploiement
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

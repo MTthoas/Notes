@@ -14,7 +14,8 @@
     "typecheck": "tsc -p . && tsc -p src/sw",
     "check": "node scripts/check.ts",
     "verify": "npm run typecheck && npm run build && npm run check",
-    "serve": "node scripts/build.ts --watch --serve"
+    "serve": "node scripts/build.ts --watch --serve",
+    "site": "node scripts/site.ts"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

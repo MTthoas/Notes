@@ -14,6 +14,7 @@ import type { Project } from './model.ts';
 import * as flux from './flux.ts';
 import * as sessions from './sessions.ts';
 import * as review from './review.ts';
+import * as site from './site.ts';
 import * as chart from '../../ui/chart.ts';
 import * as bridge from '../../integrations/remote.ts';
 import { shareable } from '../../integrations/ai.ts';
@@ -109,7 +110,7 @@ function tabBody(p: Project, tab: string): string {
   if (tab === 'server') return '<div class="sv-box"><div class="pj-skel"></div></div>';
   if (tab === 'tasks') return `${section('tasks', 'Tâches', 'check', taskBox(p))}${panelsHTML(p, 'tasks')}`;
   if (tab === 'notes') return section('notes', 'Notes', 'notes', noteRows(p));
-  if (tab === 'site') return section('site', 'Site web', 'link', siteHTML(p));
+  if (tab === 'site') return `${section('site-local', 'En local', 'terminal', site.localHTML())}${section('site', 'En ligne', 'link', siteHTML(p))}${section('site-prod', 'En production', 'server', site.soonHTML())}`;
   const notes = model.notesOf(p).length - 1;
   return `${folderBox}
     ${bridge.where() ? `<section class="pj-quick">${sessions.composerHTML(p, { compact: true })}<div data-ov="agents"></div></section>` : ''}
@@ -242,6 +243,7 @@ async function hydrate(root: HTMLElement, p: Project, tab: string): Promise<void
     const r = await native.call('project', 'branches', { project: p.id }, 20000), list = (r.branches as { name: string; date: string; ahead: number; behind: number; upstream: string }[] | undefined) ?? [];
     fill(root, '[data-sec="branches"] .pj-sec-body', list.length ? list.map(b => `<div class="pj-br"><code>${esc(b.name)}</code>${b.name === f?.branch ? '<em class="pj-badge approved">actuelle</em>' : ''}${b.upstream ? '' : '<em class="pj-badge">locale</em>'}<span>${b.ahead ? `↑${b.ahead} ` : ''}${b.behind ? `↓${b.behind}` : ''}</span><time>${esc(rel(Date.parse(b.date)))}</time></div>`).join('') : '<p class="hm-empty">Choisis le dossier du projet pour voir ses branches.</p>');
   }
+  if (tab === 'site') site.mount(root, p);
   if (tab === 'site' && p.site && native.available()) void checkSite(root, p);
   if (tab === 'server') void server(root, p);
   if (tab === 'overview') {

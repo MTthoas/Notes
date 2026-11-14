@@ -148,11 +148,12 @@ Une note ou une tâche y appartient avec le tag `#projet/studio` — posé par l
 | **Flux** | Le parcours de chaque branche façon gitflow : en cours → PR ouverte → prête à fusionner → fusionnée → publiée (Release), avec CI et revues |
 | **Serveur** | L'état du VPS ou de la VM du projet, joint en SSH, et ses agents |
 | **Tâches · Notes** | Ce qui est tagué `#projet/<nom>` |
-| **Site** | Le site du projet, vérifié depuis le Mac (en ligne, code, temps de réponse) |
+| **Site** | Le site du projet : lancé **en local** depuis le Mac (adresse, pages vues, requêtes), et vérifié **en ligne** (code, temps de réponse) |
 
 - Le **dossier local** est choisi dans le sélecteur de macOS et reste dans les réglages de l'app Mac : il n'est jamais écrit dans une note ni synchronisé. L'app n'en lit l'état Git qu'en lecture seule.
 - **Revue IA** : le diff est lu en local, montré, puis envoyé à l'IA branchée seulement après ton clic ; la revue peut être enregistrée comme note du projet.
 - **Sessions** : l'app Mac lit les journaux locaux de Claude Code (`~/.claude/projects/…`), en lecture seule ; rien ne quitte la machine.
+- **Site en local** (app Mac) : l'onglet Site cherche un site dans le dossier du projet (racine, `site/`, `web/`, `docs/`, `dist/`…). Un dossier avec un `index.html` est servi par Studio lui-même, sur `127.0.0.1` uniquement, avec le compte des pages vues, des requêtes et des données servies. Un projet Next.js, Astro, Vite, Nuxt ou SvelteKit est lancé avec son script (`npm run dev`, ou pnpm, yarn, bun selon le fichier de verrou) : Studio affiche l'adresse annoncée et la sortie du serveur. Tout s'arrête d'un clic, et à la fermeture de l'app. Le suivi du site en production (monitoring, consommation, visiteurs) viendra avec le serveur du projet.
 
 ### Agents Claude Code
 
@@ -275,6 +276,7 @@ Pour signaler une faille, contacte le mainteneur en privé via [GitHub](https://
 | `npm run typecheck` | Vérifie les types (TypeScript strict, sans aucun `any` implicite) |
 | `npm run check` | Vérifie le build : fichiers cités présents, cache hors ligne complet, aucune clé d'API dans le dépôt |
 | `npm run verify` | Les trois à la suite (ce que lance la CI) |
+| `npm run site` | Sert le site vitrine (`site/`) sur `http://localhost:4321` |
 
 Les seules dépendances sont TypeScript et esbuild, pour le développement. Les scripts de `scripts/` sont du TypeScript exécuté directement par Node.
 
@@ -305,7 +307,8 @@ src/                               TypeScript strict
     voice.ts          notes vocales (transcription sur l'appareil)
     hub.ts            réglages, coffre, agents, blocs spéciaux, liaison d'appareils
     projects/         model.ts (bloc ```projet, tags), page.ts (cockpit), flux.ts,
-                      review.ts (revue IA), sessions.ts (agents Claude Code, publication)
+                      review.ts (revue IA), sessions.ts (agents Claude Code, publication),
+                      site.ts (site du projet lancé en local)
     news.ts           nouveautés présentées après une mise à jour, fenêtre « mise à jour prête »
     permissions.ts    réglages des autorisations des agents Claude Code (commandes, web, PATH), gardés sur le Mac
     automations.ts, help.ts, onboarding.ts
@@ -336,8 +339,10 @@ native/             apps Mac et iPhone (Swift) et leurs scripts de build
     Orchestrator.swift  publication : mise à jour, conflits, commit, push
     Sessions.swift      lecture des sessions Claude Code locales
     Servers.swift       serveurs joints en SSH
+    Sites.swift         site d'un projet en local : détection, serveur de fichiers, script dev
   macOS/, iOS/        points d'entrée de chaque plateforme
-scripts/            build.ts (esbuild) et check.ts, exécutés directement par Node
+site/               site vitrine de Studio : HTML, CSS et JS statiques, sans build ni dépendance
+scripts/            build.ts (esbuild), check.ts et site.ts, exécutés directement par Node
 bin/studio          commande de lancement
 contexte.md         mémoire du dépôt pour les agents : lue en premier, tenue à jour par eux
 ```
@@ -375,6 +380,12 @@ Chaque push sur `main` publie une Release `v1.0.<n>` avec `Studio-macOS.zip` et 
 ### Héberger la version web
 
 Sers le dossier `dist/` produit par `npm run build` (ou le contenu de `Studio-web.zip`) sur n'importe quel hébergement statique en HTTPS, GitHub Pages par exemple. Tous les chemins sont relatifs : l'app fonctionne dans un sous-dossier. La version du cache hors ligne change d'elle-même à chaque build.
+
+### Site vitrine
+
+Le dossier `site/` contient la page de présentation de Studio : trois fichiers statiques (`index.html`, `site.css`, `site.js`), sans build, sans police ni script extérieur, avec sa propre politique de sécurité (aucune requête sortante). `npm run site` le sert en local ; dans l'app Mac, l'onglet **Site** du projet le lance d'un clic.
+
+Il est publié sur **GitHub Pages** ([mtthoas.github.io/Studio](https://mtthoas.github.io/Studio/)) par [`.github/workflows/pages.yml`](.github/workflows/pages.yml) : chaque push sur `main` qui touche `site/` envoie le dossier tel quel (ou à la main : Actions → Site → Run workflow). À faire une seule fois dans le dépôt : Settings → Pages → Source « GitHub Actions ». Tous les chemins sont relatifs, le site fonctionne donc aussi dans un sous-dossier ou sur un autre hébergement statique.
 
 ## Contribuer
 

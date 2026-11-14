@@ -48,7 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // Une mise à jour téléchargée et vérifiée en arrière-plan s'installe ici : la prochaine ouverture est à jour.
-    func applicationWillTerminate(_ notification: Notification) { Updater.shared.applyOnQuit() }
+    // Les sites lancés en local (onglet Site) s'arrêtent avec l'app.
+    func applicationWillTerminate(_ notification: Notification) { Sites.shared.stopAll(); Updater.shared.applyOnQuit() }
 
     @objc private func openSettings() { web.evaluateJavaScript("window.carnet?.settings?.()") }
     @objc private func reload() { web.reload() }
