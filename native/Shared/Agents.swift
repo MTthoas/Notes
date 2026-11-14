@@ -8,7 +8,9 @@
 //   Réglages → Autorisations (par défaut `npm test` et `npm run …`) ; le code du projet peut alors s'exécuter.
 //
 // Ce que chaque mode a le droit de faire se règle dans Réglages → Autorisations (AgentPermissions, en bas de ce
-// fichier) : accès au web, liste des commandes, commandes aussi en mode Analyser, dossiers ajoutés au PATH.
+// fichier) : accès au web, liste des commandes, commandes aussi en mode Analyser, dossiers ajoutés au PATH, et
+// notes et tâches du projet : l'agent peut finir son compte rendu par des blocs ```studio-tâches et ```studio-note,
+// que Studio en retire et crée dans le projet (AgentItems, tout en bas ; la page les crée, features/projects/items.ts).
 //
 // Garde-fous : programme à un emplacement connu, aucun shell, --restricted (outils de fichiers confinés au
 // dossier de travail), --permission-mode dontAsk (tout ce qui n'est pas listé est refusé, sans question),
@@ -33,6 +35,8 @@ final class Agents {
         var model = "", effort = ""
         /// Commandes autorisées pour ce tour (case « Commandes ») : une réponse dans la discussion les garde.
         var commands = false
+        /// Ce tour peut créer des notes et des tâches dans son projet ; combien il en a envoyé.
+        var projectItems = false, sentTasks = 0, sentNotes = 0
         /// Numéro du processus Claude Code sur le serveur (pour pouvoir l'arrêter là-bas).
         var remotePid = 0
         /// Étapes reçues du flux (pour suivre un agent qui tourne sur un serveur).
@@ -69,7 +73,7 @@ final class Agents {
         let f = ISO8601DateFormatter()
         return ["run": r.id, "project": r.project, "mode": r.mode, "prompt": r.prompt, "status": r.status, "session": r.session,
                 "worktree": r.worktree, "started": f.string(from: r.started), "finished": r.finished.map { f.string(from: $0) } ?? "",
-                "result": r.result, "lastText": r.lastText, "cost": r.cost, "turns": r.turns, "denials": r.denials,
+                "result": r.result, "lastText": r.lastText, "cost": r.cost, "turns": r.turns, "denials": r.denials, "items": ["tasks": r.sentTasks, "notes": r.sentNotes],
                 "quota": r.quota ?? NSNull(), "machine": r.machine, "host": r.host]
     }
 
@@ -312,12 +316,14 @@ final class Agents {
         let effortOK = Self.efforts.contains(useEffort)
         if modelOK { args += ["--model", useModel] }
         if effortOK { args += ["--effort", useEffort] }
-        let added = AgentTuning.prompt(mode: mode, tests: tests)
+        // Notes et tâches du projet : permises par les réglages, jamais pour l'orchestrateur (résolution de conflits).
+        let items = AgentPermissions.projectItems && body["internal"] as? Bool != true
+        let added = AgentTuning.prompt(mode: mode, tests: tests, items: items)
         if !added.isEmpty { args += ["--append-system-prompt", added] }
         args += ["--allowedTools"] + AgentPermissions.allowed(tools: tools, commands: tests)
 
         let run = Run(id: UUID().uuidString, project: pid, mode: mode, prompt: String(prompt.prefix(500)))
-        run.model = modelOK ? useModel : ""; run.effort = effortOK ? useEffort : ""; run.commands = tests
+        run.model = modelOK ? useModel : ""; run.effort = effortOK ? useEffort : ""; run.commands = tests; run.projectItems = items
         if !resume.isEmpty || !newWorktree.isEmpty { run.session = resume; run.cwd = cwd; run.worktree = cwd.range(of: "/.claude/worktrees/").map { String(cwd[$0.upperBound...]) } ?? newWorktree }
         run.actions.append(["at": ISO8601DateFormatter().string(from: Date()), "kind": "prompt", "text": String(prompt.prefix(4000))])
         let p = Process()
@@ -444,8 +450,15 @@ final class Agents {
         case "rate_limit_event":
             lock.lock(); run.quota = e["rate_limit_info"] as? [String: Any] ?? e; lock.unlock()
         case "result":
+            // Notes et tâches demandées par l'agent : retirées du compte rendu (lu en entier, avant d'être tronqué),
+            // puis gardées jusqu'à ce que la page les crée dans le projet.
+            var text = e["result"] as? String ?? "", found: [[String: String]] = []
+            lock.lock(); let wants = run.projectItems, session = run.session; lock.unlock()
+            if wants { (text, found) = AgentItems.extract(text) }
+            if !found.isEmpty { AgentItems.add(run: run.id, project: run.project, session: session, items: found) }
             lock.lock()
-            run.result = String((e["result"] as? String ?? "").prefix(8000))
+            run.sentTasks += found.filter { $0["kind"] == "task" }.count; run.sentNotes += found.filter { $0["kind"] == "note" }.count
+            run.result = String(text.prefix(8000))
             run.cost = e["total_cost_usd"] as? Double ?? 0
             run.denials = (e["permission_denials"] as? [[String: Any]] ?? []).compactMap { d in
                 let input = d["tool_input"] as? [String: Any] ?? [:]
@@ -534,9 +547,10 @@ enum AgentTuning {
     static var lean: Bool { saved["lean"] as? Bool ?? true }
 
     /// Texte ajouté à la consigne système de Claude Code, selon le mode de l'agent.
-    static func prompt(mode: String, tests: Bool) -> String {
+    static func prompt(mode: String, tests: Bool, items: Bool = false) -> String {
         [text("intro"), text(mode == "edit" ? "edit" : "read"), text("context"), mode == "edit" ? text("contextEdit") : "",
-         text("economy"), tests ? text("tests") : "", tests ? AgentPermissions.promptLine : "", text("behavior"), text("extra")]
+         text("economy"), tests ? text("tests") : "", tests ? AgentPermissions.promptLine : "", items ? AgentPermissions.itemsLine : "",
+         text("behavior"), text("extra")]
             .filter { !$0.isEmpty }.joined(separator: " ")
     }
 
@@ -590,7 +604,8 @@ enum AgentPermissions {
     static let webTools = ["WebSearch", "WebFetch"]
     static let defaultCommands = ["npm test", "npm run test", "npm run *"]
     private static let maxCommands = 60, maxDirs = 20
-    private static let flags = ["web", "anyCommand", "commandsInRead"]
+    /// Réglages oui/non et leur valeur d'origine.
+    private static let flags: [String: Bool] = ["web": false, "anyCommand": false, "commandsInRead": false, "projectItems": true]
 
     private static var saved: [String: Any] { UserDefaults.standard.dictionary(forKey: store) ?? [:] }
     /// Recherche et lecture de pages web (WebSearch, WebFetch), dans les deux modes.
@@ -599,6 +614,9 @@ enum AgentPermissions {
     static var anyCommand: Bool { saved["anyCommand"] as? Bool ?? false }
     /// La case « Commandes » vaut aussi en mode Analyser (qui travaille dans le dossier du projet, pas dans une copie).
     static var commandsInRead: Bool { saved["commandsInRead"] as? Bool ?? false }
+    /// L'agent peut créer des notes et des tâches dans le projet d'où il est lancé (création seulement : il ne modifie
+    /// ni ne supprime rien). Elles passent par son compte rendu, pas par un outil : rien de plus ne lui est ouvert sur ce Mac.
+    static var projectItems: Bool { saved["projectItems"] as? Bool ?? true }
     /// Commandes permises, au format des règles de Claude Code (`npm run *` : tout ce qui commence par `npm run `).
     static var commands: [String] { (saved["commands"] as? [String])?.compactMap(command) ?? defaultCommands }
     /// Dossiers placés en tête du PATH des agents lancés sur ce Mac.
@@ -637,12 +655,25 @@ enum AgentPermissions {
             : "Seules ces commandes te sont permises, les autres seront refusées : " + commands.map { "`\($0)`" }.joined(separator: ", ") + "."
     }
 
+    /// Ajouté à la consigne quand l'agent peut créer des notes et des tâches : le format que relit AgentItems.extract.
+    static let itemsLine = """
+        Tu peux ajouter des tâches et des notes au projet Studio d'où tu es lancé, en plaçant à la fin de ton compte rendu \
+        (avant la ligne « Commit: » s'il y en a une) un bloc ```studio-tâches, une tâche par ligne commençant par « - », \
+        avec une échéance facultative en fin de ligne (« demain », « vendredi », « @2026-12-01 »), et un bloc \
+        ```studio-note suivi du titre de la note sur la même ligne, son contenu en Markdown dessous (indique le langage de \
+        chacun de ses blocs de code : ```ts, ```bash, ```text). Studio les crée dans le projet à la fin de ton tour \
+        et les retire du compte rendu ; il ne modifie ni ne supprime jamais une note existante. N'en crée que si l'utilisateur \
+        le demande, ou pour garder une suite à donner ou une décision à prendre ; \(AgentItems.maxTasks) tâches et \
+        \(AgentItems.maxNotes) notes par tour au plus.
+        """
+
     /// Valeurs en vigueur, valeurs d'origine, clés modifiées, et ce que reçoit Claude Code dans chaque mode.
     static func state(rejected: [String] = []) -> [String: Any] {
-        let values: [String: Any] = ["web": web, "anyCommand": anyCommand, "commandsInRead": commandsInRead, "commands": commands, "path": path]
-        let defaults: [String: Any] = ["web": false, "anyCommand": false, "commandsInRead": false, "commands": defaultCommands, "path": [String]()]
+        let values: [String: Any] = ["web": web, "anyCommand": anyCommand, "commandsInRead": commandsInRead, "projectItems": projectItems, "commands": commands, "path": path]
+        var defaults: [String: Any] = ["commands": defaultCommands, "path": [String]()]
+        for (k, v) in flags { defaults[k] = v }
         let s = saved
-        let changed = (flags + ["commands", "path"]).filter { s[$0] != nil }
+        let changed = (flags.keys.sorted() + ["commands", "path"]).filter { s[$0] != nil }
         let preview: [String: Any] = [
             "read": tools(mode: "read", commands: false), "readCommands": commandsAllowed(mode: "read") ? bashRules : [],
             "edit": tools(mode: "edit", commands: false), "editCommands": commandsAllowed(mode: "edit") ? bashRules : [],
@@ -660,7 +691,7 @@ enum AgentPermissions {
                 .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         }
         for (k, v) in body["set"] as? [String: Any] ?? [:] {
-            if flags.contains(k) { if let b = v as? Bool { s[k] = b } }
+            if flags[k] != nil { if let b = v as? Bool { s[k] = b } }
             else if k == "commands" || k == "path" {
                 var kept: [String] = []
                 for l in lines(v) {
@@ -672,11 +703,114 @@ enum AgentPermissions {
             }
         }
         // Une valeur revenue à l'origine n'est plus « modifiée ».
-        for k in flags where s[k] as? Bool == false { s[k] = nil }
+        for (k, origin) in flags where s[k] as? Bool == origin { s[k] = nil }
         if s["commands"] as? [String] == defaultCommands { s["commands"] = nil }
         if (s["path"] as? [String])?.isEmpty == true { s["path"] = nil }
         UserDefaults.standard.set(s, forKey: store)
         return state(rejected: rejected)
+    }
+}
+
+/// Notes et tâches qu'un agent crée dans son projet (réglage « Notes et tâches du projet », AgentPermissions).
+/// L'agent les écrit à la fin de son compte rendu, dans des blocs ```studio-tâches et ```studio-note Titre ; `extract`
+/// les en retire, `add` les garde (UserDefaults) et prévient la page, qui les crée (features/projects/items.ts) puis
+/// confirme par `done`. Gardées jusque-là : un coffre verrouillé ou une app fermée ne les perd pas. Seule la page du Mac
+/// les lit et les confirme (« agent.items » et « agent.itemsDone » ne sont pas dans REMOTE_ALLOWED, link.ts), ce qui
+/// évite qu'un appareil lié les crée une seconde fois.
+enum AgentItems {
+    static let changed = Notification.Name("studio.agents.items")
+    static let maxTasks = 20, maxNotes = 5
+    private static let store = "studio.agents.items"
+    private static let maxPending = 50, maxTask = 300, maxTitle = 120, maxBody = 20_000
+    private static let lock = NSLock()
+    /// Une ligne de clôture : ses accents graves ou tildes (3 ou plus), et ce qui la suit (langage, ou type et titre).
+    private static let fenceRe = try! NSRegularExpression(pattern: "^[ \\t]{0,3}(`{3,}|~{3,})[ \\t]*(.*?)[ \\t]*$")
+    /// Ce qui suit la clôture d'ouverture d'un bloc : son type et, pour une note, son titre.
+    private static let kindRe = try! NSRegularExpression(pattern: "^studio-(t[âa]ches?|notes?)(?:[ \\t]+(.*))?$", options: [.caseInsensitive])
+    private static let bulletRe = try! NSRegularExpression(pattern: "^\\s*(?:[-*+]|\\d{1,3}[.)])?\\s*(?:\\[[ xX/]\\]\\s+)?")
+
+    private static func groups(_ re: NSRegularExpression, _ s: String) -> [String]? {
+        let ns = s as NSString
+        guard let m = re.firstMatch(in: s, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        return (0..<m.numberOfRanges).map { m.range(at: $0).location == NSNotFound ? "" : ns.substring(with: m.range(at: $0)) }
+    }
+
+    /// Retire du compte rendu les blocs de notes et de tâches ; renvoie le texte restant et ce qu'ils demandent,
+    /// borné (nombre, longueur), sur une ligne pour une tâche. Lu ligne à ligne : dans une note, les blocs de code
+    /// qui ont un langage (```ts) s'ouvrent et se ferment sans fermer la note, quel que soit leur nombre d'accents.
+    /// Un bloc jamais fermé reste dans le compte rendu.
+    static func extract(_ text: String) -> (String, [[String: String]]) {
+        let lines = text.components(separatedBy: "\n")
+        var kept: [String] = [], items: [[String: String]] = [], tasks = 0, notes = 0, i = 0
+        let one = { (s: String) in s.components(separatedBy: .controlCharacters).joined(separator: " ").trimmingCharacters(in: .whitespaces) }
+        let trimTitle = { (s: String) in one(s).trimmingCharacters(in: CharacterSet(charactersIn: "#").union(.whitespaces)) }
+        while i < lines.count {
+            guard let f = groups(fenceRe, lines[i]), let k = groups(kindRe, f[2]) else { kept.append(lines[i]); i += 1; continue }
+            let open = f[1], kind = k[1].lowercased()
+            // Fin du bloc : une clôture nue du même caractère, au moins aussi longue, hors des blocs de code qu'il contient.
+            var stack: [String] = [], close: Int?
+            for j in (i + 1)..<max(i + 1, lines.count) {
+                guard let g = groups(fenceRe, lines[j]) else { continue }
+                let fence = g[1], info = g[2], same = { (a: String, b: String) in a.first == b.first && a.count >= b.count }
+                if !info.isEmpty { stack.append(fence) }
+                else if let top = stack.last, same(fence, top) { stack.removeLast() }
+                else if same(fence, open) { close = j; break }
+                else { stack.append(fence) }
+            }
+            guard let end = close else { kept.append(lines[i]); i += 1; continue }
+            let content = Array(lines[(i + 1)..<end])
+            i = end + 1
+            if kind.hasPrefix("note") {
+                guard notes < maxNotes else { continue }
+                var body = content, title = trimTitle(k[2])
+                // Sans titre sur la ligne du bloc : sa première ligne, si c'est un titre Markdown.
+                if title.isEmpty, let at = body.firstIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }), body[at].hasPrefix("#") {
+                    title = trimTitle(body[at]); body.removeFirst(at + 1)
+                }
+                let b = body.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !title.isEmpty || !b.isEmpty else { continue }
+                items.append(["kind": "note", "title": String((title.isEmpty ? "Note de l’agent" : title).prefix(maxTitle)), "body": String(b.prefix(maxBody))])
+                notes += 1
+            } else {
+                for l in content where tasks < maxTasks {
+                    let t = one(bulletRe.stringByReplacingMatches(in: l, range: NSRange(location: 0, length: (l as NSString).length), withTemplate: ""))
+                    guard !t.isEmpty else { continue }
+                    items.append(["kind": "task", "text": String(t.prefix(maxTask))]); tasks += 1
+                }
+            }
+        }
+        guard !items.isEmpty || kept.count != lines.count else { return (text, []) }
+        var rest = kept.joined(separator: "\n")
+        while rest.contains("\n\n\n") { rest = rest.replacingOccurrences(of: "\n\n\n", with: "\n\n") }
+        return (rest.trimmingCharacters(in: .whitespacesAndNewlines), items)
+    }
+
+    private static var pending: [[String: Any]] {
+        get { UserDefaults.standard.array(forKey: store) as? [[String: Any]] ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: store) }
+    }
+
+    /// Garde ce qu'un tour d'agent demande de créer, et prévient la page.
+    static func add(run: String, project: String, session: String, items: [[String: String]]) {
+        lock.lock()
+        var p = pending.filter { $0["run"] as? String != run }
+        p.append(["run": run, "project": project, "session": session, "at": ISO8601DateFormatter().string(from: Date()), "items": items])
+        pending = Array(p.suffix(maxPending))
+        lock.unlock()
+        DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: nil) }
+    }
+
+    /// Ce qui attend d'être créé, du plus ancien au plus récent.
+    static func list() -> [String: Any] {
+        lock.lock(); defer { lock.unlock() }
+        return ["ok": true, "pending": pending]
+    }
+
+    /// La page a créé ce que demandait ce tour.
+    static func done(_ run: String) -> [String: Any] {
+        lock.lock(); defer { lock.unlock() }
+        pending = pending.filter { $0["run"] as? String != run }
+        return ["ok": true]
     }
 }
 #endif
