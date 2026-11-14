@@ -1275,6 +1275,26 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .pj-site-act { display: flex; flex-wrap: wrap; gap: 8px; }
 .pj-site-act a.btn { text-decoration: none; }
 .pj-site-form { margin-top: 10px; }
+/* Site lancé en local (site.ts) : sites trouvés dans le dossier, site en cours, suivi à venir sur le serveur. */
+.st-local { display: flex; flex-direction: column; gap: 12px; }
+.st-local .sv-head strong a { color: var(--text); text-decoration: none; }
+.st-local .sv-head strong a:hover { text-decoration: underline; }
+.st-local .sv-act a.btn { text-decoration: none; }
+.st-local > .modal-hint { margin: 0; }
+.st-list { display: flex; flex-direction: column; gap: 8px; }
+.st-row, .st-empty { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); }
+.st-row > .ic, .st-empty > .ic { flex: none; width: 16px; height: 16px; color: var(--c, var(--text-3)); }
+.st-row > div, .st-empty > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; margin-right: auto; }
+.st-row strong, .st-empty strong { font-size: var(--t-3); font-weight: 600; }
+.st-row > div > code { color: var(--text-3); font: 12px var(--mono); }
+.st-row em, .st-empty p { flex-basis: 100%; margin: 0; font-style: normal; color: var(--text-2); font-size: var(--t-1); line-height: 1.55; }
+.st-row em code, .st-empty code { background: var(--code); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font: 11.5px var(--mono); }
+.st-row .btn { flex: none; height: 30px; }
+.st-log { margin: 0; max-height: 220px; overflow: auto; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text-2); font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.st-soon .sv-tile { border-style: dashed; background: none; }
+.st-soon .sv-tile strong { color: var(--text-3); }
+.st-soon + .modal-hint .link-btn { font-size: inherit; }
+@media (max-width: 700px) { .st-row { flex-wrap: wrap; } }
 
 /* Flux (gitflow) */
 .fx-legend { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text-3); font-size: var(--t-1); }
