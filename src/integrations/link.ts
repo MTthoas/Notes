@@ -265,7 +265,7 @@ class Session {
     // Limites de l'abonnement : lecture seule des pourcentages. Les activer, les couper ou forcer une relecture se fait sur le Mac.
     if (key === 'claude.limits') params.op = '';
     if (key === 'agent.start') {
-      // À distance : jamais de commandes (tests npm), consigne bornée.
+      // À distance : jamais de commandes (case « Commandes »), consigne bornée.
       params.tests = false;
       if (typeof params.prompt !== 'string' || params.prompt.length > 20000) return deny('Consigne invalide.');
       emit({ type: 'remote', name: dev.name, what: String(params.prompt).slice(0, 120) });

@@ -802,6 +802,7 @@ function commands() {
     c('Nouvelle automatisation', 'bot', () => setView({ type: 'agents' }), '', 'créer agent modèle planifier'),
     c('Réglages : sécurité et chiffrement', 'shield', () => hub.openConnections('coffre'), '', 'sécurité mot de passe face id touch id passkey'),
     c('Réglages : intelligence artificielle', 'sparkle', () => hub.openConnections('ia'), '', 'clé api anthropic chatgpt ollama'),
+    c('Réglages : autorisations des agents', 'terminal', () => hub.openConnections('autorisations'), '', 'claude code commandes terminal shell bash permissions web path'),
     c('Réglages : Linear', 'linear', () => hub.openConnections('linear'), '', 'issues tickets'),
     c('Lier un téléphone ou un ordinateur', 'phone', () => hub.openConnections('appareils'), '', 'appareils synchronisation iphone mac qr'),
     c('Synchroniser maintenant', 'refresh', () => { link.syncNow(); toast('Recherche des appareils…'); }, '', 'appareils sync'),

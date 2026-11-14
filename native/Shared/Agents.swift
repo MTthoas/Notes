@@ -4,11 +4,16 @@
 // - « analyse » : lecture seule (Read, Glob, Grep) dans le dossier du projet ;
 // - « modifier » : dans une copie isolée du dépôt (worktree créé par Claude Code dans .claude/worktrees/),
 //   avec lecture et écriture de fichiers seulement, confinées à cette copie ;
-// - option « tests » : autorise en plus `npm test` et `npm run …` (le code du projet peut alors s'exécuter).
+// - option « Commandes » (case du formulaire, champ `tests`) : autorise en plus les commandes réglées dans
+//   Réglages → Autorisations (par défaut `npm test` et `npm run …`) ; le code du projet peut alors s'exécuter.
+//
+// Ce que chaque mode a le droit de faire se règle dans Réglages → Autorisations (AgentPermissions, en bas de ce
+// fichier) : accès au web, liste des commandes, commandes aussi en mode Analyser, dossiers ajoutés au PATH.
 //
 // Garde-fous : programme à un emplacement connu, aucun shell, --restricted (outils de fichiers confinés au
 // dossier de travail), --permission-mode dontAsk (tout ce qui n'est pas listé est refusé, sans question),
 // aucun réglage, hook ni serveur MCP de l'utilisateur, trois agents à la fois au plus, 90 minutes au plus.
+// Un appareil lié ne peut jamais demander les commandes (voir link.ts), ni changer les autorisations.
 import Foundation
 #if os(macOS)
 
@@ -26,6 +31,8 @@ final class Agents {
         var machine = "mac", host = ""
         /// Modèle et niveau d'effort de ce tour ("" : ceux de Claude Code par défaut).
         var model = "", effort = ""
+        /// Commandes autorisées pour ce tour (case « Commandes ») : une réponse dans la discussion les garde.
+        var commands = false
         /// Numéro du processus Claude Code sur le serveur (pour pouvoir l'arrêter là-bas).
         var remotePid = 0
         /// Étapes reçues du flux (pour suivre un agent qui tourne sur un serveur).
@@ -46,9 +53,7 @@ final class Agents {
     /// Les remises de messages se font une à une (deux fins d'agent simultanées ne relancent pas deux fois la même discussion).
     private let flushQueue = DispatchQueue(label: "studio.agents.queue")
 
-    private static let readTools = ["Read", "Glob", "Grep"]
-    private static let editTools = ["Read", "Glob", "Grep", "Edit", "Write"]
-    private static let testCommands = ["Bash(npm test)", "Bash(npm run test)", "Bash(npm run *)"]
+    // Outils de chaque mode, et ce qui s'y ajoute selon les réglages : voir AgentPermissions, en bas de ce fichier.
     // Les consignes ajoutées à celle de Claude Code et les réglages de contexte : voir AgentTuning, en bas de ce fichier.
     private static let modelRe = try! NSRegularExpression(pattern: "^[a-z0-9][a-z0-9.\\-]{0,40}$")
     private static let efforts: Set<String> = ["low", "medium", "high", "xhigh", "max"]
@@ -272,19 +277,22 @@ final class Agents {
                 cwd = path
             }
         }
-        let tests = mode == "edit" && body["tests"] as? Bool == true && !onServer
-        let tools = (mode == "edit" ? Self.editTools : Self.readTools) + (tests ? ["Bash"] : [])
-        args += ["--tools", tools.joined(separator: ",")]
-        // Modèle et effort : ceux de la demande. Une reprise qui n'en précise pas (messages en attente, orchestrateur)
-        // garde ceux du dernier tour de la discussion, tant que Studio s'en souvient.
-        var model = body["model"] as? String, effort = body["effort"] as? String
-        if !resume.isEmpty && (model == nil || effort == nil) {
+        // Modèle, effort et commandes : ceux de la demande. Une reprise qui n'en précise pas (réponse dans la discussion,
+        // messages en attente, orchestrateur) garde ceux du dernier tour de la discussion, tant que Studio s'en souvient.
+        var model = body["model"] as? String, effort = body["effort"] as? String, asked = body["tests"] as? Bool
+        if !resume.isEmpty && (model == nil || effort == nil || asked == nil) {
             lock.lock()
             let last = runs.values.filter { $0.project == pid && $0.session == resume }.max { $0.started < $1.started }
             lock.unlock()
             model = model ?? last?.model
             effort = effort ?? last?.effort
+            // L'orchestrateur (résolution de conflits) ne reprend jamais les commandes d'un tour précédent.
+            if body["internal"] as? Bool != true { asked = asked ?? last?.commands }
         }
+        // Commandes : demandées par la case du formulaire, permises dans ce mode par les réglages, jamais sur un serveur.
+        let tests = asked == true && !onServer && AgentPermissions.commandsAllowed(mode: mode)
+        let tools = AgentPermissions.tools(mode: mode, commands: tests)
+        args += ["--tools", tools.joined(separator: ",")]
         let useModel = model ?? "", useEffort = effort ?? ""
         let modelOK = !useModel.isEmpty && Self.modelRe.firstMatch(in: useModel, range: NSRange(useModel.startIndex..., in: useModel)) != nil
         let effortOK = Self.efforts.contains(useEffort)
@@ -292,10 +300,10 @@ final class Agents {
         if effortOK { args += ["--effort", useEffort] }
         let added = AgentTuning.prompt(mode: mode, tests: tests)
         if !added.isEmpty { args += ["--append-system-prompt", added] }
-        args += ["--allowedTools"] + tools.filter { $0 != "Bash" } + (tests ? Self.testCommands : [])
+        args += ["--allowedTools"] + AgentPermissions.allowed(tools: tools, commands: tests)
 
         let run = Run(id: UUID().uuidString, project: pid, mode: mode, prompt: String(prompt.prefix(500)))
-        run.model = modelOK ? useModel : ""; run.effort = effortOK ? useEffort : ""
+        run.model = modelOK ? useModel : ""; run.effort = effortOK ? useEffort : ""; run.commands = tests
         if !resume.isEmpty || !newWorktree.isEmpty { run.session = resume; run.cwd = cwd; run.worktree = cwd.range(of: "/.claude/worktrees/").map { String(cwd[$0.upperBound...]) } ?? newWorktree }
         run.actions.append(["at": ISO8601DateFormatter().string(from: Date()), "kind": "prompt", "text": String(prompt.prefix(4000))])
         let p = Process()
@@ -323,6 +331,10 @@ final class Agents {
         var env = ProcessInfo.processInfo.environment
         env["DISABLE_AUTOUPDATER"] = "1"; env["NO_COLOR"] = "1"
         for (k, v) in AgentTuning.env() { env[k] = v }
+        // Ouverte depuis le Dock, l'app n'a qu'un PATH minimal : les dossiers réglés passent devant (cargo, Homebrew…).
+        if !onServer, !AgentPermissions.path.isEmpty {
+            env["PATH"] = (AgentPermissions.path + [env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"]).joined(separator: ":")
+        }
         p.environment = env
         let out = Pipe(), input = Pipe()
         p.standardOutput = out; p.standardError = FileHandle.nullDevice; p.standardInput = input
@@ -510,7 +522,7 @@ enum AgentTuning {
     /// Texte ajouté à la consigne système de Claude Code, selon le mode de l'agent.
     static func prompt(mode: String, tests: Bool) -> String {
         [text("intro"), text(mode == "edit" ? "edit" : "read"), text("context"), mode == "edit" ? text("contextEdit") : "",
-         text("economy"), tests ? text("tests") : "", text("behavior"), text("extra")]
+         text("economy"), tests ? text("tests") : "", tests ? AgentPermissions.promptLine : "", text("behavior"), text("extra")]
             .filter { !$0.isEmpty }.joined(separator: " ")
     }
 
@@ -549,6 +561,108 @@ enum AgentTuning {
             }
         }
         UserDefaults.standard.set(s, forKey: store)
+    }
+}
+
+/// Ce que les agents ont le droit de faire, au-delà de lire (et d'écrire, en mode Modifier) dans leur dossier de travail.
+/// Réglé dans Réglages → Autorisations (app Mac) ; seules les valeurs modifiées sont gardées (UserDefaults), les autres
+/// suivent les valeurs d'origine, qui reproduisent les garde-fous d'avant ce réglage. Lu à chaque lancement, y compris
+/// pour l'orchestrateur, les messages en attente et les appareils liés — qui ne peuvent ni le lire ni le modifier
+/// (« agent.permissions » n'est pas dans REMOTE_ALLOWED, link.ts), ni demander les commandes.
+enum AgentPermissions {
+    private static let store = "studio.agents.permissions"
+    static let readTools = ["Read", "Glob", "Grep"]
+    static let editTools = ["Read", "Glob", "Grep", "Edit", "Write"]
+    static let webTools = ["WebSearch", "WebFetch"]
+    static let defaultCommands = ["npm test", "npm run test", "npm run *"]
+    private static let maxCommands = 60, maxDirs = 20
+    private static let flags = ["web", "anyCommand", "commandsInRead"]
+
+    private static var saved: [String: Any] { UserDefaults.standard.dictionary(forKey: store) ?? [:] }
+    /// Recherche et lecture de pages web (WebSearch, WebFetch), dans les deux modes.
+    static var web: Bool { saved["web"] as? Bool ?? false }
+    /// Toutes les commandes, sans liste : Bash sans restriction quand la case « Commandes » est cochée.
+    static var anyCommand: Bool { saved["anyCommand"] as? Bool ?? false }
+    /// La case « Commandes » vaut aussi en mode Analyser (qui travaille dans le dossier du projet, pas dans une copie).
+    static var commandsInRead: Bool { saved["commandsInRead"] as? Bool ?? false }
+    /// Commandes permises, au format des règles de Claude Code (`npm run *` : tout ce qui commence par `npm run `).
+    static var commands: [String] { (saved["commands"] as? [String])?.compactMap(command) ?? defaultCommands }
+    /// Dossiers placés en tête du PATH des agents lancés sur ce Mac.
+    static var path: [String] { (saved["path"] as? [String] ?? []).compactMap(dir) }
+
+    /// Une commande retenue telle quelle, ou nil : une ligne, sans parenthèse (elle romprait la règle « Bash(…) »).
+    private static func command(_ s: String) -> String? {
+        let c = s.trimmingCharacters(in: .whitespaces)
+        guard !c.isEmpty, c.utf8.count <= 200, c.rangeOfCharacter(from: CharacterSet(charactersIn: "()").union(.controlCharacters)) == nil else { return nil }
+        return c
+    }
+    /// Un dossier absolu (« ~ » accepté), sans « : » qui couperait le PATH, ou nil.
+    private static func dir(_ s: String) -> String? {
+        var d = s.trimmingCharacters(in: .whitespaces)
+        if d == "~" || d.hasPrefix("~/") { d = NSHomeDirectory() + d.dropFirst() }
+        guard d.hasPrefix("/"), d.utf8.count <= 500, !d.contains(":"), d.rangeOfCharacter(from: .controlCharacters) == nil else { return nil }
+        return d
+    }
+
+    static func commandsAllowed(mode: String) -> Bool { (mode == "edit" || commandsInRead) && (anyCommand || !commands.isEmpty) }
+
+    /// --tools : ce que l'agent voit.
+    static func tools(mode: String, commands: Bool) -> [String] {
+        (mode == "edit" ? editTools : readTools) + (web ? webTools : []) + (commands ? ["Bash"] : [])
+    }
+    /// --allowedTools : ce qui passe sans question (le reste est refusé par dontAsk). Bash n'y est permis que pour
+    /// les commandes listées, ou en entier si « toutes les commandes » est choisi.
+    static func allowed(tools: [String], commands: Bool) -> [String] {
+        tools.filter { $0 != "Bash" } + (commands ? bashRules : [])
+    }
+    private static var bashRules: [String] { anyCommand ? ["Bash"] : commands.map { "Bash(\($0))" } }
+
+    /// Ajouté à la consigne quand les commandes sont permises : l'agent sait d'emblée ce qu'il peut lancer.
+    static var promptLine: String {
+        anyCommand ? "Tu peux lancer des commandes dans le terminal ; ne lance rien de destructeur ni hors de ton dossier de travail."
+            : "Seules ces commandes te sont permises, les autres seront refusées : " + commands.map { "`\($0)`" }.joined(separator: ", ") + "."
+    }
+
+    /// Valeurs en vigueur, valeurs d'origine, clés modifiées, et ce que reçoit Claude Code dans chaque mode.
+    static func state(rejected: [String] = []) -> [String: Any] {
+        let values: [String: Any] = ["web": web, "anyCommand": anyCommand, "commandsInRead": commandsInRead, "commands": commands, "path": path]
+        let defaults: [String: Any] = ["web": false, "anyCommand": false, "commandsInRead": false, "commands": defaultCommands, "path": [String]()]
+        let s = saved
+        let changed = (flags + ["commands", "path"]).filter { s[$0] != nil }
+        let preview: [String: Any] = [
+            "read": tools(mode: "read", commands: false), "readCommands": commandsAllowed(mode: "read") ? bashRules : [],
+            "edit": tools(mode: "edit", commands: false), "editCommands": commandsAllowed(mode: "edit") ? bashRules : [],
+        ]
+        return ["ok": true, "values": values, "defaults": defaults, "changed": changed, "preview": preview, "rejected": rejected]
+    }
+
+    /// Applique une demande de la page de réglages : `set` (clé → valeur) et `reset` (une clé, ou « all »).
+    /// Les listes arrivent en tableau ou en texte (une entrée par ligne) ; les entrées refusées sont renvoyées.
+    static func apply(_ body: [String: Any]) -> [String: Any] {
+        var s = saved, rejected: [String] = []
+        if let r = body["reset"] as? String { if r == "all" { s = [:] } else { s[r] = nil } }
+        let lines: (Any) -> [String] = { v in
+            (v as? [String] ?? (v as? String)?.components(separatedBy: .newlines) ?? [])
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        }
+        for (k, v) in body["set"] as? [String: Any] ?? [:] {
+            if flags.contains(k) { if let b = v as? Bool { s[k] = b } }
+            else if k == "commands" || k == "path" {
+                var kept: [String] = []
+                for l in lines(v) {
+                    if let c = k == "commands" ? command(l) : dir(l) { if !kept.contains(c) { kept.append(c) } } else { rejected.append(l) }
+                }
+                let cap = k == "commands" ? maxCommands : maxDirs
+                if kept.count > cap { rejected += kept[cap...]; kept = Array(kept.prefix(cap)) }
+                s[k] = kept
+            }
+        }
+        // Une valeur revenue à l'origine n'est plus « modifiée ».
+        for k in flags where s[k] as? Bool == false { s[k] = nil }
+        if s["commands"] as? [String] == defaultCommands { s["commands"] = nil }
+        if (s["path"] as? [String])?.isEmpty == true { s["path"] = nil }
+        UserDefaults.standard.set(s, forKey: store)
+        return state(rejected: rejected)
     }
 }
 #endif

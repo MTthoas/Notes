@@ -1414,6 +1414,24 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .cx-row.tn-num .field { flex: none; width: 120px; }
 .cx-row.tn-line .field, .cx-row.tn-choice .field { flex: none; width: min(300px, 55%); }
 .tn-check + .tn-hint, .tn-row + .tn-hint { margin: 4px 0 0; }
+
+/* Réglages → Autorisations des agents */
+.ap-preview { display: grid; gap: 8px; }
+.ap-preview div { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.ap-preview span { color: var(--text-3); font-size: var(--t-1); font-weight: 500; }
+.ap-preview strong { font-weight: 400; }
+.ap-preview em { font-style: normal; color: var(--text-3); font-size: var(--t-1); }
+.ap-preview code { font-size: var(--t-1); }
+.ap-list { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); font-weight: 500; }
+.ap-list b { font-weight: 500; color: var(--c-amber, var(--text-2)); }
+.ap-list .field.area { margin: 0; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--t-1); font-weight: 400; }
+.ap-list + .tn-hint { margin: 6px 0 0; }
+.ap-ideas { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.ap-idea { border: 1px dashed var(--border); background: none; color: var(--text-2); cursor: pointer; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
+.ap-idea:hover { color: var(--text); border-style: solid; }
+.modal-hint.ap-warn { display: flex; align-items: center; gap: 6px; color: var(--c-amber); }
+.ap-warn .ic { width: 13px; height: 13px; flex: none; }
+.tn .tn-reset { display: inline-block; margin: 8px 0 0; font-size: var(--t-1); }
 .tn-saved { margin: 0 0 12px; }
 
 /* Revue IA */

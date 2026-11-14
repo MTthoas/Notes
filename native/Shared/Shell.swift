@@ -180,6 +180,8 @@ final class ShellCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         case "list": send(Agents.shared.list(project: pid))
         // Consignes et réglages de contexte des agents (Réglages → Consignes et contexte) : lecture, modification, retour à l'origine.
         case "tuning": AgentTuning.apply(body); send(AgentTuning.state())
+        // Ce que les agents ont le droit de faire (Réglages → Autorisations) : lecture, modification, retour à l'origine.
+        case "permissions": send(AgentPermissions.apply(body))
         case "unqueue": send(Agents.shared.unqueue(project: pid, id: body["queued"] as? String ?? ""))
         case "stop": send(Agents.shared.stop(body["run"] as? String ?? ""))
         case "worktrees": bg { folders.worktrees(pid) }
