@@ -155,10 +155,10 @@ export const spotify: Plugin = {
   sidebar(api) {
     if (!connected(api) || !now) return '';
     const text = `<span><strong>${esc(now.title)}</strong>${now.by ? `<em>${esc(now.by)}</em>` : ''}</span>`, label = `${now.title}${now.by ? ` — ${now.by}` : ''}`;
-    return `<div class="plug-np" title="${esc(label)}">${now.url ? `<a href="${esc(now.url)}" target="_blank" rel="noopener">${icon('music')}${text}</a>` : `<div>${icon('music')}${text}</div>`}
+    return `<section class="plug-card" aria-label="Spotify"><div class="plug-np" title="${esc(label)}">${now.url ? `<a href="${esc(now.url)}" target="_blank" rel="noopener">${icon('music')}${text}</a>` : `<div>${icon('music')}${text}</div>`}
       <button class="icon-btn" data-plug="spotify:prev" aria-label="Titre précédent">${icon('prev')}</button>
       <button class="icon-btn" data-plug="spotify:toggle" aria-label="${now.playing ? 'Pause' : 'Lecture'}">${icon(now.playing ? 'pause' : 'play')}</button>
-      <button class="icon-btn" data-plug="spotify:next" aria-label="Titre suivant">${icon('next')}</button></div>${volumeRow(now.volume)}`;
+      <button class="icon-btn" data-plug="spotify:next" aria-label="Titre suivant">${icon('next')}</button></div>${volumeRow(now.volume)}</section>`;
   },
   actions: {
     async toggle(api) { const playing = !!now?.playing; await control(api, 'PUT', playing ? '/me/player/pause' : '/me/player/play'); if (now) now.playing = !playing; },

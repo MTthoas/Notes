@@ -118,7 +118,11 @@ button.side-label:hover { color: var(--text-2); }
 .side-foot span:first-of-type { flex: 1; }
 .side-foot .ic { width: 14px; height: 14px; }
 .side-foot:hover { background: var(--hover); color: var(--text-2); }
-/* Bloc des plugins dans la barre latérale (lecture Spotify en cours…). */
+/* Bloc des plugins dans la barre latérale (lecture Spotify en cours…) : une carte détachée de la navigation au-dessus et du pied en dessous. */
+#plug-side:not(:empty) { padding-top: 8px; border-top: 1px solid var(--border); }
+.plug-card { margin: 0 8px 8px 10px; padding: 4px 0; border: 1px solid var(--border); border-radius: calc(var(--r) + 2px); background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / .05); }
+.plug-card > .plug-np, .plug-card > .plug-vol { margin-left: 0; margin-right: 0; }
+.plug-card > :last-child { margin-bottom: 0; }
 .plug-np { margin: 0 8px 4px 10px; padding: 3px 2px 3px 8px; display: flex; align-items: center; gap: 2px; border-radius: var(--r); color: var(--text-2); font-size: var(--t-1); }
 .plug-np > a, .plug-np > div { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; }
 .plug-np > a > .ic, .plug-np > div > .ic { width: 14px; height: 14px; flex: none; color: var(--c-green); }
