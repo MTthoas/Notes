@@ -21,7 +21,12 @@ const UNESC: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', '
 export const esc = (s: unknown): string => String(s).replace(/[&<>"']/g, c => ESC[c] ?? c);
 const unesc = (s: string): string => s.replace(/&(amp|lt|gt|quot|#39);/g, (_, e: string) => UNESC[e] ?? '');
 
-export const TAG_RE = /(^|[\s(>])#([\p{L}\d][\p{L}\d_/-]*)/gu;
+// Un tag : « #mot » précédé d'un blanc ou d'une parenthèse, sans « - » ni « / » final.
+// « \#mot » l'empêche (le rendu affiche « #mot »).
+export const TAG_RE = /(^|[\s(>])#([\p{L}\d](?:[\p{L}\d_/-]*[\p{L}\d_])?)/gu;
+const HEX_RE = /^(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i;
+/** Ce qui ressemble à un tag sans en être un : numéro (#12) ou couleur (#1e1e1e, #f00). */
+export const notTag = (t: string): boolean => /^\d+$/.test(t) || (HEX_RE.test(t) && /\d/.test(t));
 export const LINK_RE = /\[\[([^\[\]|\n]+?)(?:\|([^\[\]\n]+))?\]\]/g;
 export const TASK_RE = /^(\s*(?:[-*+]|\d{1,9}[.)])\s+)\[([ xX/])\]\s+(.*)$/;
 const LI_RE = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
@@ -72,7 +77,8 @@ function inline(text: string, st: RenderState): string {
     return sec ? hold(`<span class="timer" data-timer="${st.timer++}" data-dur="${sec}"><button class="timer-toggle" aria-label="Démarrer ou mettre en pause"></button><span class="timer-time"></span><button class="timer-reset" aria-label="Réinitialiser" title="Réinitialiser">↺</button></span>`) : m;
   });
   s = s.replace(/https?:\/\/[^\s<\u0000]+[^\s<\u0000.,;:!?)]/g, (u: string) => hold(`<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`));
-  s = s.replace(TAG_RE, (m, pre, tag) => /^\d+$/.test(tag) ? m : pre + hold(`<a class="tag" data-tag="${tag.toLowerCase()}">#${tag}</a>`));
+  s = s.replace(TAG_RE, (m, pre, tag) => notTag(tag) ? m : pre + hold(`<a class="tag" data-tag="${tag.toLowerCase()}">#${tag}</a>`));
+  s = s.replace(/\\#/g, '#');
   s = s.replace(/\*\*(?!\s)(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(?!\s)([^*]+?)\*/g, '<em>$1</em>')
     .replace(/(^|[\s(])_(?!\s)([^_]+?)_(?=$|[\s).,;:!?])/g, '$1<em>$2</em>')
@@ -170,7 +176,9 @@ export function analyze(body: string): Omit<NoteMeta, "body"> {
     if (fence) return;
     const l = raw.replace(/`[^`\n]+`/g, ' ');
     for (const m of l.matchAll(LINK_RE)) links.push(m[1].trim());
-    for (const m of l.replace(LINK_RE, ' ').replace(/https?:\/\/\S+/g, ' ').matchAll(TAG_RE)) if (!/^\d+$/.test(m[2])) tags.add(m[2].toLowerCase());
+    // Liens Markdown retirés d'abord : l'ancre de « [voir](#section) » n'est pas un tag.
+    const free = l.replace(LINK_RE, ' ').replace(/!?\[[^\]]*\]\([^)\s]*\)/g, ' ').replace(/https?:\/\/\S+/g, ' ');
+    for (const m of free.matchAll(TAG_RE)) if (!notTag(m[2])) tags.add(m[2].toLowerCase());
     const t = raw.match(TASK_RE);
     if (t) { const status = statusOf(t[2]); tasks.push({ line, text: t[3].trim(), done: status === 'done', status }); }
     if (!snippet && l.trim()) snippet = plain(l).slice(0, 160);
