@@ -712,7 +712,7 @@ async function onConnClick(e: MouseEvent) {
   if (curTab === 'consignes' && await tuningUI.onClick(t, refreshConnections)) return;
   if (curTab === 'autorisations' && await permissionsUI.onClick(t, refreshConnections)) return;
   if (curTab === 'extensions' && await pluginsUI.onClick(t, refreshConnections)) return;
-  const del = t.closest('[data-del-key]'); if (del) { if (await confirmBox({ title: 'Supprimer la clé ?', text: 'Elle sera effacée du coffre de cet appareil.', ok: 'Supprimer', danger: true })) await vault.setSecret(del.dataset.delKey ?? '', null); return; }
+  const del = t.closest('[data-del-key]'); if (del) { if (await confirmBox({ title: 'Supprimer la clé ?', text: 'Elle sera effacée du coffre de cet appareil.', ok: 'Supprimer', danger: true })) { await vault.setSecret(del.dataset.delKey ?? '', null); if (del.dataset.delKey === 'openai') usage.disconnect('openai'); } return; }
   const fg = t.closest('[data-dev-forget]'); if (fg) { if (await confirmBox({ title: 'Oublier cet appareil ?', text: 'La liaison sera supprimée ici. Fais de même sur l’autre appareil.', ok: 'Oublier', danger: true })) await link.forget(fg.dataset.devForget ?? ''); return; }
   const pk = t.closest('[data-dev-packet]'); if (pk) { const dev = link.devices().find(d => d.secret === pk.dataset.devPacket); if (dev) await sendPacket(dev); return; }
   const v = t.closest('[data-v]')?.dataset.v; if (!v) return;
@@ -783,6 +783,7 @@ async function onConnSubmit(e: SubmitEvent) {
     if (name === 'linear') { try { const v = await linear.viewer(val); toast(`Linear connecté : ${v.viewer.name}`); } catch (x) { toast('Clé refusée par Linear : ' + errMsg(x)); return; } }
     if (name === 'github') { try { const v = await github.viewer(val); toast(`GitHub connecté : ${v.login}`); } catch (x) { toast('Jeton refusé par GitHub : ' + errMsg(x)); return; } }
     await vault.setSecret(name, val);
+    if (name === 'openai') usage.connect('openai');
     if (name === 'linear') void notifs.poll();
     if (name === 'github') void github.poll();
     app.renderSidebar?.();

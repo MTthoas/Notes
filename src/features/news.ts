@@ -38,6 +38,11 @@ interface Item {
 
 // Les plus récentes d'abord.
 const NEWS: Item[] = [
+  { id: 'chat-live-usage', date: '2026-11-14', icon: 'bolt', hue: 'orange',
+    title: 'Ton utilisation, en direct dans Claude',
+    text: 'En haut des conversations Claude d’un projet : la part utilisée de ta session de 5 heures et de ta semaine, et les tokens de Claude Code, actualisés toutes les 30 secondes. Connecte ChatGPT (clé OpenAI) : ses tokens sont comptés à partir de la connexion.',
+    points: ['Claude', 'ChatGPT', 'Temps réel'],
+    go: { label: 'Voir mes projets', view: { type: 'projets' } } },
   { id: 'figma-plugin', date: '2026-11-14', icon: 'figma', hue: 'violet',
     title: 'Tes maquettes Figma dans Studio',
     text: 'Active l’extension Figma (Réglages → Extensions), puis colle un lien Figma dans un bloc ```figma : la maquette, le prototype ou le tableau FigJam s’ouvre en grand sans quitter la note. La page du projet liste les fichiers Figma cités dans ses notes ; avec un jeton personnel, elle montre aussi leur dernière modification et les commentaires ouverts.',

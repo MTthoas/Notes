@@ -1865,6 +1865,11 @@ button.lv-chip:hover, .lv-chip.sel { color: var(--text); background: var(--btn);
 .side-chat.sel { font-weight: 500; color: var(--text); }
 .cl { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .cl-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.cl-usage { flex: none; border-top: 0; border-bottom: 1px solid var(--border); padding: 6px 16px; gap: 6px 28px; }
+.cl-ug { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; min-width: 0; }
+.cl-ug > b { color: var(--text); font-weight: 600; }
+.cl-ug .icon-btn { margin-left: 0; }
+.cl-ug .btn { height: 26px; padding: 0 10px; font-size: var(--t-1); }
 .cl-in { max-width: 760px; margin: 0 auto; padding: 32px 40px 24px; }
 .cl-foot { flex: none; padding: 0 40px 20px; }
 .cl-compose { max-width: 760px; margin: 0 auto; }

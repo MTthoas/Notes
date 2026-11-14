@@ -22,8 +22,27 @@ export function record(provider: string, model: string, c: Partial<Counts>): voi
   const k = `${provider}:${model}`, row = cur.byModel[k] ??= zero();
   row.input += c.input ?? 0; row.output += c.output ?? 0; row.cacheRead += c.cacheRead ?? 0; row.cacheWrite += c.cacheWrite ?? 0; row.calls += 1;
   try { localStorage.setItem(KEY, JSON.stringify(all.slice(0, 12))); } catch { /* stockage plein */ }
+  const s = sinceAll(), p = s[provider];
+  if (p) { const t = p.counts; t.input += c.input ?? 0; t.output += c.output ?? 0; t.cacheRead += c.cacheRead ?? 0; t.cacheWrite += c.cacheWrite ?? 0; t.calls += 1; saveSince(s); }
   listeners.forEach(f => f());
 }
+
+// Consommation d'un fournisseur depuis sa connexion (ChatGPT) : le compteur part de l'enregistrement de la clé.
+export interface Since { at: number; counts: Counts }
+const SINCE = 'carnet.ai.since';
+function sinceAll(): Record<string, Since> {
+  try { const v = JSON.parse(localStorage.getItem(SINCE) || '{}') as Record<string, Since>; return v && typeof v === 'object' ? v : {}; } catch { return {}; }
+}
+const saveSince = (s: Record<string, Since>): void => { try { localStorage.setItem(SINCE, JSON.stringify(s)); } catch { /* stockage plein */ } };
+/** Compteur depuis la connexion, ou null s'il n'a pas démarré. */
+export const since = (provider: string): Since | null => sinceAll()[provider] ?? null;
+/** Démarre (ou redémarre) le compteur au moment présent. */
+export function connect(provider: string): Since {
+  const s = sinceAll(), v = { at: Date.now(), counts: zero() };
+  s[provider] = v; saveSince(s); listeners.forEach(f => f());
+  return v;
+}
+export function disconnect(provider: string): void { const s = sinceAll(); delete s[provider]; saveSince(s); listeners.forEach(f => f()); }
 
 const sum = (rows: [string, Counts][]): Counts => rows.reduce((t, [, c]) => ({ input: t.input + c.input, output: t.output + c.output, cacheRead: t.cacheRead + c.cacheRead, cacheWrite: t.cacheWrite + c.cacheWrite, calls: t.calls + c.calls }), zero());
 /** Fournisseurs inclus dans un abonnement (pas de facturation au token) : comptés à part du budget. */
